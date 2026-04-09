@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// -----------------------------------------------------------------------------
+// Core Data Models
+// -----------------------------------------------------------------------------
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String   // In real app, hashed
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaces Workspace[]
+  profiles   Profile[]
+}
+
+model Workspace {
+  id          String   @id @default(uuid())
+  name        String   // Course name
+  description String?  // Course description
+  major       String?  // Major/Direction
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  workbenches Workbench[]
+  fileObjects FileSystemObject[]
+  profiles    Profile[]
+  
+  // Extension point for AI Terminal
+  aiTerminalConfig String? // JSON string or relation to a config model
+}
+
+// The unified file system abstraction
+model FileSystemObject {
+  id          String   @id @default(uuid())
+  name        String
+  nodeType    String   // "file" | "folder"
+  fileCategory String? // "note", "code", "document", "media", "generated", "other"
+  extension   String?
+  size        Int?
+  isBinary    Boolean  @default(false)
+  path        String   // Virtual path in workspace
+  content     String?  // Content for simple text files, or reference to S3/Local disk
+  mimeType    String?
+  storageKey  String?  // For binary files
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  
+  parentId    String?
+  parent      FileSystemObject?  @relation("FolderChildren", fields: [parentId], references: [id])
+  children    FileSystemObject[] @relation("FolderChildren")
+
+  panels      Panel[]
+  resources   GeneratedResource[]
+
+  @@unique([workspaceId, path])
+}
+
+// Workbench: Task-oriented container
+model Workbench {
+  id          String   @id @default(uuid())
+  name        String   // Task name (e.g. "Chapter 1 Notes")
+  layout      String?  // JSON string representing layout (e.g. grid layout config)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  panels      Panel[]
+  
+  // Extension point for local AI Assistant
+  aiAssistantContext String? // JSON string capturing task context
+}
+
+// Panel: Interactive unit referencing file objects
+model Panel {
+  id          String   @id @default(uuid())
+  title       String?  // Title of the panel
+  panelType   String   // "file-preview-panel", "note-editor-panel", "code-editor-panel", "ai-assistant-panel"
+  config      String?  // JSON string for panel specific settings
+  layoutInfo  String?  // Layout placement info
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workbenchId String
+  workbench   Workbench @relation(fields: [workbenchId], references: [id])
+
+  // Optional reference to a file system object
+  fileObjectId String?
+  fileObject   FileSystemObject? @relation(fields: [fileObjectId], references: [id])
+}
+
+// Profile: Guides resource generation and recommendation
+model Profile {
+  id          String   @id @default(uuid())
+  name        String
+  preferences String   // JSON string
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+}
+
+// Generated Resource: Results from AI
+model GeneratedResource {
+  id          String   @id @default(uuid())
+  prompt      String?
+  status      String   // "PENDING", "COMPLETED", "FAILED"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  fileObjectId String?
+  fileObject   FileSystemObject? @relation(fields: [fileObjectId], references: [id])
+}

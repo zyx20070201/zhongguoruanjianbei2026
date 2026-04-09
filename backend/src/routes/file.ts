@@ -1,0 +1,54 @@
+import express from 'express';
+import { 
+  createFileObject, updateFileObject, deleteFileObject, getFileObject,
+  getFileTree, initFileSystem, createFolder, createFile, renameNode,
+  moveNode, deleteNode, copyNode, uploadFiles, downloadFile,
+  getFileContent, saveFileContent, saveGeneratedContent
+} from '../controllers/fileController';
+import multer from 'multer';
+import path from 'path';
+import crypto from 'crypto';
+
+const router = express.Router();
+
+// Configure multer for temporary storage
+const tempStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    // We can use the system temp dir or our uploads dir
+    cb(null, path.resolve(__dirname, '../../uploads')); // same base dir as our permanent storage for easier moves
+  },
+  filename: (req, file, cb) => {
+    // Generate a temporary random name to avoid conflicts during upload
+    const tempName = `temp_${crypto.randomBytes(8).toString('hex')}`;
+    cb(null, tempName);
+  }
+});
+
+const upload = multer({ storage: tempStorage });
+
+// New File System API
+router.get('/workspace/:workspaceId/tree', getFileTree);
+router.post('/workspace/:workspaceId/init', initFileSystem);
+router.post('/workspace/:workspaceId/folder', createFolder);
+router.post('/workspace/:workspaceId/file', createFile);
+router.patch('/workspace/:workspaceId/rename', renameNode);
+router.patch('/workspace/:workspaceId/move', moveNode);
+router.delete('/workspace/:workspaceId', deleteNode);
+router.post('/workspace/:workspaceId/copy', copyNode);
+router.post('/workspace/:workspaceId/upload', upload.array('files'), uploadFiles);
+router.get('/workspace/:workspaceId/download', downloadFile);
+router.get('/workspace/:workspaceId/content', getFileContent);
+router.put('/workspace/:workspaceId/content', saveFileContent);
+router.post('/workspace/:workspaceId/generated', saveGeneratedContent);
+
+// Legacy endpoints (Deprecated - please use /workspace/:workspaceId/... endpoints)
+/** @deprecated */
+router.post('/', createFileObject);
+/** @deprecated */
+router.put('/:id', updateFileObject);
+/** @deprecated */
+router.delete('/:id', deleteFileObject);
+/** @deprecated */
+router.get('/:id', getFileObject);
+
+export default router;
