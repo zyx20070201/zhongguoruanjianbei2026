@@ -1,6 +1,14 @@
 import client from '../api/client';
 import { FileSystemObject } from '../types';
 
+export interface FilePreviewInfo {
+  status: 'ready' | 'unavailable' | 'unsupported';
+  previewKind: 'pdf' | 'document' | 'binary' | 'unknown';
+  previewUrl?: string;
+  sourceUrl?: string;
+  message?: string;
+}
+
 export const fileSystemApi = {
   getTree: async (workspaceId: string): Promise<FileSystemObject[]> => {
     const response = await client.get(`/files/workspace/${workspaceId}/tree`);
@@ -29,6 +37,11 @@ export const fileSystemApi = {
 
   move: async (workspaceId: string, data: { id: string; targetParentId?: string | null }): Promise<FileSystemObject> => {
     const response = await client.patch(`/files/workspace/${workspaceId}/move`, data);
+    return response.data;
+  },
+
+  updateTags: async (workspaceId: string, data: { id: string; tags: string[] }): Promise<FileSystemObject> => {
+    const response = await client.patch(`/files/workspace/${workspaceId}/tags`, data);
     return response.data;
   },
 
@@ -69,7 +82,29 @@ export const fileSystemApi = {
     return response.data;
   },
 
+  getPreviewInfo: async (workspaceId: string, id: string): Promise<FilePreviewInfo> => {
+    const response = await client.get(`/files/workspace/${workspaceId}/preview-info`, {
+      params: { id }
+    });
+    const data = response.data as FilePreviewInfo;
+
+    const resolveUrl = (value?: string) =>
+      value
+        ? new URL(value, client.defaults.baseURL?.replace(/\/$/, '') || window.location.origin).toString()
+        : undefined;
+
+    return {
+      ...data,
+      previewUrl: resolveUrl(data.previewUrl),
+      sourceUrl: resolveUrl(data.sourceUrl)
+    };
+  },
+
   downloadUrl: (workspaceId: string, id: string): string => {
     return `${client.defaults.baseURL}/files/workspace/${workspaceId}/download?id=${id}`;
+  },
+
+  previewUrl: (workspaceId: string, id: string): string => {
+    return `${client.defaults.baseURL}/files/workspace/${workspaceId}/preview?id=${id}`;
   }
 };

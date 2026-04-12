@@ -1,25 +1,42 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api, { workspaceApi } from '../api/client';
-import { Workspace, WorkspaceOverview, WorkbenchItem } from '../types';
+import { Workspace, WorkspaceOverview, Workbench, WorkbenchItem } from '../types';
 
 import WorkspaceHeader from '../components/workspace/WorkspaceHeader';
 import { FileSystemSidebar } from '../components/workspace/FileSystemSidebar';
 import { fileSystemApi } from '../services/fileSystemApi';
 import WorkspaceOverviewCard from '../components/workspace/WorkspaceOverviewCard';
 import WorkbenchSection from '../components/workspace/WorkbenchSection';
-import AITerminalDrawer from '../components/workspace/AITerminalDrawer';
 import WorkspaceSettingsDialog from '../components/workspace/WorkspaceSettingsDialog';
+import { workbenchApi } from '../services/workbenchApi';
+import { useAuthStore } from '../store/authStore';
 
 export default function WorkspaceDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [workbenches, setWorkbenches] = useState<Workbench[]>([]);
   const [loading, setLoading] = useState(true);
   
   // UI State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isAIOpen, setIsAIOpen] = useState(false);
+  const user = useAuthStore((state) => state.user);
+  const hydrated = useAuthStore((state) => state.hydrated);
+  const hydrate = useAuthStore((state) => state.hydrate);
+  const logout = useAuthStore((state) => state.logout);
+
+  useEffect(() => {
+    void hydrate();
+  }, [hydrate]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    if (user === null) {
+      navigate('/', { replace: true });
+    }
+  }, [hydrated, navigate, user]);
 
   useEffect(() => {
     fetchWorkspace();
@@ -31,6 +48,7 @@ export default function WorkspaceDetailPage() {
       setLoading(true);
       const res = await api.get(`/workspaces/${id}`);
       setWorkspace(res.data.workspace);
+      setWorkbenches(await workbenchApi.listByWorkspace(id));
     } catch (error) {
       console.error(error);
     } finally {
@@ -52,13 +70,28 @@ export default function WorkspaceDetailPage() {
   const createWorkbench = async () => {
     if (!id) return;
     try {
-      const res = await api.post('/workbenches', {
-        name: 'New Task Workbench',
+      const workbench = await workbenchApi.create({
+        title: 'New Task Workbench',
+        description: 'Persisted task desktop for this learning objective.',
         workspaceId: id
       });
-      navigate(`/workbenches/${res.data.workbench.id}`);
+      await fetchWorkspace();
+      navigate(`/workbenches/${workbench.id}`);
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const deleteWorkbench = async (workbenchId: string) => {
+    if (!confirm('Delete this workbench? Its saved panels, layout and notes will be removed.')) {
+      return;
+    }
+
+    try {
+      await workbenchApi.delete(workbenchId);
+      await fetchWorkspace();
+    } catch (error) {
+      console.error('Failed to delete workbench:', error);
     }
   };
 
@@ -81,109 +114,110 @@ export default function WorkspaceDetailPage() {
 
   if (loading || !workspace) {
     return (
-      <div className="flex items-center justify-center h-full bg-gray-50">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--app-bg)]">
         <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
       </div>
     );
   }
 
+  const formatActivityTime = (value?: string) => {
+    if (!value) return 'never';
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'unknown';
+
+    const diffMs = Date.now() - date.getTime();
+    const minute = 60 * 1000;
+    const hour = 60 * minute;
+    const day = 24 * hour;
+
+    if (diffMs < minute) return 'just now';
+    if (diffMs < hour) return `${Math.floor(diffMs / minute)} min ago`;
+    if (diffMs < day) return `${Math.floor(diffMs / hour)} hours ago`;
+    if (diffMs < day * 7) return `${Math.floor(diffMs / day)} days ago`;
+
+    return date.toLocaleDateString();
+  };
+
   // Convert raw data to UI models
-  const mockOverview: WorkspaceOverview = {
+  const latestWorkbench = workbenches[0];
+  const overview: WorkspaceOverview = {
     id: workspace.id,
     courseName: workspace.name,
     description: workspace.description || '',
     major: workspace.major || 'General',
-    updatedAt: new Date(workspace.updatedAt).toLocaleDateString(),
-    status: 'active',
-    workbenchCount: workspace.workbenches?.length || 0,
+    updatedAt: formatActivityTime(workspace.updatedAt),
+    workbenchCount: workbenches.length,
     fileCount: workspace.fileObjects?.length || 0,
-    recentActivity: 'Created workspace',
-    suggestedNextStep: workspace.fileObjects?.length ? 'Create a study workbench' : 'Upload initial course materials'
+    recentActivity: latestWorkbench
+      ? `Workbench updated ${formatActivityTime(latestWorkbench.updatedAt)}`
+      : `Workspace updated ${formatActivityTime(workspace.updatedAt)}`
   };
 
-  const mockWorkbenches: WorkbenchItem[] = (workspace.workbenches || []).map((wb, i) => ({
+  const workbenchItems: WorkbenchItem[] = workbenches.map((wb) => ({
     id: wb.id,
-    name: wb.name,
-    type: ['study', 'notes', 'lab', 'review'][i % 4] as any, // Mock type assignment
-    updatedAt: new Date(wb.updatedAt || new Date()).toLocaleDateString(),
-    linkedResourceCount: Math.floor(Math.random() * 5),
-    panelCount: wb.panels?.length || 0,
-    recentActivity: i === 0 ? 'Edited 2 hours ago' : undefined
+    title: wb.title,
+    updatedAt: formatActivityTime(wb.updatedAt),
+    panelCount: wb.panelCount || wb.state?.editors.length || wb.state?.panels?.length || 0,
+    description: wb.description
   }));
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex min-h-0 flex-1 flex-col bg-[var(--app-bg)] text-[var(--app-text)]">
       <WorkspaceHeader 
         courseName={workspace.name}
         major={workspace.major || 'Course'}
         updatedAt={new Date(workspace.updatedAt).toLocaleDateString()}
         onUpload={handleUpload}
         onNewWorkbench={createWorkbench}
-        onToggleAI={() => setIsAIOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onLogout={() => {
+          logout();
+          navigate('/', { replace: true });
+        }}
       />
       
-      <div className="flex flex-1 overflow-hidden relative">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {/* Left Sidebar: File System */}
         <FileSystemSidebar 
           workspaceId={id || ''}
           onFileDoubleClick={async (f) => {
+            if (!id) return;
             console.log('Opening file', f);
             
-            // 1. Get or create a workbench
             let workbenchId = '';
-            if (workspace.workbenches && workspace.workbenches.length > 0) {
-              workbenchId = workspace.workbenches[0].id;
+            if (workbenches.length > 0) {
+              workbenchId = workbenches[0].id;
             } else {
               try {
-                const res = await api.post('/workbenches', {
-                  name: 'Default Workbench',
+                const workbench = await workbenchApi.create({
+                  title: 'Default Workbench',
+                  description: 'Auto-created from the workspace resource explorer.',
                   workspaceId: id
                 });
-                workbenchId = res.data.workbench.id;
+                workbenchId = workbench.id;
+                await fetchWorkspace();
               } catch (e) {
                 console.error('Failed to create workbench', e);
                 return;
               }
             }
-            
-            // 2. Map file category to panel type
-            let panelType = 'file-preview-panel';
-            if (f.fileCategory === 'note' || f.name.endsWith('.md') || f.name.endsWith('.txt')) {
-              panelType = 'note-editor-panel';
-            } else if (f.fileCategory === 'code' || f.name.match(/\.(js|ts|py|java|cpp|c)$/)) {
-              panelType = 'code-editor-panel';
-            }
-            
-            // 3. Create panel referencing this file object
-            try {
-              await api.post('/panels', {
-                workbenchId,
-                title: f.name,
-                panelType,
-                fileObjectId: f.id
-              });
-            } catch (e) {
-              console.warn('Failed to add panel or panel already exists', e);
-            }
-            
-            // 4. Navigate to workbench
-            navigate(`/workbenches/${workbenchId}`);
+
+            navigate(`/workbenches/${workbenchId}?resourceId=${encodeURIComponent(f.id)}`);
           }}
         />
 
         {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto">
-          <div className="max-w-5xl mx-auto p-6 md:p-8">
+        <main className="min-h-0 flex-1 overflow-y-auto bg-[var(--app-bg-elevated)]">
+          <div className="mx-auto max-w-5xl p-6 md:p-8">
             
             <WorkspaceOverviewCard 
-              overview={mockOverview}
+              overview={overview}
               onUploadMaterials={handleUpload}
               onCreateWorkbench={createWorkbench}
-              onAskAI={() => setIsAIOpen(true)}
               onResumeTask={() => {
-                if (workspace.workbenches && workspace.workbenches.length > 0) {
-                  navigate(`/workbenches/${workspace.workbenches[0].id}`);
+                if (workbenches.length > 0) {
+                  navigate(`/workbenches/${workbenches[0].id}`);
                 } else {
                   createWorkbench();
                 }
@@ -191,8 +225,9 @@ export default function WorkspaceDetailPage() {
             />
 
             <WorkbenchSection 
-              workbenches={mockWorkbenches}
+              workbenches={workbenchItems}
               onCreateNew={createWorkbench}
+              onDelete={deleteWorkbench}
             />
             
           </div>
@@ -200,12 +235,6 @@ export default function WorkspaceDetailPage() {
       </div>
 
       {/* Overlays */}
-      <AITerminalDrawer 
-        isOpen={isAIOpen}
-        onClose={() => setIsAIOpen(false)}
-        workspaceName={workspace.name}
-      />
-
       <WorkspaceSettingsDialog 
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}

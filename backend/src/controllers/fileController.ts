@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { FileSystemService } from '../services/fileSystemService';
+import { DocumentPreviewService } from '../services/documentPreviewService';
 import { 
   validateWorkspaceId, 
   validateNodeId, 
@@ -11,6 +12,26 @@ const getSingleParam = (value: any): string => {
   if (Array.isArray(value)) return String(value[0]);
   if (value == null) return '';
   return String(value);
+};
+
+const CJK_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
+const SUSPICIOUS_LATIN1_PATTERN = /[À-ÿ]/;
+
+const normalizePossiblyMojibakeName = (value: string) => {
+  if (!value || CJK_PATTERN.test(value) || !SUSPICIOUS_LATIN1_PATTERN.test(value)) {
+    return value;
+  }
+
+  try {
+    const decoded = Buffer.from(value, 'latin1').toString('utf8');
+    if (!decoded || decoded.includes('\uFFFD')) {
+      return value;
+    }
+
+    return CJK_PATTERN.test(decoded) ? decoded : value;
+  } catch {
+    return value;
+  }
 };
 
 const handleError = (res: Response, error: any) => {
@@ -132,6 +153,25 @@ export const moveNode = async (req: Request, res: Response) => {
   }
 };
 
+export const updateNodeTags = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const { id, tags } = req.body;
+
+    validateWorkspaceId(workspaceId);
+    validateNodeId(id);
+
+    const node = await FileSystemService.updateNodeTags({
+      workspaceId,
+      id,
+      tags: Array.isArray(tags) ? tags : []
+    });
+    res.json(node);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
 // 7. Delete Node
 export const deleteNode = async (req: Request, res: Response) => {
   try {
@@ -184,16 +224,17 @@ export const uploadFiles = async (req: Request, res: Response) => {
     
     const results = [];
     for (const file of files) {
+      const normalizedName = normalizePossiblyMojibakeName(file.originalname);
       try {
         const created = await FileSystemService.handleUploadedFile(
           workspaceId,
-          file,
+          { ...file, originalname: normalizedName },
           parentId,
           parentPath
         );
         results.push({ success: true, file: created });
       } catch (err: any) {
-        results.push({ success: false, name: file.originalname, error: err.message });
+        results.push({ success: false, name: normalizedName, error: err.message });
       }
     }
     res.json(results);
@@ -301,6 +342,41 @@ export const saveGeneratedContent = async (req: Request, res: Response) => {
       category
     });
     res.json(file);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const getFilePreviewInfo = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const id = getSingleParam(req.query.id);
+
+    validateWorkspaceId(workspaceId);
+    validateNodeId(id);
+
+    const previewInfo = await DocumentPreviewService.getPreviewInfo(workspaceId, id);
+    res.json(previewInfo);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const streamFilePreview = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const id = getSingleParam(req.query.id);
+
+    validateWorkspaceId(workspaceId);
+    validateNodeId(id);
+
+    const preview = await DocumentPreviewService.resolvePreviewPath(workspaceId, id);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(preview.downloadName)}"`
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.sendFile(preview.filePath);
   } catch (error: any) {
     handleError(res, error);
   }

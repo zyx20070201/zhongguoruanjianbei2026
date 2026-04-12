@@ -1,0 +1,1 @@
+{"version":3,"file":"index.js","sourceRoot":"","sources":["../../../src/blocks/bookmark/index.ts"],"names":[],"mappings":"AAAA,cAAc,qBAAqB,CAAC","sourcesContent":["export * from './bookmark-model.js';\n"]}

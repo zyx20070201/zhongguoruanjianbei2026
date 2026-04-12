@@ -1,0 +1,2 @@
+export declare const dateFilter: import("./create.js").FilterConfig<import("../../logical/data-type.js").DTInstance<"Date", number, import("zod").ZodNumber>, [import("../../logical/data-type.js").DTInstance<"Date", number, import("zod").ZodNumber>], import("../../logical/type-variable.js").TypeVarDefinitionInstance<string, import("../../index.js").TypeInstance>[]>[];
+//# sourceMappingURL=date.d.ts.map

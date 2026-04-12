@@ -1,0 +1,1 @@
+{"version":3,"file":"embed-loom-model.js","sourceRoot":"","sources":["../../src/embed-loom-block/embed-loom-model.ts"],"names":[],"mappings":"AAAA,MAAM,CAAC,MAAM,YAAY,GACvB,6DAA6D,CAAC","sourcesContent":["export const loomUrlRegex: RegExp =\n  /(?:https?:\\/\\/)??(?:www\\.)?loom\\.com\\/share\\/([a-zA-Z0-9]+)/;\n"]}

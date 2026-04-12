@@ -1,0 +1,1 @@
+{"version":3,"file":"index.js","sourceRoot":"","sources":["../../src/command/index.ts"],"names":[],"mappings":"AAAA,cAAc,aAAa,CAAC;AAC5B,cAAc,cAAc,CAAC;AAC7B,cAAc,YAAY,CAAC","sourcesContent":["export * from './consts.js';\nexport * from './manager.js';\nexport * from './types.js';\n"]}

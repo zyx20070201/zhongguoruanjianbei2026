@@ -1,0 +1,1339 @@
+{
+  "workbenches": [
+    {
+      "id": "b3ddc2d9-cc04-40f6-b878-62a6499e0754",
+      "workspaceId": "36b6f6ee-afba-4562-a317-208835a66934",
+      "title": "test workbench",
+      "description": "Persisted task desktop for this learning objective.",
+      "createdAt": "2026-04-11T02:46:08.016Z",
+      "updatedAt": "2026-04-11T02:56:42.302Z",
+      "lastOpenedAt": "2026-04-11T02:56:37.737Z",
+      "state": {
+        "workbenchId": "b3ddc2d9-cc04-40f6-b878-62a6499e0754",
+        "panels": [
+          {
+            "id": "panel-1775875580376-i8h7yh",
+            "type": "resource",
+            "title": "Resource Panel",
+            "x": 48,
+            "y": 48,
+            "w": 380,
+            "h": 260,
+            "zIndex": 1,
+            "minimized": false,
+            "viewState": {}
+          },
+          {
+            "id": "panel-1775875586802-vdzclp",
+            "type": "notes",
+            "title": "Notes Panel",
+            "x": 76,
+            "y": 72,
+            "w": 420,
+            "h": 320,
+            "zIndex": 2,
+            "minimized": false,
+            "viewState": {
+              "content": "",
+              "placeholder": "Write your notes for this task..."
+            }
+          },
+          {
+            "id": "panel-1775875660360-rpc4sn",
+            "type": "resource",
+            "title": "Resource Panel",
+            "x": 104,
+            "y": 96,
+            "w": 380,
+            "h": 260,
+            "zIndex": 3,
+            "minimized": false,
+            "viewState": {}
+          },
+          {
+            "id": "panel-1775876185314-yqhpe6",
+            "type": "notes",
+            "title": "Notes Panel",
+            "x": 132,
+            "y": 120,
+            "w": 420,
+            "h": 320,
+            "zIndex": 4,
+            "minimized": false,
+            "viewState": {
+              "content": "",
+              "placeholder": "Write your notes for this task..."
+            }
+          },
+          {
+            "id": "panel-1775876187923-pzpqqd",
+            "type": "resource",
+            "title": "11.doc",
+            "resourceId": "775205c6-e88d-4579-962d-bc18a3cdef1c",
+            "resourcePath": "/prompts/11.doc",
+            "x": 160,
+            "y": 144,
+            "w": 380,
+            "h": 260,
+            "zIndex": 5,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "11.doc",
+              "resourceType": "document"
+            }
+          },
+          {
+            "id": "panel-1775876193887-8kbysl",
+            "type": "resource",
+            "title": "11.doc",
+            "resourceId": "775205c6-e88d-4579-962d-bc18a3cdef1c",
+            "resourcePath": "/prompts/11.doc",
+            "x": 188,
+            "y": 168,
+            "w": 380,
+            "h": 260,
+            "zIndex": 6,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "11.doc",
+              "resourceType": "document"
+            }
+          },
+          {
+            "id": "panel-1775876200147-e9b8tl",
+            "type": "video",
+            "title": "2412411001_朱业鑫_实验一.pdf",
+            "resourceId": "6781a494-67c1-48ec-a5de-44fb24aabc10",
+            "resourcePath": "/prompts/2412411001_朱业鑫_实验一.pdf",
+            "x": 216,
+            "y": 192,
+            "w": 380,
+            "h": 260,
+            "zIndex": 7,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "2412411001_朱业鑫_实验一.pdf",
+              "resourceType": "document"
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activePanelId": "panel-1775876200147-e9b8tl",
+        "version": 1
+      }
+    },
+    {
+      "id": "86840c30-c708-4f62-b37a-a666edfa01ab",
+      "workspaceId": "36b6f6ee-afba-4562-a317-208835a66934",
+      "title": "New Task Workbench",
+      "description": "Persisted task desktop for this learning objective.",
+      "createdAt": "2026-04-11T02:56:46.309Z",
+      "updatedAt": "2026-04-11T11:48:01.085Z",
+      "lastOpenedAt": "2026-04-11T11:48:01.085Z",
+      "state": {
+        "workbenchId": "86840c30-c708-4f62-b37a-a666edfa01ab",
+        "editors": [
+          {
+            "id": "editor-1775891980523-z6qsjy",
+            "type": "notes",
+            "title": "Notes",
+            "resourceId": "983781ac-b8c6-44ef-912b-3501a8a09a38",
+            "resourcePath": "/prompts(1)/2412411001_朱业鑫_实验一.pdf",
+            "x": 48,
+            "y": 48,
+            "w": 420,
+            "h": 320,
+            "zIndex": 2,
+            "minimized": false,
+            "viewState": {
+              "content": "",
+              "placeholder": "Write your notes for this task...",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "resourceName": "2412411001_朱业鑫_实验一.pdf",
+              "resourceType": "document"
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-1775891980523-z6qsjy",
+        "activeEditorPaneId": "pane-1",
+        "editorLayout": {
+          "id": "pane-1",
+          "type": "leaf",
+          "editorIds": [
+            "panel-1775882015799-hmwher",
+            "panel-1775882019767-sgi9x3",
+            "panel-1775882026743-2drcer",
+            "panel-1775883373634-gzhjze",
+            "panel-1775889586264-zfxzll",
+            "editor-1775891980523-z6qsjy"
+          ],
+          "activeEditorId": "editor-1775891980523-z6qsjy"
+        },
+        "version": 1
+      }
+    },
+    {
+      "id": "1748aae6-74b2-49c3-a7b4-dba385be4771",
+      "workspaceId": "f6ab5456-4473-4b79-9a20-d6bbd55ba001",
+      "title": "New Task Workbench",
+      "description": "Persisted task desktop for this learning objective.",
+      "createdAt": "2026-04-11T07:21:43.676Z",
+      "updatedAt": "2026-04-11T12:10:44.756Z",
+      "lastOpenedAt": "2026-04-11T12:10:28.941Z",
+      "state": {
+        "workbenchId": "1748aae6-74b2-49c3-a7b4-dba385be4771",
+        "editors": [
+          {
+            "id": "editor-1775908453045-zzbvcp",
+            "type": "resource",
+            "title": "实验2 图元光栅化.doc",
+            "resourceId": "46e9ad6e-2f9a-4648-8ca3-2a9ad5aafe9d",
+            "resourcePath": "/实验2 图元光栅化.doc",
+            "x": 160,
+            "y": 144,
+            "w": 380,
+            "h": 260,
+            "zIndex": 32,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "实验2 图元光栅化.doc",
+              "resourceType": "document",
+              "editorGroupId": "group-1",
+              "editorOrder": 0
+            }
+          },
+          {
+            "id": "editor-1775908800631-144pii",
+            "type": "resource",
+            "title": "ch4-3.ppt",
+            "resourceId": "c7e59500-2010-42d4-84ae-3eacd8ac3cf9",
+            "resourcePath": "/ch4-3.ppt",
+            "x": 104,
+            "y": 96,
+            "w": 380,
+            "h": 260,
+            "zIndex": 33,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "ch4-3.ppt",
+              "resourceType": "document",
+              "editorGroupId": "group-1",
+              "editorOrder": 0
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-1775908800631-144pii",
+        "activeEditorPaneId": "pane-1775908453045-c3l1m1",
+        "editorLayout": {
+          "id": "pane-1775908453045-c3l1m1",
+          "type": "leaf",
+          "editorIds": [
+            "editor-1775908453045-zzbvcp",
+            "editor-1775908800631-144pii"
+          ],
+          "activeEditorId": "editor-1775908800631-144pii"
+        },
+        "version": 1
+      }
+    },
+    {
+      "id": "070ea180-32f8-44f2-91d2-a5355f7081c6",
+      "workspaceId": "a33be89e-25ce-465a-a1ac-1ba4cf276871",
+      "title": "New Task Workbench",
+      "description": "Persisted task desktop for this learning objective.",
+      "createdAt": "2026-04-11T07:53:30.593Z",
+      "updatedAt": "2026-04-11T08:23:23.960Z",
+      "lastOpenedAt": "2026-04-11T08:23:23.960Z",
+      "state": {
+        "workbenchId": "070ea180-32f8-44f2-91d2-a5355f7081c6",
+        "editors": [
+          {
+            "id": "editor-1775895280195-cyzj26",
+            "type": "code",
+            "title": "12.py",
+            "resourceId": "c35ac821-b5af-4fc7-a973-b32cf3aa6ed4",
+            "resourcePath": "/prompts/resources/12.py",
+            "x": 48,
+            "y": 48,
+            "w": 380,
+            "h": 260,
+            "zIndex": 2,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "12.py",
+              "resourceType": "document",
+              "editorGroupId": "group-1",
+              "editorOrder": 0
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-1775895280195-cyzj26",
+        "activeEditorPaneId": "pane-1775894162528-j7rudg",
+        "editorLayout": {
+          "id": "pane-1775894162528-j7rudg",
+          "type": "leaf",
+          "editorIds": [
+            "editor-1775895280195-cyzj26"
+          ],
+          "activeEditorId": "editor-1775895280195-cyzj26"
+        },
+        "version": 1
+      }
+    },
+    {
+      "id": "45bd3a75-cfc2-4bf7-998b-d5a652349e32",
+      "workspaceId": "f824212f-9ce6-416f-80df-d41239f8af96",
+      "title": "New Task Workbench",
+      "description": "Persisted task desktop for this learning objective.",
+      "createdAt": "2026-04-11T12:25:13.369Z",
+      "updatedAt": "2026-04-12T13:24:44.689Z",
+      "lastOpenedAt": "2026-04-12T13:24:44.689Z",
+      "state": {
+        "workbenchId": "45bd3a75-cfc2-4bf7-998b-d5a652349e32",
+        "editors": [
+          {
+            "id": "editor-1775996541173-7jc6v9",
+            "type": "notes",
+            "title": "1.md",
+            "resourceId": "74053e26-e574-4528-9c18-7efad8971771",
+            "resourcePath": "/1.md",
+            "x": 76,
+            "y": 72,
+            "w": 420,
+            "h": 320,
+            "zIndex": 10,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "1.md",
+              "resourceType": "document",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "LINn34NNa6",
+                  "title": "",
+                  "createDate": 1775996778607,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "KL4ydvBv5G",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": []
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "3xzfEU4Q3x",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "AuBdLt0iDu",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,498,92]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "SHOWrhAOr9",
+                          "flavour": "affine:embed-youtube",
+                          "version": 1,
+                          "props": {
+                            "index": "a0",
+                            "xywh": "[0,0,0,0]",
+                            "lockedBySelf": false,
+                            "rotate": 0,
+                            "style": "video",
+                            "url": "https://www.youtube.com/watch?v=1Otom0Bvv2w",
+                            "caption": null,
+                            "image": "https://affine-worker.toeverything.workers.dev/api/worker/image-proxy?url=https%3A%2F%2Fi.ytimg.com%2Fvi%2F1Otom0Bvv2w%2Fhqdefault.jpg",
+                            "title": "谍影重重，中共为何能打入民运高层内部？｜民运｜唐元隽｜王书君｜间谍｜国安｜FBI｜策反｜中国民主党｜王局拍案20240904",
+                            "description": "居住在纽约的中国海外民运人士唐元隽遭到FBI逮捕，纽约联邦检察院已对他提起刑事诉讼，指控他秘密为中国国家安全部工作。\n作为海外民运的领袖，唐元隽为什么要为国安工作？他是从什么时候投共的？国安究竟用了怎样的手段？\n\n#王志安 #民运 #唐元隽 #王书君 #间谍 #国安 #FBI #策反 #中国民主党\n\n成为此频道的会员即可获享以下福利：\nhttps://www.youtube.com/channel/UCBKDRq35-L8xev4O7ZqBeLg/join\n\n🧑‍🤝‍🧑【王局PATREON平台会员加入链接（尽享会员视频，会员社群，会员文稿），此链接支持中国大陆银行卡支付】：  \nhttps://www.patreon.com/join/8734589\n\n📖 最新电子书 《王志安谈治国理政第一卷》正式上线购买链接：\n    \n    【PATREON】购买链接：     https://www.patreon.com/wangzhian/shop/195947?utm_campaign=productshare_fan        \n   【亚马逊 Amazon】 购买链接：  https://www.amazon.co.jp/dp/B0D35W6N2G\n   【苹果书店 Apple Book Store】 购买链接： \nhttps://books.apple.com/us/book/王志安谈治国理政第一卷/id6502515014",
+                            "creator": "王志安 ",
+                            "creatorUrl": "https://www.youtube.com/@wangzhian",
+                            "creatorImage": "https://affine-worker.toeverything.workers.dev/api/worker/image-proxy?url=https%3A%2F%2Fyt3.ggpht.com%2FOy7RT7_C7QzpVxHee_8q3nHeK7qu01U9tosD-l4mFIQdnz-SuiRvv0TjV2g0IIbXBkwBMDvxrA%3Ds800-c-k-c0x00ffffff-no-rj",
+                            "videoId": "1Otom0Bvv2w"
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "_cK-Uaqrxk",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "text",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": []
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "blocksuiteMode": "page"
+            }
+          },
+          {
+            "id": "editor-1775996608313-u23tdm",
+            "type": "resource",
+            "title": "2412411001朱业鑫 实验2 图元光栅化.pdf",
+            "resourceId": "10d7a06a-4636-40e9-8719-e1f4baf02633",
+            "resourcePath": "/materials/2412411001朱业鑫 实验2 图元光栅化.pdf",
+            "x": 104,
+            "y": 96,
+            "w": 380,
+            "h": 260,
+            "zIndex": 26,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "2412411001朱业鑫 实验2 图元光栅化.pdf",
+              "resourceType": "document",
+              "editorGroupId": "group-1",
+              "editorOrder": 0
+            }
+          },
+          {
+            "id": "editor-1775996708325-1k6ki0",
+            "type": "notes",
+            "title": "1.txt",
+            "resourceId": "fcc67d80-4fb0-4acf-9954-83b08c23c6d1",
+            "resourcePath": "/notes/1.txt",
+            "x": 132,
+            "y": 120,
+            "w": 420,
+            "h": 320,
+            "zIndex": 25,
+            "minimized": false,
+            "viewState": {
+              "content": "",
+              "placeholder": "Write your notes for this task...",
+              "blocksuiteMode": "page",
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "Vi7mAvA5mn",
+                  "title": "",
+                  "createDate": 1775997363078,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "S1RvvfGY-K",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": []
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "DlNvu6rxXI",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "f6azE_qN_W",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,498,92]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "lVwY1f0PpF",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "text",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": []
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "resourceName": "1.txt",
+              "resourceType": "document",
+              "editorGroupId": "group-1",
+              "editorOrder": 0
+            }
+          },
+          {
+            "id": "editor-1775996712258-nt7uwy",
+            "type": "code",
+            "title": "hello.c",
+            "resourceId": "65c88fb1-fba9-4ac0-91b9-2f38a3fdf817",
+            "resourcePath": "/hello.c",
+            "x": 132,
+            "y": 120,
+            "w": 380,
+            "h": 260,
+            "zIndex": 23,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "hello.c",
+              "resourceType": "document",
+              "codeOpenMode": "blocksuite",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "ZBcek15xLM",
+                  "title": "Untitled",
+                  "createDate": 1775997361734,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "yXVL2HRp22",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "hkJ1263l7I",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "Eit0Q7TrJh",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,95]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "sAyxIxil60",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "text",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "/"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "mode": "edit"
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-1775996608313-u23tdm",
+        "activeEditorPaneId": "pane-1775996669394-w15ylo",
+        "editorLayout": {
+          "id": "pane-1775996500947-cy9dje-split-left-1775996541173",
+          "type": "split",
+          "direction": "row",
+          "ratio": 0.5,
+          "children": [
+            {
+              "id": "pane-1775996541173-eokb3o",
+              "type": "leaf",
+              "editorIds": [
+                "editor-1775996541173-7jc6v9"
+              ],
+              "activeEditorId": "editor-1775996541173-7jc6v9"
+            },
+            {
+              "id": "pane-1775996669394-w15ylo",
+              "type": "leaf",
+              "editorIds": [
+                "editor-1775996708325-1k6ki0",
+                "editor-1775996712258-nt7uwy",
+                "editor-1775996608313-u23tdm"
+              ],
+              "activeEditorId": "editor-1775996608313-u23tdm"
+            }
+          ]
+        },
+        "version": 1
+      },
+      "rootPath": "/New Task Workbench"
+    },
+    {
+      "id": "00b0cac5-c897-45a0-a3e7-f51bb0e21020",
+      "workspaceId": "f824212f-9ce6-416f-80df-d41239f8af96",
+      "title": "New Task Workbench",
+      "description": "Persisted task desktop for this learning objective.",
+      "rootPath": "/New Task Workbench(2)",
+      "createdAt": "2026-04-12T12:51:56.980Z",
+      "updatedAt": "2026-04-12T13:24:42.726Z",
+      "lastOpenedAt": "2026-04-12T13:24:41.119Z",
+      "state": {
+        "workbenchId": "00b0cac5-c897-45a0-a3e7-f51bb0e21020",
+        "editors": [
+          {
+            "id": "editor-1775999315862-jqxcj8",
+            "type": "code",
+            "title": "l2.cpp",
+            "resourceId": "7c34e9e9-40ee-4c6d-a17b-ebb5ea3ba0f4",
+            "resourcePath": "/code/l2.cpp",
+            "x": 48,
+            "y": 48,
+            "w": 380,
+            "h": 260,
+            "zIndex": 35,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "l2.cpp",
+              "resourceType": "code",
+              "codeOpenMode": "blocksuite",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "JXmsyEnug1",
+                  "title": "Untitled",
+                  "createDate": 1776000176051,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "15BAuc42TZ",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "sZDPYiZkPt",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "Hg9RUbtflY",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,95]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "eoWklq2bny",
+                          "flavour": "affine:code",
+                          "version": 1,
+                          "props": {
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "#ifdef __APPLE__\n    #define GL_SILENCE_DEPRECATION\n    #include <GLUT/glut.h>\n#else\n    #include <GL/glut.h>\n#endif\n\n#include <cmath>\n#include <iostream>\n\nvoid MidPointline(int x1, int y1, int x2, int y2) {\n    int dx = std::abs(x2 - x1);\n    int dy = std::abs(y2 - y1);\n    int sx = (x1 < x2) ? 1 : -1;\n    int sy = (y1 < y2) ? 1 : -1;\n\n    int x = x1;\n    int y = y1;\n\n    glBegin(GL_POINTS);\n    if (dx >= dy) { \n        int d = dx - 2 * dy;   \n        int dt = 2 * dx - 2 * dy; \n        int db = - 2 * dy;      \n        for (int i = 0; i <= dx; i++) {\n            glVertex2i(x, y);\n            if (d < 0) {  \n                x += sx;      \n                y += sy;        \n                d += dt;        \n            } else {\n                x += sx;   \n                d += db;        \n            }\n        }\n    } \n    else { \n        int d = dy - 2 * dx;    // dx和dy互换即可\n        int dt = 2 * dy - 2 * dx;\n        int db = - 2 * dx;\n        for (int i = 0; i <= dy; i++) {\n            glVertex2i(x, y);\n            if (d < 0) {\n                y += sy;\n                x += sx;\n                d += dt;\n            } else {\n                y += sy;\n                d += db;\n            }\n        }\n    }\n    glEnd();\n}\n\nvoid init(void) {\n    glClearColor(1.0, 1.0, 0.0, 1.0);\n    glMatrixMode(GL_PROJECTION);\n    glLoadIdentity();\n    gluOrtho2D(0.0, 600.0, 400.0, 0.0);\n}\n\nvoid myDisplay(void) {\n    glClear(GL_COLOR_BUFFER_BIT);\n    glColor3f(1.0f, 0.0f, 0.0f);\n    glPointSize(5); \n    MidPointline(50, 50, 300, 60);    \n    MidPointline(300, 60, 200, 200);  \n    MidPointline(200, 200, 50, 50);   \n    glFlush();\n    glutSwapBuffers();\n}\n\nint main(int argc, char* argv[]) {\n    glutInit(&argc, argv);\n    glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);\n    glutInitWindowPosition(50, 50);\n    glutInitWindowSize(600, 400);\n    glutCreateWindow(\"l2\");\n    init(); \n    glutDisplayFunc(myDisplay);\n    glutMainLoop();\n    return 0;\n}"
+                                }
+                              ]
+                            },
+                            "language": "cpp",
+                            "wrap": false,
+                            "caption": ""
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "blocksuiteSourceContent": "#ifdef __APPLE__\n    #define GL_SILENCE_DEPRECATION\n    #include <GLUT/glut.h>\n#else\n    #include <GL/glut.h>\n#endif\n\n#include <cmath>\n#include <iostream>\n\nvoid MidPointline(int x1, int y1, int x2, int y2) {\n    int dx = std::abs(x2 - x1);\n    int dy = std::abs(y2 - y1);\n    int sx = (x1 < x2) ? 1 : -1;\n    int sy = (y1 < y2) ? 1 : -1;\n\n    int x = x1;\n    int y = y1;\n\n    glBegin(GL_POINTS);\n    if (dx >= dy) { \n        int d = dx - 2 * dy;   \n        int dt = 2 * dx - 2 * dy; \n        int db = - 2 * dy;      \n        for (int i = 0; i <= dx; i++) {\n            glVertex2i(x, y);\n            if (d < 0) {  \n                x += sx;      \n                y += sy;        \n                d += dt;        \n            } else {\n                x += sx;   \n                d += db;        \n            }\n        }\n    } \n    else { \n        int d = dy - 2 * dx;    // dx和dy互换即可\n        int dt = 2 * dy - 2 * dx;\n        int db = - 2 * dx;\n        for (int i = 0; i <= dy; i++) {\n            glVertex2i(x, y);\n            if (d < 0) {\n                y += sy;\n                x += sx;\n                d += dt;\n            } else {\n                y += sy;\n                d += db;\n            }\n        }\n    }\n    glEnd();\n}\n\nvoid init(void) {\n    glClearColor(1.0, 1.0, 0.0, 1.0);\n    glMatrixMode(GL_PROJECTION);\n    glLoadIdentity();\n    gluOrtho2D(0.0, 600.0, 400.0, 0.0);\n}\n\nvoid myDisplay(void) {\n    glClear(GL_COLOR_BUFFER_BIT);\n    glColor3f(1.0f, 0.0f, 0.0f);\n    glPointSize(5); \n    MidPointline(50, 50, 300, 60);    \n    MidPointline(300, 60, 200, 200);  \n    MidPointline(200, 200, 50, 50);   \n    glFlush();\n    glutSwapBuffers();\n}\n\nint main(int argc, char* argv[]) {\n    glutInit(&argc, argv);\n    glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);\n    glutInitWindowPosition(50, 50);\n    glutInitWindowSize(600, 400);\n    glutCreateWindow(\"l2\");\n    init(); \n    glutDisplayFunc(myDisplay);\n    glutMainLoop();\n    return 0;\n}"
+            }
+          },
+          {
+            "id": "editor-1775999356939-c06car",
+            "type": "code",
+            "title": "l2.cpp",
+            "resourceId": "6c837267-23d9-4b7c-932c-cf0798358483",
+            "resourcePath": "/New Task Workbench(2)/134/l2.cpp",
+            "x": 76,
+            "y": 72,
+            "w": 380,
+            "h": 260,
+            "zIndex": 33,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "l2.cpp",
+              "resourceType": "code",
+              "codeOpenMode": "blocksuite",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "la4cLsjJNY",
+                  "title": "Untitled",
+                  "createDate": 1776000174274,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "OGLQnWmStt",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "75PrpgR5Jq",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "L_ERrnHYWh",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,95]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "H6gTwvjI4F",
+                          "flavour": "affine:code",
+                          "version": 1,
+                          "props": {
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "#ifdef __APPLE__\n    #define GL_SILENCE_DEPRECATION\n    #include <GLUT/glut.h>\n#else\n    #include <GL/glut.h>\n#endif\n\n#include <cmath>\n#include <iostream>\n\nvoid MidPointline(int x1, int y1, int x2, int y2) {\n    int dx = std::abs(x2 - x1);\n    int dy = std::abs(y2 - y1);\n    int sx = (x1 < x2) ? 1 : -1;\n    int sy = (y1 < y2) ? 1 : -1;\n\n    int x = x1;\n    int y = y1;\n\n    glBegin(GL_POINTS);\n    if (dx >= dy) { \n        int d = dx - 2 * dy;   \n        int dt = 2 * dx - 2 * dy; \n        int db = - 2 * dy;      \n        for (int i = 0; i <= dx; i++) {\n            glVertex2i(x, y);\n            if (d < 0) {  \n                x += sx;      \n                y += sy;        \n                d += dt;        \n            } else {\n                x += sx;   \n                d += db;        \n            }\n        }\n    } \n    else { \n        int d = dy - 2 * dx;    // dx和dy互换即可\n        int dt = 2 * dy - 2 * dx;\n        int db = - 2 * dx;\n        for (int i = 0; i <= dy; i++) {\n            glVertex2i(x, y);\n            if (d < 0) {\n                y += sy;\n                x += sx;\n                d += dt;\n            } else {\n                y += sy;\n                d += db;\n            }\n        }\n    }\n    glEnd();\n}\n\nvoid init(void) {\n    glClearColor(1.0, 1.0, 0.0, 1.0);\n    glMatrixMode(GL_PROJECTION);\n    glLoadIdentity();\n    gluOrtho2D(0.0, 600.0, 400.0, 0.0);\n}\n\nvoid myDisplay(void) {\n    glClear(GL_COLOR_BUFFER_BIT);\n    glColor3f(1.0f, 0.0f, 0.0f);\n    glPointSize(5); \n    MidPointline(50, 50, 300, 60);    \n    MidPointline(300, 60, 200, 200);  \n    MidPointline(200, 200, 50, 50);   \n    glFlush();\n    glutSwapBuffers();\n}\n\nint main(int argc, char* argv[]) {\n    glutInit(&argc, argv);\n    glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);\n    glutInitWindowPosition(50, 50);\n    glutInitWindowSize(600, 400);\n    glutCreateWindow(\"l2\");\n    init(); \n    glutDisplayFunc(myDisplay);\n    glutMainLoop();\n    return 0;\n}"
+                                }
+                              ]
+                            },
+                            "language": "cpp",
+                            "wrap": false,
+                            "caption": ""
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "blocksuiteSourceContent": "#ifdef __APPLE__\n    #define GL_SILENCE_DEPRECATION\n    #include <GLUT/glut.h>\n#else\n    #include <GL/glut.h>\n#endif\n\n#include <cmath>\n#include <iostream>\n\nvoid MidPointline(int x1, int y1, int x2, int y2) {\n    int dx = std::abs(x2 - x1);\n    int dy = std::abs(y2 - y1);\n    int sx = (x1 < x2) ? 1 : -1;\n    int sy = (y1 < y2) ? 1 : -1;\n\n    int x = x1;\n    int y = y1;\n\n    glBegin(GL_POINTS);\n    if (dx >= dy) { \n        int d = dx - 2 * dy;   \n        int dt = 2 * dx - 2 * dy; \n        int db = - 2 * dy;      \n        for (int i = 0; i <= dx; i++) {\n            glVertex2i(x, y);\n            if (d < 0) {  \n                x += sx;      \n                y += sy;        \n                d += dt;        \n            } else {\n                x += sx;   \n                d += db;        \n            }\n        }\n    } \n    else { \n        int d = dy - 2 * dx;    // dx和dy互换即可\n        int dt = 2 * dy - 2 * dx;\n        int db = - 2 * dx;\n        for (int i = 0; i <= dy; i++) {\n            glVertex2i(x, y);\n            if (d < 0) {\n                y += sy;\n                x += sx;\n                d += dt;\n            } else {\n                y += sy;\n                d += db;\n            }\n        }\n    }\n    glEnd();\n}\n\nvoid init(void) {\n    glClearColor(1.0, 1.0, 0.0, 1.0);\n    glMatrixMode(GL_PROJECTION);\n    glLoadIdentity();\n    gluOrtho2D(0.0, 600.0, 400.0, 0.0);\n}\n\nvoid myDisplay(void) {\n    glClear(GL_COLOR_BUFFER_BIT);\n    glColor3f(1.0f, 0.0f, 0.0f);\n    glPointSize(5); \n    MidPointline(50, 50, 300, 60);    \n    MidPointline(300, 60, 200, 200);  \n    MidPointline(200, 200, 50, 50);   \n    glFlush();\n    glutSwapBuffers();\n}\n\nint main(int argc, char* argv[]) {\n    glutInit(&argc, argv);\n    glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);\n    glutInitWindowPosition(50, 50);\n    glutInitWindowSize(600, 400);\n    glutCreateWindow(\"l2\");\n    init(); \n    glutDisplayFunc(myDisplay);\n    glutMainLoop();\n    return 0;\n}"
+            }
+          },
+          {
+            "id": "editor-1775999431763-8e8zul",
+            "type": "code",
+            "title": "func1.java",
+            "resourceId": "3721360c-7a88-4af0-8c39-25a5217bebbf",
+            "resourcePath": "/New Task Workbench(2)/134/func1.java",
+            "x": 104,
+            "y": 96,
+            "w": 380,
+            "h": 260,
+            "zIndex": 34,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "func1.java",
+              "resourceType": "code",
+              "codeOpenMode": "blocksuite",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "cDRdo8qZFO",
+                  "title": "Untitled",
+                  "createDate": 1776000175129,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "HEzWMHr6fI",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "p7RHjKyBBE",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "ZGJYaBALNK",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,95]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "8ZBwy5OtNY",
+                          "flavour": "affine:code",
+                          "version": 1,
+                          "props": {
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "import java.util.Scanner;\n\npublic class func1 {\n    public static void main(String[] args) {\n        Scanner scanner = new Scanner(System.in);\n        \n        System.out.print(\"Enter the number of nodes: \");\n        int n = scanner.nextInt();\n        \n        System.out.println(\"Output the nodes\");\n        for (int i = 0; i < n; i++) {\n            System.out.print(i + \" \");\n        }\n        System.out.println();\n        \n        String[][] edges = new String[n - 1][];\n        for (int i = 0; i < n - 1; i++) {\n            edges[i] = new String[n - (i + 1)];\n            for (int j = 0; j < edges[i].length; j++) {\n                edges[i][j] = \"\";\n            }\n        }\n        \n        for (int i = 0; i < n - 1; i++) {\n            for (int j = i + 1; j < n; j++) {\n                edges[i][j - i - 1] = i + \"-\" + j;\n            }\n        }\n        \n        System.out.println(\"Output the edges\");\n        for (int i = 0; i < n - 1; i++) {\n            for (int j = i + 1; j < n; j++) {\n                System.out.print(edges[i][j - i - 1] + \" \");\n            }\n            System.out.println();\n        }\n        \n        scanner.close();\n    }\n}"
+                                }
+                              ]
+                            },
+                            "language": "java",
+                            "wrap": false,
+                            "caption": ""
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "blocksuiteSourceContent": "import java.util.Scanner;\n\npublic class func1 {\n    public static void main(String[] args) {\n        Scanner scanner = new Scanner(System.in);\n        \n        System.out.print(\"Enter the number of nodes: \");\n        int n = scanner.nextInt();\n        \n        System.out.println(\"Output the nodes\");\n        for (int i = 0; i < n; i++) {\n            System.out.print(i + \" \");\n        }\n        System.out.println();\n        \n        String[][] edges = new String[n - 1][];\n        for (int i = 0; i < n - 1; i++) {\n            edges[i] = new String[n - (i + 1)];\n            for (int j = 0; j < edges[i].length; j++) {\n                edges[i][j] = \"\";\n            }\n        }\n        \n        for (int i = 0; i < n - 1; i++) {\n            for (int j = i + 1; j < n; j++) {\n                edges[i][j - i - 1] = i + \"-\" + j;\n            }\n        }\n        \n        System.out.println(\"Output the edges\");\n        for (int i = 0; i < n - 1; i++) {\n            for (int j = i + 1; j < n; j++) {\n                System.out.print(edges[i][j - i - 1] + \" \");\n            }\n            System.out.println();\n        }\n        \n        scanner.close();\n    }\n}"
+            }
+          },
+          {
+            "id": "editor-1775999447150-wg8d1c",
+            "type": "code",
+            "title": "jv1.py",
+            "resourceId": "71c85afd-e129-42f8-8fd2-e62e31cc9115",
+            "resourcePath": "/New Task Workbench(2)/134/jv1.py",
+            "x": 132,
+            "y": 120,
+            "w": 380,
+            "h": 260,
+            "zIndex": 36,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "jv1.py",
+              "resourceType": "code",
+              "codeOpenMode": "blocksuite",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "RSbABMpzAT",
+                  "title": "Untitled",
+                  "createDate": 1776000281470,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "C7UEzCDFpZ",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "dX4pd-lSB8",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "HOypHDqNQl",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,95]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "92IRM3qWqf",
+                          "flavour": "affine:code",
+                          "version": 1,
+                          "props": {
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "#功能1\nn=int(input(\"Enter the number of nodes: \"))\nprint(\"Output the nodes\")\nfor i in range(n):\n    print(str(i), end=\" \")\nprint()\nedges=[[\"\" for j in range(i+1,n)] for i in range(n-1)]\nfor i in range(n-1):\n    for j in range(i+1,n):\n        edges[i][j-i-1]=str(i) + \"-\" + str(j)\nprint(\"Output the edges\")\nfor i in range(n-1):\n    for j in range(i+1,n):\n        print(edges[i][j-i-1], end=\" \")\n    print()\n\n#功能2\nm=int(input(\"Enter the number of nodes1: \"))\nn=int(input(\"Enter the number of nodes2: \"))\nprint(\"Output the nodes\")\nfor i in range(m):\n    print(str(i), end=\" \")\nfor i in range(n):\n    print(str(i)+'*', end=\" \")\nprint()\nedges=[[\"\" for j in range(n)] for i in range(m)]\nfor i in range(m):\n    for j in range(n):\n        edges[i][j]=str(i) + \"-\" + str(j)+'*'\nprint(\"Output the edges\")\nfor i in range(m):\n    for j in range(n):\n        print(edges[i][j], end=\" \")\n    print()\n\n#功能3\nn=int(input(\"Enter the number of nodes: \"))\nk=n//2\nprint(\"Output the edges\")\nfor i in range(k):\n    l,r=i,i+k\n    edges=[\"(\"+str(l)+\",\"+str(r)+\")\"]\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(l)+\",\"+str(j)+\")\")\n    for j in range(l):\n        edges.append(\"(\"+str(r)+\",\"+str(j)+\")\")\n    for j in range(r+1,n):\n        edges.append(\"(\"+str(r)+\",\"+str(j)+\")\")\n    for edge in edges:\n        print(edge, end=\" \")\n    print()\n\n#功能4\nm=int(input(\"Enter the number of nodes1(默认m>n): \"))\nn=int(input(\"Enter the number of nodes2(默认m>n): \"))\nk=n//2\nprint(\"Output the edges\")\nfor i in range(k):\n    l,r=i,i+k\n    edges=[]\n    #(ai,bi),(ai,bk+i),(ak+i,bi)\n    edges.append(\"(\"+str(l)+\",\"+str(l)+\"*)\")\n    edges.append(\"(\"+str(l)+\",\"+str(r)+\"*)\")\n    edges.append(\"(\"+str(r)+\",\"+str(l)+\"*)\")\n    # V1叶子连V2核心\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(j)+\",\"+str(l)+\"*)\") \n    for j in range(l):\n        edges.append(\"(\"+str(j)+\",\"+str(r)+\"*)\") \n    for j in range(r+1,m):                   \n        edges.append(\"(\"+str(j)+\",\"+str(r)+\"*)\")\n    #V2叶子连V1核心\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(j)+\"*,\"+str(l)+\")\") \n    for j in range(l):\n        edges.append(\"(\"+str(j)+\"*,\"+str(r)+\")\") \n    for j in range(r+1,n):                      \n        edges.append(\"(\"+str(j)+\"*,\"+str(r)+\")\")\n    for edge in edges:\n        print(edge, end=\" \")\n    print()"
+                                }
+                              ]
+                            },
+                            "language": "python",
+                            "wrap": false,
+                            "caption": ""
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "blocksuiteSourceContent": "#功能1\nn=int(input(\"Enter the number of nodes: \"))\nprint(\"Output the nodes\")\nfor i in range(n):\n    print(str(i), end=\" \")\nprint()\nedges=[[\"\" for j in range(i+1,n)] for i in range(n-1)]\nfor i in range(n-1):\n    for j in range(i+1,n):\n        edges[i][j-i-1]=str(i) + \"-\" + str(j)\nprint(\"Output the edges\")\nfor i in range(n-1):\n    for j in range(i+1,n):\n        print(edges[i][j-i-1], end=\" \")\n    print()\n\n#功能2\nm=int(input(\"Enter the number of nodes1: \"))\nn=int(input(\"Enter the number of nodes2: \"))\nprint(\"Output the nodes\")\nfor i in range(m):\n    print(str(i), end=\" \")\nfor i in range(n):\n    print(str(i)+'*', end=\" \")\nprint()\nedges=[[\"\" for j in range(n)] for i in range(m)]\nfor i in range(m):\n    for j in range(n):\n        edges[i][j]=str(i) + \"-\" + str(j)+'*'\nprint(\"Output the edges\")\nfor i in range(m):\n    for j in range(n):\n        print(edges[i][j], end=\" \")\n    print()\n\n#功能3\nn=int(input(\"Enter the number of nodes: \"))\nk=n//2\nprint(\"Output the edges\")\nfor i in range(k):\n    l,r=i,i+k\n    edges=[\"(\"+str(l)+\",\"+str(r)+\")\"]\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(l)+\",\"+str(j)+\")\")\n    for j in range(l):\n        edges.append(\"(\"+str(r)+\",\"+str(j)+\")\")\n    for j in range(r+1,n):\n        edges.append(\"(\"+str(r)+\",\"+str(j)+\")\")\n    for edge in edges:\n        print(edge, end=\" \")\n    print()\n\n#功能4\nm=int(input(\"Enter the number of nodes1(默认m>n): \"))\nn=int(input(\"Enter the number of nodes2(默认m>n): \"))\nk=n//2\nprint(\"Output the edges\")\nfor i in range(k):\n    l,r=i,i+k\n    edges=[]\n    #(ai,bi),(ai,bk+i),(ak+i,bi)\n    edges.append(\"(\"+str(l)+\",\"+str(l)+\"*)\")\n    edges.append(\"(\"+str(l)+\",\"+str(r)+\"*)\")\n    edges.append(\"(\"+str(r)+\",\"+str(l)+\"*)\")\n    # V1叶子连V2核心\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(j)+\",\"+str(l)+\"*)\") \n    for j in range(l):\n        edges.append(\"(\"+str(j)+\",\"+str(r)+\"*)\") \n    for j in range(r+1,m):                   \n        edges.append(\"(\"+str(j)+\",\"+str(r)+\"*)\")\n    #V2叶子连V1核心\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(j)+\"*,\"+str(l)+\")\") \n    for j in range(l):\n        edges.append(\"(\"+str(j)+\"*,\"+str(r)+\")\") \n    for j in range(r+1,n):                      \n        edges.append(\"(\"+str(j)+\"*,\"+str(r)+\")\")\n    for edge in edges:\n        print(edge, end=\" \")\n    print()"
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-1775999447150-wg8d1c",
+        "activeEditorPaneId": "pane-1",
+        "editorLayout": {
+          "id": "pane-1",
+          "type": "leaf",
+          "editorIds": [
+            "editor-1775999315862-jqxcj8",
+            "editor-1775999356939-c06car",
+            "editor-1775999431763-8e8zul",
+            "editor-1775999447150-wg8d1c"
+          ],
+          "activeEditorId": "editor-1775999447150-wg8d1c"
+        },
+        "version": 1
+      }
+    },
+    {
+      "id": "db53f71f-7ae5-4d99-88a5-49fe87188b06",
+      "workspaceId": "afb3a47e-db56-4956-b2b2-9d9e33b3c232",
+      "title": "New Task Workbench",
+      "description": "Persisted task desktop for this learning objective.",
+      "rootPath": "/New Task Workbench",
+      "createdAt": "2026-04-12T13:23:35.507Z",
+      "updatedAt": "2026-04-12T13:24:27.955Z",
+      "lastOpenedAt": "2026-04-12T13:23:35.592Z",
+      "state": {
+        "workbenchId": "db53f71f-7ae5-4d99-88a5-49fe87188b06",
+        "editors": [
+          {
+            "id": "editor-1776000238929-9nb55i",
+            "type": "code",
+            "title": "jv1.py",
+            "resourceId": "609faf42-9809-41ad-b925-bc840e01889d",
+            "resourcePath": "/New Task Workbench/121212/jv1.py",
+            "x": 48,
+            "y": 48,
+            "w": 380,
+            "h": 260,
+            "zIndex": 6,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "jv1.py",
+              "resourceType": "code",
+              "codeOpenMode": "blocksuite",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "Ru2lhlLDmW",
+                  "title": "Untitled",
+                  "createDate": 1776000256101,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "2VKowPsAKc",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "jvM1tmCSgT",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "grqbg8iQKX",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,95]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "1oobtN_knh",
+                          "flavour": "affine:code",
+                          "version": 1,
+                          "props": {
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "#功能1\nn=int(input(\"Enter the number of nodes: \"))\nprint(\"Output the nodes\")\nfor i in range(n):\n    print(str(i), end=\" \")\nprint()\nedges=[[\"\" for j in range(i+1,n)] for i in range(n-1)]\nfor i in range(n-1):\n    for j in range(i+1,n):\n        edges[i][j-i-1]=str(i) + \"-\" + str(j)\nprint(\"Output the edges\")\nfor i in range(n-1):\n    for j in range(i+1,n):\n        print(edges[i][j-i-1], end=\" \")\n    print()\n\n#功能2\nm=int(input(\"Enter the number of nodes1: \"))\nn=int(input(\"Enter the number of nodes2: \"))\nprint(\"Output the nodes\")\nfor i in range(m):\n    print(str(i), end=\" \")\nfor i in range(n):\n    print(str(i)+'*', end=\" \")\nprint()\nedges=[[\"\" for j in range(n)] for i in range(m)]\nfor i in range(m):\n    for j in range(n):\n        edges[i][j]=str(i) + \"-\" + str(j)+'*'\nprint(\"Output the edges\")\nfor i in range(m):\n    for j in range(n):\n        print(edges[i][j], end=\" \")\n    print()\n\n#功能3\nn=int(input(\"Enter the number of nodes: \"))\nk=n//2\nprint(\"Output the edges\")\nfor i in range(k):\n    l,r=i,i+k\n    edges=[\"(\"+str(l)+\",\"+str(r)+\")\"]\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(l)+\",\"+str(j)+\")\")\n    for j in range(l):\n        edges.append(\"(\"+str(r)+\",\"+str(j)+\")\")\n    for j in range(r+1,n):\n        edges.append(\"(\"+str(r)+\",\"+str(j)+\")\")\n    for edge in edges:\n        print(edge, end=\" \")\n    print()\n\n#功能4\nm=int(input(\"Enter the number of nodes1(默认m>n): \"))\nn=int(input(\"Enter the number of nodes2(默认m>n): \"))\nk=n//2\nprint(\"Output the edges\")\nfor i in range(k):\n    l,r=i,i+k\n    edges=[]\n    #(ai,bi),(ai,bk+i),(ak+i,bi)\n    edges.append(\"(\"+str(l)+\",\"+str(l)+\"*)\")\n    edges.append(\"(\"+str(l)+\",\"+str(r)+\"*)\")\n    edges.append(\"(\"+str(r)+\",\"+str(l)+\"*)\")\n    # V1叶子连V2核心\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(j)+\",\"+str(l)+\"*)\") \n    for j in range(l):\n        edges.append(\"(\"+str(j)+\",\"+str(r)+\"*)\") \n    for j in range(r+1,m):                   \n        edges.append(\"(\"+str(j)+\",\"+str(r)+\"*)\")\n    #V2叶子连V1核心\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(j)+\"*,\"+str(l)+\")\") \n    for j in range(l):\n        edges.append(\"(\"+str(j)+\"*,\"+str(r)+\")\") \n    for j in range(r+1,n):                      \n        edges.append(\"(\"+str(j)+\"*,\"+str(r)+\")\")\n    for edge in edges:\n        print(edge, end=\" \")\n    print()"
+                                }
+                              ]
+                            },
+                            "language": "python",
+                            "wrap": false,
+                            "caption": ""
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "blocksuiteSourceContent": "#功能1\nn=int(input(\"Enter the number of nodes: \"))\nprint(\"Output the nodes\")\nfor i in range(n):\n    print(str(i), end=\" \")\nprint()\nedges=[[\"\" for j in range(i+1,n)] for i in range(n-1)]\nfor i in range(n-1):\n    for j in range(i+1,n):\n        edges[i][j-i-1]=str(i) + \"-\" + str(j)\nprint(\"Output the edges\")\nfor i in range(n-1):\n    for j in range(i+1,n):\n        print(edges[i][j-i-1], end=\" \")\n    print()\n\n#功能2\nm=int(input(\"Enter the number of nodes1: \"))\nn=int(input(\"Enter the number of nodes2: \"))\nprint(\"Output the nodes\")\nfor i in range(m):\n    print(str(i), end=\" \")\nfor i in range(n):\n    print(str(i)+'*', end=\" \")\nprint()\nedges=[[\"\" for j in range(n)] for i in range(m)]\nfor i in range(m):\n    for j in range(n):\n        edges[i][j]=str(i) + \"-\" + str(j)+'*'\nprint(\"Output the edges\")\nfor i in range(m):\n    for j in range(n):\n        print(edges[i][j], end=\" \")\n    print()\n\n#功能3\nn=int(input(\"Enter the number of nodes: \"))\nk=n//2\nprint(\"Output the edges\")\nfor i in range(k):\n    l,r=i,i+k\n    edges=[\"(\"+str(l)+\",\"+str(r)+\")\"]\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(l)+\",\"+str(j)+\")\")\n    for j in range(l):\n        edges.append(\"(\"+str(r)+\",\"+str(j)+\")\")\n    for j in range(r+1,n):\n        edges.append(\"(\"+str(r)+\",\"+str(j)+\")\")\n    for edge in edges:\n        print(edge, end=\" \")\n    print()\n\n#功能4\nm=int(input(\"Enter the number of nodes1(默认m>n): \"))\nn=int(input(\"Enter the number of nodes2(默认m>n): \"))\nk=n//2\nprint(\"Output the edges\")\nfor i in range(k):\n    l,r=i,i+k\n    edges=[]\n    #(ai,bi),(ai,bk+i),(ak+i,bi)\n    edges.append(\"(\"+str(l)+\",\"+str(l)+\"*)\")\n    edges.append(\"(\"+str(l)+\",\"+str(r)+\"*)\")\n    edges.append(\"(\"+str(r)+\",\"+str(l)+\"*)\")\n    # V1叶子连V2核心\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(j)+\",\"+str(l)+\"*)\") \n    for j in range(l):\n        edges.append(\"(\"+str(j)+\",\"+str(r)+\"*)\") \n    for j in range(r+1,m):                   \n        edges.append(\"(\"+str(j)+\",\"+str(r)+\"*)\")\n    #V2叶子连V1核心\n    for j in range(l+1,r):\n        edges.append(\"(\"+str(j)+\"*,\"+str(l)+\")\") \n    for j in range(l):\n        edges.append(\"(\"+str(j)+\"*,\"+str(r)+\")\") \n    for j in range(r+1,n):                      \n        edges.append(\"(\"+str(j)+\"*,\"+str(r)+\")\")\n    for edge in edges:\n        print(edge, end=\" \")\n    print()"
+            }
+          },
+          {
+            "id": "editor-1776000240922-5u9dy2",
+            "type": "code",
+            "title": "func1.java",
+            "resourceId": "44a1d4bc-e39f-4cad-a72f-87b97be5c17d",
+            "resourcePath": "/New Task Workbench/121212/func1.java",
+            "x": 76,
+            "y": 72,
+            "w": 380,
+            "h": 260,
+            "zIndex": 8,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "func1.java",
+              "resourceType": "code",
+              "codeOpenMode": "blocksuite",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "qrrpbbPDUo",
+                  "title": "Untitled",
+                  "createDate": 1776000260256,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "DhPYSpaTpt",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "nw1LmSKAe4",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "LqwgD6-aDB",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,1068]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "QYtpEaBU4Q",
+                          "flavour": "affine:code",
+                          "version": 1,
+                          "props": {
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "import java.util.Scanner;\n\npublic class func1 {\n    public static void main(String[] args) {\n        Scanner scanner = new Scanner(System.in);\n        \n        System.out.print(\"Enter the number of nodes: \");\n        int n = scanner.nextInt();\n        \n        System.out.println(\"Output the nodes\");\n        for (int i = 0; i < n; i++) {\n            System.out.print(i + \" \");\n        }\n        System.out.println();\n        \n        String[][] edges = new String[n - 1][];\n        for (int i = 0; i < n - 1; i++) {\n            edges[i] = new String[n - (i + 1)];\n            for (int j = 0; j < edges[i].length; j++) {\n                edges[i][j] = \"\";\n            }\n        }\n        \n        for (int i = 0; i < n - 1; i++) {\n            for (int j = i + 1; j < n; j++) {\n                edges[i][j - i - 1] = i + \"-\" + j;\n            }\n        }\n        \n        System.out.println(\"Output the edges\");\n        for (int i = 0; i < n - 1; i++) {\n            for (int j = i + 1; j < n; j++) {\n                System.out.print(edges[i][j - i - 1] + \" \");\n            }\n            System.out.println();\n        }\n        \n        scanner.close();\n    }\n}"
+                                }
+                              ]
+                            },
+                            "language": "java",
+                            "wrap": false,
+                            "caption": ""
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "blocksuiteSourceContent": "import java.util.Scanner;\n\npublic class func1 {\n    public static void main(String[] args) {\n        Scanner scanner = new Scanner(System.in);\n        \n        System.out.print(\"Enter the number of nodes: \");\n        int n = scanner.nextInt();\n        \n        System.out.println(\"Output the nodes\");\n        for (int i = 0; i < n; i++) {\n            System.out.print(i + \" \");\n        }\n        System.out.println();\n        \n        String[][] edges = new String[n - 1][];\n        for (int i = 0; i < n - 1; i++) {\n            edges[i] = new String[n - (i + 1)];\n            for (int j = 0; j < edges[i].length; j++) {\n                edges[i][j] = \"\";\n            }\n        }\n        \n        for (int i = 0; i < n - 1; i++) {\n            for (int j = i + 1; j < n; j++) {\n                edges[i][j - i - 1] = i + \"-\" + j;\n            }\n        }\n        \n        System.out.println(\"Output the edges\");\n        for (int i = 0; i < n - 1; i++) {\n            for (int j = i + 1; j < n; j++) {\n                System.out.print(edges[i][j - i - 1] + \" \");\n            }\n            System.out.println();\n        }\n        \n        scanner.close();\n    }\n}"
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-1776000240922-5u9dy2",
+        "activeEditorPaneId": "pane-1",
+        "editorLayout": {
+          "id": "pane-1",
+          "type": "leaf",
+          "editorIds": [
+            "editor-1776000238929-9nb55i",
+            "editor-1776000240922-5u9dy2"
+          ],
+          "activeEditorId": "editor-1776000240922-5u9dy2"
+        },
+        "version": 1
+      }
+    }
+  ]
+}

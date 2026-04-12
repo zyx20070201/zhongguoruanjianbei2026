@@ -1,0 +1,9 @@
+public class ChineseUnicode {
+    public static void main(String[] args) {
+        char[] chars = {'中', '国', '联', '合', '国'};
+        for (char ch : chars) {
+            System.out.printf("%c: \\u%04X ", ch, (int) ch);
+        }
+        System.out.println();
+    }
+}

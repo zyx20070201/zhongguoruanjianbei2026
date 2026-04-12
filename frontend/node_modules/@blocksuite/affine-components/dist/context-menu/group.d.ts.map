@@ -1,0 +1,1 @@
+{"version":3,"file":"group.d.ts","sourceRoot":"","sources":["../../src/context-menu/group.ts"],"names":[],"mappings":"AAEA,OAAO,EAAQ,KAAK,cAAc,EAAE,MAAM,KAAK,CAAC;AAEhD,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,WAAW,CAAC;AAG5C,eAAO,MAAM,cAAc;oBACT;QAAE,IAAI,CAAC,EAAE,MAAM,CAAC;QAAC,KAAK,EAAE,UAAU,EAAE,CAAA;KAAE;CA0BP,CAAC"}

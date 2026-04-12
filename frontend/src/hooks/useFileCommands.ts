@@ -35,6 +35,18 @@ export const useFileCommands = (workspaceId: string | undefined) => {
     await refreshTree();
   }, [workspaceId, refreshTree]);
 
+  const updateTags = useCallback(async (id: string, tags: string[]) => {
+    if (!workspaceId) return;
+    await fileSystemApi.updateTags(workspaceId, { id, tags });
+    await refreshTree();
+  }, [workspaceId, refreshTree]);
+
+  const copyNode = useCallback(async (id: string, targetParentId?: string | null) => {
+    if (!workspaceId) return;
+    await fileSystemApi.copy(workspaceId, { id, targetParentId });
+    await refreshTree();
+  }, [workspaceId, refreshTree]);
+
   const deleteNode = useCallback(async (id: string) => {
     if (!workspaceId) return;
       await fileSystemApi.remove(workspaceId, id);
@@ -52,6 +64,8 @@ export const useFileCommands = (workspaceId: string | undefined) => {
     createFile,
     renameNode,
     moveNode,
+    updateTags,
+    copyNode,
     deleteNode,
     uploadFiles,
     refreshTree

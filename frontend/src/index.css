@@ -4,16 +4,94 @@
 
 /* frontend/src/index.css */
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Segoe UI', 'SF Pro Text', system-ui, sans-serif;
   line-height: 1.5;
   font-weight: 400;
+  color: #16202d;
+  background-color: #f4f8fc;
+  --app-bg: #f4f8fc;
+  --app-bg-elevated: #edf3f9;
+  --app-surface: rgba(255, 255, 255, 0.92);
+  --app-surface-strong: #ffffff;
+  --app-border: #d6e0eb;
+  --app-text: #16202d;
+  --app-muted: #64748b;
+  --app-accent: #2d6cdf;
+  --app-accent-soft: rgba(45, 108, 223, 0.12);
+  --app-hover: rgba(148, 163, 184, 0.12);
+  --wb-bg: #edf3f8;
+  --wb-titlebar: #f8fbff;
+  --wb-activitybar: #e7eef6;
+  --wb-sidebar: #f4f8fc;
+  --wb-sidebar-alt: #e9f0f7;
+  --wb-border: #cfdae6;
+  --wb-panel: #ffffff;
+  --wb-editor: #f8fbff;
+  --wb-tab: #edf3fa;
+  --wb-tab-active: #ffffff;
+  --wb-tab-hover: #e4edf7;
+  --wb-text: #16202d;
+  --wb-text-muted: #5f7085;
+  --wb-text-dim: #8191a4;
+  --wb-accent: #2d6cdf;
+  --wb-accent-soft: rgba(45, 108, 223, 0.12);
+  --wb-status: #2d6cdf;
+  --wb-status-text: #ffffff;
+}
+
+:root[data-theme='dark'] {
+  color: #eef4ff;
+  background-color: #0b1016;
+  --app-bg: #0b1016;
+  --app-bg-elevated: #111821;
+  --app-surface: rgba(18, 25, 34, 0.92);
+  --app-surface-strong: #121922;
+  --app-border: #2a3543;
+  --app-text: #eef4ff;
+  --app-muted: #a8b5c7;
+  --app-accent: #5aa6ff;
+  --app-accent-soft: rgba(90, 166, 255, 0.18);
+  --app-hover: rgba(255, 255, 255, 0.06);
+  --wb-bg: #0b1016;
+  --wb-titlebar: #080c12;
+  --wb-activitybar: #0a0f15;
+  --wb-sidebar: #111821;
+  --wb-sidebar-alt: #17202b;
+  --wb-border: #2a3543;
+  --wb-panel: #121922;
+  --wb-editor: #0d141c;
+  --wb-tab: #161f29;
+  --wb-tab-active: #0f151d;
+  --wb-tab-hover: #1c2733;
+  --wb-text: #eef4ff;
+  --wb-text-muted: #b4c0d0;
+  --wb-text-dim: #7a8798;
+  --wb-accent: #5aa6ff;
+  --wb-accent-soft: rgba(90, 166, 255, 0.18);
+  --wb-status: #5aa6ff;
+}
+
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
   margin: 0;
-  background-color: #f6f6f6;
+  background-color: var(--app-bg);
+  color: var(--app-text);
 }
 
 #root {
   width: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(90, 166, 255, 0.35);
+  color: #ffffff;
 }

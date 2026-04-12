@@ -1,0 +1,1 @@
+{"version":3,"file":"parser.d.ts","sourceRoot":"","sources":["../../../src/utils/path-data-parser/parser.ts"],"names":[],"mappings":"AAUA,MAAM,WAAW,OAAO;IACtB,GAAG,EAAE,MAAM,CAAC;IACZ,IAAI,EAAE,MAAM,EAAE,CAAC;CAChB;AA2DD,wBAAgB,SAAS,CAAC,CAAC,EAAE,MAAM,GAAG,OAAO,EAAE,CAkD9C;AAED,wBAAgB,SAAS,CAAC,QAAQ,EAAE,OAAO,EAAE,GAAG,MAAM,CA4BrD"}

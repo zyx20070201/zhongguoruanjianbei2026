@@ -46,6 +46,20 @@ export class LocalStorageService {
   }
 
   /**
+   * Copy an existing stored file to a new storage key.
+   */
+  static async copyStoredFile(existingStorageKey: string): Promise<{ storageKey: string, size: number }> {
+    const storageKey = crypto.randomBytes(16).toString('hex');
+    const sourcePath = path.join(UPLOAD_DIR, existingStorageKey);
+    const destPath = path.join(UPLOAD_DIR, storageKey);
+
+    await fs.copyFile(sourcePath, destPath);
+    const stats = await fs.stat(destPath);
+
+    return { storageKey, size: stats.size };
+  }
+
+  /**
    * Read text content from a stored file
    */
   static async readTextFile(storageKey: string): Promise<string> {

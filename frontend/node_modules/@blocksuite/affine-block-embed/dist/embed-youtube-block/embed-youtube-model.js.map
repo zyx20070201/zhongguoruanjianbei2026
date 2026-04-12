@@ -1,0 +1,1 @@
+{"version":3,"file":"embed-youtube-model.js","sourceRoot":"","sources":["../../src/embed-youtube-block/embed-youtube-model.ts"],"names":[],"mappings":"AAAA,MAAM,CAAC,MAAM,eAAe,GAC1B,mGAAmG,CAAC","sourcesContent":["export const youtubeUrlRegex: RegExp =\n  /(?:https?:\\/\\/)?(?:(?:www|m)\\.)?youtu\\.?be(?:\\.com)?\\/?.*(?:watch|embed)?(?:.*v=|v\\/|\\/)([\\w-_]+)/;\n"]}

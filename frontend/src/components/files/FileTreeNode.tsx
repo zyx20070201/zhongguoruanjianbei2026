@@ -1,51 +1,60 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { NodeApi } from 'react-arborist';
 import { FileSystemObject } from '../../types';
 import { 
   ChevronRight, 
   ChevronDown, 
-  File, 
   Folder, 
   FolderOpen,
   Image,
   FileText,
-  Code
+  Code,
+  Tag
 } from 'lucide-react';
 
 interface FileTreeNodeProps {
-  node: NodeApi<FileSystemObject>;
+  node: NodeApi<any>;
   style: React.CSSProperties;
-  onContextMenu: (e: React.MouseEvent, node: NodeApi<FileSystemObject>) => void;
-  onDoubleClick: (node: NodeApi<FileSystemObject>) => void;
+  dragHandle?: (el: HTMLDivElement | null) => void;
+  onContextMenu: (e: React.MouseEvent, node: NodeApi<any>) => void;
+  onDoubleClick: (node: NodeApi<any>) => void;
+  enableWorkbenchDrag?: boolean;
 }
 
 const getFileIcon = (node: FileSystemObject, isOpen: boolean) => {
+  if ((node as FileSystemObject & { syntheticKind?: string }).syntheticKind === 'tag-group') {
+    return <Tag size={16} className="mr-1.5 flex-shrink-0 text-[#f0b45c]" />;
+  }
+
   if (node.nodeType === 'folder') {
     return isOpen ? (
-      <FolderOpen size={16} className="text-blue-500 mr-1.5 flex-shrink-0" />
+      <FolderOpen size={16} className="mr-1.5 flex-shrink-0 text-[#7fb4ff]" />
     ) : (
-      <Folder size={16} className="text-blue-500 mr-1.5 flex-shrink-0" />
+      <Folder size={16} className="mr-1.5 flex-shrink-0 text-[#6ea7f6]" />
     );
   }
 
-  const ext = node.extension?.toLowerCase() || '';
-  if (['.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext)) {
-    return <Image size={16} className="text-purple-500 mr-1.5 flex-shrink-0" />;
+  const ext = node.extension?.toLowerCase().replace(/^\./, '') || '';
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext)) {
+    return <Image size={16} className="mr-1.5 flex-shrink-0 text-[#9fb0c7]" />;
   }
-  if (['.ts', '.tsx', '.js', '.jsx', '.py', '.java', '.c', '.cpp', '.html', '.css'].includes(ext)) {
-    return <Code size={16} className="text-yellow-500 mr-1.5 flex-shrink-0" />;
+  if (['ts', 'tsx', 'js', 'jsx', 'py', 'java', 'c', 'cpp', 'html', 'css', 'json', 'yaml', 'yml', 'xml'].includes(ext)) {
+    return <Code size={16} className="mr-1.5 flex-shrink-0 text-[#5aa6ff]" />;
   }
-  return <FileText size={16} className="text-gray-500 mr-1.5 flex-shrink-0" />;
+  return <FileText size={16} className="mr-1.5 flex-shrink-0 text-[#8d9aae]" />;
 };
 
 export const FileTreeNode: React.FC<FileTreeNodeProps> = ({ 
   node, 
   style, 
+  dragHandle,
   onContextMenu,
-  onDoubleClick
+  onDoubleClick,
+  enableWorkbenchDrag = false
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(node.data.name);
+  const autoOpenTimerRef = useRef<number | null>(null);
 
   // Focus effect for editing
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -58,6 +67,28 @@ export const FileTreeNode: React.FC<FileTreeNodeProps> = ({
       setIsEditing(false);
     }
   }, [node.isEditing, node.data.name]);
+
+  useEffect(() => {
+    if (node.data.nodeType !== 'folder' || !node.willReceiveDrop || node.isOpen) {
+      if (autoOpenTimerRef.current) {
+        window.clearTimeout(autoOpenTimerRef.current);
+        autoOpenTimerRef.current = null;
+      }
+      return;
+    }
+
+    autoOpenTimerRef.current = window.setTimeout(() => {
+      node.open();
+      autoOpenTimerRef.current = null;
+    }, 450);
+
+    return () => {
+      if (autoOpenTimerRef.current) {
+        window.clearTimeout(autoOpenTimerRef.current);
+        autoOpenTimerRef.current = null;
+      }
+    };
+  }, [node.id, node.data.nodeType, node.isOpen, node.willReceiveDrop]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -72,27 +103,33 @@ export const FileTreeNode: React.FC<FileTreeNodeProps> = ({
   };
 
   const isFolder = node.data.nodeType === 'folder';
+  const isSynthetic = Boolean((node.data as FileSystemObject & { syntheticKind?: string }).syntheticKind);
 
   return (
     <div
+      ref={dragHandle}
       style={style}
       className={`
-        flex items-center group cursor-pointer text-sm py-1 select-none
-        ${node.isSelected ? 'bg-blue-100 text-blue-900' : 'hover:bg-gray-100 text-gray-700'}
+        group flex items-center py-1 text-sm select-none transition-colors
+        cursor-pointer
+        ${node.isDragging ? 'opacity-50' : ''}
+        ${node.willReceiveDrop ? 'bg-[rgba(90,166,255,0.18)] text-[var(--wb-text)] ring-1 ring-inset ring-[#79b6ff]' : ''}
+        ${node.isSelected && !node.willReceiveDrop ? 'bg-[rgba(90,166,255,0.14)] text-[var(--wb-text)]' : ''}
+        ${!node.isSelected && !node.willReceiveDrop ? 'text-[var(--wb-text-muted)] hover:bg-white/5 hover:text-[var(--wb-text)]' : ''}
       `}
       onClick={() => {
+        node.select();
         if (isFolder) {
           node.toggle();
-        } else {
-          node.select();
         }
       }}
       onDoubleClick={() => {
-        if (!isFolder) {
+        if (!isSynthetic) {
           onDoubleClick(node);
         }
       }}
       onContextMenu={(e) => {
+        if (isSynthetic) return;
         e.preventDefault();
         e.stopPropagation();
         node.select();
@@ -105,7 +142,7 @@ export const FileTreeNode: React.FC<FileTreeNodeProps> = ({
       >
         {isFolder ? (
           <div 
-            className="w-4 h-4 flex items-center justify-center mr-1 text-gray-400 hover:text-gray-600"
+            className="mr-1 flex h-4 w-4 items-center justify-center text-[var(--wb-text-dim)] hover:text-[var(--wb-text)]"
             onClick={(e) => {
               e.stopPropagation();
               node.toggle();
@@ -127,11 +164,19 @@ export const FileTreeNode: React.FC<FileTreeNodeProps> = ({
             onChange={(e) => setEditName(e.target.value)}
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
-            className="flex-1 bg-white border border-blue-400 rounded px-1 outline-none text-sm h-6 min-w-0"
+            className="h-6 min-w-0 flex-1 rounded border border-[var(--wb-accent)] bg-[var(--wb-editor)] px-1 text-sm text-[var(--wb-text)] outline-none"
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
-          <span className="truncate">{node.data.name}</span>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="min-w-0 truncate">{node.data.name}</span>
+            {!isSynthetic && node.data.tags && node.data.tags.length > 0 && (
+              <span className="truncate rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-[var(--wb-text-dim)]">
+                {node.data.tags.slice(0, 2).join(', ')}
+                {node.data.tags.length > 2 ? ` +${node.data.tags.length - 2}` : ''}
+              </span>
+            )}
+          </div>
         )}
       </div>
     </div>

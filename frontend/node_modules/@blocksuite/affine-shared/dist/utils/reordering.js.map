@@ -1,0 +1,1 @@
+{"version":3,"file":"reordering.js","sourceRoot":"","sources":["../../src/utils/reordering.ts"],"names":[],"mappings":"","sourcesContent":["export type ReorderingType = 'front' | 'forward' | 'backward' | 'back';\n\nexport interface ReorderingAction<T> {\n  type: ReorderingType;\n  elements: T[];\n}\n"]}

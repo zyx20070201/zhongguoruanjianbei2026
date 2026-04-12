@@ -1,0 +1,1 @@
+{"version":3,"file":"when-hover.d.ts","sourceRoot":"","sources":["../../src/hover/when-hover.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAmB,gBAAgB,EAAE,MAAM,YAAY,CAAC;AAKpE;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;GAiCG;AACH,eAAO,MAAM,SAAS,oBACH,CAAC,OAAO,EAAE,OAAO,EAAE,KAAK,CAAC,EAAE,KAAK,KAAK,IAAI,kHAOvD,gBAAgB;6BAwEa,OAAO;4BAOR,OAAO;;CAcvC,CAAC;AAEF,YAAY,EAAE,gBAAgB,EAAE,CAAC"}

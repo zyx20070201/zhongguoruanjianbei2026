@@ -1,0 +1,1 @@
+{"version":3,"file":"embed-figma-model.js","sourceRoot":"","sources":["../../src/embed-figma-block/embed-figma-model.ts"],"names":[],"mappings":"AAAA,MAAM,CAAC,MAAM,aAAa,GACxB,0EAA0E,CAAC","sourcesContent":["export const figmaUrlRegex: RegExp =\n  /https:\\/\\/[\\w.-]+\\.?figma.com\\/([\\w-]+)\\/([0-9a-zA-Z]{22,128})(?:\\/.*)?$/;\n"]}

@@ -1,0 +1,1 @@
+{"version":3,"file":"formats.d.ts","sourceRoot":"","sources":["../../../../src/property-presets/number/utils/formats.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,YAAY,EAAE,MAAM,gBAAgB,CAAC;AAEnD,MAAM,MAAM,gBAAgB,GAAG;IAC7B,IAAI,EAAE,YAAY,CAAC;IACnB,KAAK,EAAE,MAAM,CAAC;IACd,MAAM,EAAE,MAAM,CAAC;CAChB,CAAC;AAEF,eAAO,MAAM,aAAa,EAAE,gBAAgB,EAU3C,CAAC"}

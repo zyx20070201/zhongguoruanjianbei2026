@@ -1,0 +1,1 @@
+{"version":3,"file":"source.js","sourceRoot":"","sources":["../../src/awareness/source.ts"],"names":[],"mappings":"","sourcesContent":["import type { Awareness } from 'y-protocols/awareness';\n\nexport interface AwarenessSource {\n  connect(awareness: Awareness): void;\n  disconnect(): void;\n}\n"]}

@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../../src/utils/points-on-curve/index.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,KAAK,EAAE,MAAM,sBAAsB,CAAC;AAyGlD,wBAAgB,QAAQ,CAAC,MAAM,EAAE,SAAS,KAAK,EAAE,EAAE,QAAQ,EAAE,MAAM,GAAG,KAAK,EAAE,CAE5E;AAwCD,wBAAgB,oBAAoB,CAClC,MAAM,EAAE,KAAK,EAAE,EACf,SAAS,SAAO,EAChB,QAAQ,CAAC,EAAE,MAAM,GAChB,KAAK,EAAE,CAWT"}

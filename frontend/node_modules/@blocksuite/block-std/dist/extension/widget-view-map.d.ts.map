@@ -1,0 +1,1 @@
+{"version":3,"file":"widget-view-map.d.ts","sourceRoot":"","sources":["../../src/extension/widget-view-map.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,iBAAiB,EAAE,MAAM,iBAAiB,CAAC;AACzD,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,gBAAgB,CAAC;AAIpD;;;;;;;;;;;;;;;;GAgBG;AACH,wBAAgB,sBAAsB,CACpC,OAAO,EAAE,UAAU,CAAC,OAAO,EAC3B,aAAa,EAAE,iBAAiB,GAC/B,aAAa,CAMf"}

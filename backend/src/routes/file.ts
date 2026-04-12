@@ -3,7 +3,7 @@ import {
   createFileObject, updateFileObject, deleteFileObject, getFileObject,
   getFileTree, initFileSystem, createFolder, createFile, renameNode,
   moveNode, deleteNode, copyNode, uploadFiles, downloadFile,
-  getFileContent, saveFileContent, saveGeneratedContent
+  getFileContent, saveFileContent, saveGeneratedContent, getFilePreviewInfo, streamFilePreview, updateNodeTags
 } from '../controllers/fileController';
 import multer from 'multer';
 import path from 'path';
@@ -33,10 +33,13 @@ router.post('/workspace/:workspaceId/folder', createFolder);
 router.post('/workspace/:workspaceId/file', createFile);
 router.patch('/workspace/:workspaceId/rename', renameNode);
 router.patch('/workspace/:workspaceId/move', moveNode);
+router.patch('/workspace/:workspaceId/tags', updateNodeTags);
 router.delete('/workspace/:workspaceId', deleteNode);
 router.post('/workspace/:workspaceId/copy', copyNode);
 router.post('/workspace/:workspaceId/upload', upload.array('files'), uploadFiles);
 router.get('/workspace/:workspaceId/download', downloadFile);
+router.get('/workspace/:workspaceId/preview-info', getFilePreviewInfo);
+router.get('/workspace/:workspaceId/preview', streamFilePreview);
 router.get('/workspace/:workspaceId/content', getFileContent);
 router.put('/workspace/:workspaceId/content', saveFileContent);
 router.post('/workspace/:workspaceId/generated', saveGeneratedContent);

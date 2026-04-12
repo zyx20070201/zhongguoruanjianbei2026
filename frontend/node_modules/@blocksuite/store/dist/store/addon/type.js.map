@@ -1,0 +1,1 @@
+{"version":3,"file":"type.js","sourceRoot":"","sources":["../../../src/store/addon/type.ts"],"names":[],"mappings":"AAEA,MAAM,OAAO,sBAAsB;CAIlC","sourcesContent":["import type { TestAddon } from './test.js';\n\nexport class DocCollectionAddonType implements TestAddon {\n  exportJSX!: TestAddon['exportJSX'];\n\n  importDocSnapshot!: TestAddon['importDocSnapshot'];\n}\n"]}

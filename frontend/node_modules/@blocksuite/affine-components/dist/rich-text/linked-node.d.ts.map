@@ -1,0 +1,1 @@
+{"version":3,"file":"linked-node.d.ts","sourceRoot":"","sources":["../../src/rich-text/linked-node.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,kBAAkB,EAAkB,MAAM,mBAAmB,CAAC;AAE5E,wBAAgB,gBAAgB,CAAC,EAC/B,YAAY,EACZ,KAAK,GACN,EAAE;IACD,YAAY,EAAE,kBAAkB,CAAC;IACjC,KAAK,EAAE,MAAM,CAAC;CACf,QAWA"}

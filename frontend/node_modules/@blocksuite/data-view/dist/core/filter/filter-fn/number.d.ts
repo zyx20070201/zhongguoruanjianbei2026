@@ -1,0 +1,2 @@
+export declare const numberFilter: import("./create.js").FilterConfig<import("../../logical/data-type.js").DTInstance<"Number", number, import("zod").ZodNumber>, [import("../../logical/data-type.js").DTInstance<"Number", number, import("zod").ZodNumber>], import("../../logical/type-variable.js").TypeVarDefinitionInstance<string, import("../../index.js").TypeInstance>[]>[];
+//# sourceMappingURL=number.d.ts.map

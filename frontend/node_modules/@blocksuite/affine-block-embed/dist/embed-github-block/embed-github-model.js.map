@@ -1,0 +1,1 @@
+{"version":3,"file":"embed-github-model.js","sourceRoot":"","sources":["../../src/embed-github-block/embed-github-model.ts"],"names":[],"mappings":"AAAA,MAAM,CAAC,MAAM,cAAc,GACzB,kFAAkF,CAAC","sourcesContent":["export const githubUrlRegex: RegExp =\n  /^(?:https?:\\/\\/)?(?:www\\.)?github\\.com\\/([^/]+)\\/([^/]+)\\/(issue|pull)s?\\/(\\d+)$/;\n"]}

@@ -1,0 +1,7 @@
+import type { CollisionDetection } from '../types.js';
+/**
+ * Returns the closest rectangles from an array of rectangles to the center of a given
+ * rectangle.
+ */
+export declare const closestCenter: CollisionDetection;
+//# sourceMappingURL=closest-center.d.ts.map

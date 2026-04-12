@@ -1,0 +1,1 @@
+{"version":3,"file":"separator.d.ts","sourceRoot":"","sources":["../../src/toolbar/separator.ts"],"names":[],"mappings":"AAAA,OAAO,EAAO,UAAU,EAAE,MAAM,KAAK,CAAC;AAEtC,qBAAa,sBAAuB,SAAQ,UAAU;IACpD,OAAgB,MAAM,0BA4BpB;CACH;AAED,OAAO,CAAC,MAAM,CAAC;IACb,UAAU,qBAAqB;QAC7B,0BAA0B,EAAE,sBAAsB,CAAC;KACpD;CACF"}

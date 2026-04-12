@@ -7,6 +7,8 @@ import LoginPage from './pages/LoginPage';
 import WorkspaceListPage from './pages/WorkspaceListPage';
 import WorkspaceDetailPage from './pages/WorkspaceDetailPage';
 import WorkbenchPage from './pages/WorkbenchPage';
+import { ThemeProvider } from './theme';
+import { AppPreferencesProvider } from './appPreferences';
 
 const router = createBrowserRouter([
   {
@@ -23,6 +25,10 @@ const router = createBrowserRouter([
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <ThemeProvider>
+      <AppPreferencesProvider>
+        <RouterProvider router={router} />
+      </AppPreferencesProvider>
+    </ThemeProvider>
   </React.StrictMode>
 );

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import prisma from '../config/db';
+import { workbenchService } from '../services/workbenchService';
 
 const getSingleValue = (value: any): string | undefined =>
   Array.isArray(value) ? value[0] : value;
@@ -15,21 +16,6 @@ export const createWorkspace = async (req: Request, res: Response) => {
       userId,
     },
   });
-
-  // Initialize basic directory structure
-  const basicFolders = ['materials', 'notes', 'code', 'resources', 'prompts'];
-  
-  for (const folderName of basicFolders) {
-    await prisma.fileSystemObject.create({
-      data: {
-        name: folderName,
-        nodeType: 'folder',
-        fileCategory: 'other',
-        path: `/${folderName}`,
-        workspaceId: workspace.id,
-      }
-    });
-  }
 
   res.json({ workspace });
 };
@@ -69,6 +55,7 @@ export const deleteWorkspace = async (req: Request, res: Response) => {
   
   await prisma.workbench.deleteMany({ where: { workspaceId: workspaceId } });
   await prisma.fileSystemObject.deleteMany({ where: { workspaceId: workspaceId } });
+  await workbenchService.deleteByWorkspace(workspaceId);
   
   await prisma.workspace.delete({
     where: { id: workspaceId },
@@ -113,6 +100,7 @@ export const duplicateWorkspace = async (req: Request, res: Response) => {
         name: fileObj.name,
         nodeType: fileObj.nodeType,
         fileCategory: fileObj.fileCategory,
+        tags: (fileObj as any).tags,
         extension: fileObj.extension,
         size: fileObj.size,
         isBinary: fileObj.isBinary,
@@ -139,14 +127,33 @@ export const getWorkspaces = async (req: Request, res: Response) => {
   const workspaces = await prisma.workspace.findMany({
     where: { userId: parsedUserId },
     include: {
+      fileObjects: {
+        orderBy: { updatedAt: 'desc' },
+        take: 1,
+      },
       _count: {
-        select: { workbenches: true }
+        select: { workbenches: true, fileObjects: true }
       }
     },
     orderBy: { updatedAt: 'desc' }
   });
 
-  res.json({ workspaces });
+  const enrichedWorkspaces = await Promise.all(
+    workspaces.map(async (workspace) => {
+      const workbenches = await workbenchService.listByWorkspace(workspace.id);
+
+      return {
+        ...workspace,
+        workbenches,
+        _count: {
+          ...workspace._count,
+          workbenches: workbenches.length
+        }
+      };
+    })
+  );
+
+  res.json({ workspaces: enrichedWorkspaces });
 };
 
 export const getWorkspace = async (req: Request, res: Response) => {
@@ -160,10 +167,20 @@ export const getWorkspace = async (req: Request, res: Response) => {
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
     include: {
-      workbenches: true,
       fileObjects: true,
     },
   });
 
-  res.json({ workspace });
+  if (!workspace) {
+    return res.status(404).json({ error: 'Workspace not found' });
+  }
+
+  const workbenches = await workbenchService.listByWorkspace(workspaceId);
+
+  res.json({
+    workspace: {
+      ...workspace,
+      workbenches
+    }
+  });
 };

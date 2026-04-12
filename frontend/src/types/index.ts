@@ -9,6 +9,7 @@ export interface Workspace {
   workbenches?: Workbench[];
   _count?: {
     workbenches: number;
+    fileObjects?: number;
   };
 }
 
@@ -17,6 +18,7 @@ export interface FileSystemObject {
   name: string;
   nodeType: 'file' | 'folder';
   fileCategory?: 'note' | 'code' | 'document' | 'media' | 'generated' | 'other' | string;
+  tags?: string[];
   extension?: string;
   size?: number;
   isBinary?: boolean;
@@ -36,12 +38,82 @@ export interface FileSystemObject {
 
 export interface Workbench {
   id: string;
-  name: string;
-  layout?: string;
   workspaceId: string;
+  title: string;
+  description: string;
+  rootPath: string;
+  createdAt: string;
+  updatedAt: string;
+  lastOpenedAt: string;
+  panelCount?: number;
+  state?: WorkbenchState;
+  name?: string;
+  layout?: string;
   panels?: Panel[];
-  createdAt?: string;
-  updatedAt?: string;
+}
+
+export type WorkbenchEditorType = 'resource' | 'notes' | 'code' | 'video' | 'external' | 'ai';
+export type WorkbenchPanelType = WorkbenchEditorType;
+
+export interface ResourceReference {
+  id: string;
+  name: string;
+  path: string;
+  type: string;
+  tags?: string[];
+  extension?: string;
+  mimeType?: string;
+  fileCategory?: string;
+  isBinary?: boolean;
+}
+
+export interface EditorState {
+  id: string;
+  type: WorkbenchEditorType;
+  title: string;
+  resourceId?: string;
+  resourcePath?: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  zIndex: number;
+  minimized: boolean;
+  viewState: Record<string, any>;
+}
+
+export type PanelState = EditorState;
+
+export interface EditorLeafNode {
+  id: string;
+  type: 'leaf';
+  editorIds: string[];
+  activeEditorId: string | null;
+  panelIds?: string[];
+  activePanelId?: string | null;
+}
+
+export interface EditorSplitNode {
+  id: string;
+  type: 'split';
+  direction: 'row' | 'column';
+  ratio?: number;
+  children: [EditorLayoutNode, EditorLayoutNode];
+}
+
+export type EditorLayoutNode = EditorLeafNode | EditorSplitNode;
+
+export interface WorkbenchState {
+  workbenchId: string;
+  editors: EditorState[];
+  layoutMode: 'freeform';
+  activeEditorId: string | null;
+  activeEditorPaneId?: string | null;
+  editorLayout?: EditorLayoutNode | null;
+  panels?: PanelState[];
+  activePanelId?: string | null;
+  activePaneId?: string | null;
+  version: number;
 }
 
 export type PanelType =
@@ -82,15 +154,10 @@ export interface PanelInstance {
 export interface User {
   id: string;
   username: string;
+  email?: string | null;
 }
 
 export type WorkspaceStatus = 'active' | 'review' | 'idle' | 'archived';
-
-export type AIActionType =
-  | 'organize'
-  | 'summarize'
-  | 'create-workbench'
-  | 'suggest-next-task';
 
 export type WorkbenchType = 'study' | 'notes' | 'lab' | 'review';
 
@@ -100,12 +167,10 @@ export interface WorkspaceOverview {
   description?: string;
   major: string;
   updatedAt: string;
-  status: WorkspaceStatus;
   workbenchCount: number;
   fileCount: number;
   recentActivity?: string;
   recentLearningState?: string;
-  suggestedNextStep?: string;
 }
 
 export interface FileNode {
@@ -117,12 +182,10 @@ export interface FileNode {
 
 export interface WorkbenchItem {
   id: string;
-  name: string;
-  type: WorkbenchType;
+  title: string;
   updatedAt: string;
-  linkedResourceCount: number;
   panelCount: number;
-  recentActivity?: string;
+  description?: string;
 }
 
 export interface ContinueLearningItem {

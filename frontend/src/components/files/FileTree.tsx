@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Tree, NodeApi } from 'react-arborist';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Tree, NodeApi, TreeApi } from 'react-arborist';
+import { useDragDropManager } from 'react-dnd';
+import { ChevronRight, FolderTree, Tag, Undo2 } from 'lucide-react';
 import { FileSystemObject } from '../../types';
 import { useFileTreeStore } from '../../store/fileTreeStore';
 import { useFileCommands } from '../../hooks/useFileCommands';
@@ -7,29 +9,170 @@ import { FileTreeNode } from './FileTreeNode';
 import { FileContextMenu } from './FileContextMenu';
 import { fileSystemApi } from '../../services/fileSystemApi';
 
+type ExplorerView = 'path' | 'tags';
+
+type FileTreeNodeData = FileSystemObject & {
+  syntheticKind?: 'tag-group';
+  syntheticLabel?: string;
+  children?: FileTreeNodeData[];
+};
+
 interface FileTreeProps {
   workspaceId: string;
   onFileSelect?: (file: FileSystemObject) => void;
   onFileDoubleClick?: (file: FileSystemObject) => void;
+  collapseSignal?: number;
+  enableWorkbenchDrag?: boolean;
+  dndManager?: ReturnType<typeof useDragDropManager>;
+  initialPath?: string;
+  currentPath?: string;
+  onCurrentPathChange?: (path: string) => void;
 }
 
-export const FileTreeComponent: React.FC<FileTreeProps> = ({ 
+const normalizePath = (value?: string) => {
+  if (!value || value === '/') return '/';
+  return `/${value.replace(/^\/+|\/+$/g, '')}`;
+};
+
+const getParentPath = (path: string) => {
+  if (path === '/') return null;
+  const normalized = normalizePath(path);
+  const index = normalized.lastIndexOf('/');
+  if (index <= 0) return '/';
+  return normalized.slice(0, index);
+};
+
+const buildPathTree = (files: FileSystemObject[], currentPath: string): FileTreeNodeData[] => {
+  const currentFolder =
+    currentPath === '/'
+      ? null
+      : files.find((file) => file.nodeType === 'folder' && file.path === currentPath) || null;
+
+  const visibleItems = files.filter((file) => {
+    if (currentPath === '/') return true;
+    return file.path.startsWith(`${currentPath}/`);
+  });
+
+  const nodeMap = new Map<string, FileTreeNodeData>();
+  visibleItems.forEach((item) => {
+    nodeMap.set(item.id, { ...item, children: [] });
+  });
+
+  const roots: FileTreeNodeData[] = [];
+  visibleItems.forEach((item) => {
+    const parent = item.parentId ? nodeMap.get(item.parentId) : undefined;
+    if (parent) {
+      parent.children!.push(nodeMap.get(item.id)!);
+      return;
+    }
+
+    if (currentFolder) {
+      if (item.parentId === currentFolder.id) {
+        roots.push(nodeMap.get(item.id)!);
+      }
+      return;
+    }
+
+    if (!item.parentId) {
+      roots.push(nodeMap.get(item.id)!);
+    }
+  });
+
+  const sortNodes = (nodes: FileTreeNodeData[]) => {
+    nodes.sort((a, b) => {
+      if (a.nodeType === 'folder' && b.nodeType !== 'folder') return -1;
+      if (a.nodeType !== 'folder' && b.nodeType === 'folder') return 1;
+      return a.name.localeCompare(b.name);
+    });
+    nodes.forEach((node) => sortNodes(node.children || []));
+  };
+
+  sortNodes(roots);
+  return roots;
+};
+
+const buildTagTree = (files: FileSystemObject[], currentPath: string): FileTreeNodeData[] => {
+  const scopedFiles = files.filter((file) => {
+    if (file.nodeType !== 'file') return false;
+    if (currentPath === '/') return true;
+    return file.path.startsWith(`${currentPath}/`);
+  });
+
+  const groups = new Map<string, FileSystemObject[]>();
+  scopedFiles.forEach((file) => {
+    const tags = file.tags?.length ? file.tags : ['Untagged'];
+    tags.forEach((tag) => {
+      const key = tag.trim() || 'Untagged';
+      groups.set(key, [...(groups.get(key) || []), file]);
+    });
+  });
+
+  return Array.from(groups.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([tag, items]) => ({
+      id: `tag:${tag}`,
+      name: tag,
+      nodeType: 'folder',
+      path: `#tag/${tag}`,
+      createdAt: '',
+      updatedAt: '',
+      workspaceId: scopedFiles[0]?.workspaceId || '',
+      syntheticKind: 'tag-group',
+      syntheticLabel: tag,
+      children: items
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((item) => ({ ...item, children: [] }))
+    }));
+};
+
+export const FileTreeComponent: React.FC<FileTreeProps> = ({
   workspaceId,
   onFileSelect,
-  onFileDoubleClick
+  onFileDoubleClick,
+  collapseSignal,
+  enableWorkbenchDrag = false,
+  dndManager,
+  initialPath,
+  currentPath: controlledCurrentPath,
+  onCurrentPathChange
 }) => {
-  const { files, loading, error, selectedNodeId, expandedNodeIds, setSelectedNodeId, toggleExpanded } = useFileTreeStore();
+  const { files, loading, error, setSelectedNodeId, toggleExpanded } = useFileTreeStore();
   const commands = useFileCommands(workspaceId);
   const containerRef = useRef<HTMLDivElement>(null);
-  
+  const treeRef = useRef<TreeApi<FileTreeNodeData> | undefined>(undefined);
+
+  const [explorerView, setExplorerView] = useState<ExplorerView>('path');
+  const [internalCurrentPath, setInternalCurrentPath] = useState(() => normalizePath(initialPath));
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    node: NodeApi<FileSystemObject>;
+    node: NodeApi<FileTreeNodeData>;
   } | null>(null);
-
-  // Auto resize tree
   const [dimensions, setDimensions] = useState({ width: 250, height: 500 });
+
+  const currentPath = normalizePath(controlledCurrentPath ?? internalCurrentPath);
+  const setCurrentPath = (path: string) => {
+    const nextPath = normalizePath(path);
+    if (controlledCurrentPath === undefined) {
+      setInternalCurrentPath(nextPath);
+    }
+    onCurrentPathChange?.(nextPath);
+  };
+
+  useEffect(() => {
+    if (controlledCurrentPath === undefined) {
+      setInternalCurrentPath(normalizePath(initialPath));
+    }
+  }, [controlledCurrentPath, initialPath]);
+
+  useEffect(() => {
+    if (currentPath === '/') return;
+    const exists = files.some((file) => file.nodeType === 'folder' && file.path === currentPath);
+    if (!exists) {
+      setCurrentPath('/');
+    }
+  }, [currentPath, files]);
 
   useEffect(() => {
     const observer = new ResizeObserver((entries) => {
@@ -48,159 +191,343 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
     return () => observer.disconnect();
   }, []);
 
-  const handleMove = async ({ dragIds, parentId, index }: any) => {
-    if (dragIds.length > 0) {
-      const id = dragIds[0];
-      await commands.moveNode(id, parentId);
+  useEffect(() => {
+    if (collapseSignal !== undefined) {
+      treeRef.current?.closeAll();
+    }
+  }, [collapseSignal]);
+
+  const currentFolder =
+    currentPath === '/'
+      ? null
+      : files.find((file) => file.nodeType === 'folder' && file.path === currentPath) || null;
+
+  const breadcrumbPaths = useMemo(() => {
+    const segments = currentPath === '/' ? [] : currentPath.replace(/^\/+/, '').split('/');
+    return segments.map((segment, index) => ({
+      label: segment,
+      path: `/${segments.slice(0, index + 1).join('/')}`
+    }));
+  }, [currentPath]);
+
+  const treeData = useMemo(
+    () => (explorerView === 'path' ? buildPathTree(files, currentPath) : buildTagTree(files, currentPath)),
+    [currentPath, explorerView, files]
+  );
+
+  const canDropOnParent = (
+    parentNode: NodeApi<FileTreeNodeData> | null,
+    dragNodes: NodeApi<FileTreeNodeData>[]
+  ) => {
+    if (explorerView === 'tags') return false;
+    if (!parentNode) return true;
+    if (parentNode.data.syntheticKind) return false;
+    if (parentNode.data.nodeType !== 'folder') return false;
+
+    return dragNodes.every((dragNode) => {
+      if (dragNode.data.syntheticKind) return false;
+      if (dragNode.id === parentNode.id) return false;
+      if (dragNode.data.nodeType === 'folder' && dragNode.isAncestorOf(parentNode)) return false;
+      return true;
+    });
+  };
+
+  const handleMove = async ({ dragIds, parentId }: any) => {
+    if (explorerView === 'tags' || dragIds.length === 0) return;
+    try {
+      await commands.moveNode(dragIds[0], parentId);
+    } catch (moveError: any) {
+      alert(moveError?.response?.data?.error || moveError?.message || 'Failed to move file');
     }
   };
 
   const handleRename = async ({ id, name }: any) => {
-    await commands.renameNode(id, name);
+    if (explorerView === 'tags') return;
+    try {
+      await commands.renameNode(id, name);
+    } catch (renameError: any) {
+      alert(renameError?.response?.data?.error || renameError?.message || 'Failed to rename file');
+    }
   };
 
-  const onContextMenu = (e: React.MouseEvent, node: NodeApi<FileSystemObject>) => {
+  const onContextMenu = (e: React.MouseEvent, node: NodeApi<FileTreeNodeData>) => {
+    if (node.data.syntheticKind) return;
     setContextMenu({ x: e.clientX, y: e.clientY, node });
   };
 
-  const handleCreateFile = async (parentId: string, parentPath: string) => {
+  const getDefaultTarget = () => ({
+    parentId: currentFolder?.id,
+    parentPath: currentFolder?.path
+  });
+
+  const handleCreateFile = async (parentId?: string, parentPath?: string) => {
     const name = prompt('Enter file name (e.g., new-file.md):');
-    if (name) {
-      await commands.createFile(name, parentId, parentPath);
+    if (!name) return;
+
+    try {
+      const target = parentId || parentPath ? { parentId, parentPath } : getDefaultTarget();
+      await commands.createFile(name, target.parentId || undefined, target.parentPath || undefined);
+    } catch (createError: any) {
+      alert(createError?.response?.data?.error || createError?.message || 'Failed to create file');
     }
   };
 
-  const handleCreateFolder = async (parentId: string, parentPath: string) => {
+  const handleCreateNote = async (parentId?: string, parentPath?: string) => {
+    const name = prompt('Enter note name (e.g., meeting-notes.md):', 'untitled-note.md');
+    if (!name) return;
+
+    try {
+      const target = parentId || parentPath ? { parentId, parentPath } : getDefaultTarget();
+      const normalizedName = /\.[^./]+$/.test(name) ? name : `${name}.md`;
+      await commands.createFile(normalizedName, target.parentId || undefined, target.parentPath || undefined);
+    } catch (createError: any) {
+      alert(createError?.response?.data?.error || createError?.message || 'Failed to create note');
+    }
+  };
+
+  const handleCreateFolder = async (parentId?: string, parentPath?: string) => {
     const name = prompt('Enter folder name:');
-    if (name) {
-      await commands.createFolder(name, parentId, parentPath);
+    if (!name) return;
+
+    try {
+      const target = parentId || parentPath ? { parentId, parentPath } : getDefaultTarget();
+      await commands.createFolder(name, target.parentId || undefined, target.parentPath || undefined);
+    } catch (createError: any) {
+      alert(createError?.response?.data?.error || createError?.message || 'Failed to create folder');
     }
   };
 
-  const handleUpload = async (parentId: string, parentPath: string) => {
+  const handleUpload = async (parentId?: string, parentPath?: string) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
     input.onchange = async (e: any) => {
-      const files = Array.from(e.target.files as FileList);
-      if (files.length > 0) {
-        await commands.uploadFiles(files, parentId, parentPath);
+      const uploadFiles = Array.from(e.target.files as FileList);
+      if (uploadFiles.length === 0) return;
+
+      try {
+        const target = parentId || parentPath ? { parentId, parentPath } : getDefaultTarget();
+        await commands.uploadFiles(
+          uploadFiles,
+          target.parentId || undefined,
+          target.parentPath || undefined
+        );
+      } catch (uploadError: any) {
+        alert(uploadError?.response?.data?.error || uploadError?.message || 'Failed to upload files');
       }
     };
     input.click();
   };
 
+  const handleMoveTo = async (id: string) => {
+    const targetPath = prompt('Move to folder path (use / for root):', '/');
+    if (targetPath == null) return;
+
+    const normalizedTargetPath = normalizePath(targetPath);
+    const targetParent =
+      normalizedTargetPath === '/'
+        ? null
+        : files.find((file) => file.nodeType === 'folder' && file.path === normalizedTargetPath);
+
+    if (normalizedTargetPath !== '/' && !targetParent) {
+      alert(`Folder not found: ${normalizedTargetPath}`);
+      return;
+    }
+
+    try {
+      await commands.moveNode(id, targetParent?.id || undefined);
+    } catch (moveError: any) {
+      alert(moveError?.response?.data?.error || moveError?.message || 'Failed to move file');
+    }
+  };
+
+  const handleEditTags = async (id: string) => {
+    const target = files.find((file) => file.id === id);
+    if (!target) return;
+
+    const nextValue = prompt(
+      'Edit tags, separated by commas:',
+      (target.tags || []).join(', ')
+    );
+    if (nextValue == null) return;
+
+    const nextTags = nextValue
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+
+    try {
+      await commands.updateTags(id, nextTags);
+    } catch (tagError: any) {
+      alert(tagError?.response?.data?.error || tagError?.message || 'Failed to update tags');
+    }
+  };
+
   if (loading && files.length === 0) {
-    return <div className="p-4 text-sm text-gray-500">Loading files...</div>;
+    return <div className="p-4 text-sm text-[var(--wb-text-muted)]">Loading files...</div>;
   }
 
   if (error) {
-    return <div className="p-4 text-sm text-red-500">{error}</div>;
+    return <div className="p-4 text-sm text-red-300">{error}</div>;
   }
-
-  if (files.length === 0) {
-    return (
-      <div className="p-4 text-sm text-gray-500 flex flex-col gap-2">
-        <p>No files yet.</p>
-        <button 
-          onClick={() => handleCreateFolder('', '')}
-          className="text-blue-500 hover:underline text-left"
-        >
-          Create a folder to start
-        </button>
-      </div>
-    );
-  }
-
-  // Convert flat array to tree format expected by react-arborist
-  // Actually, react-arborist can take flat data if id/parentId are set? No, it prefers nested
-  // But we have parentId in our types, let's nest it
-  const buildTree = (items: FileSystemObject[]) => {
-    const map = new Map<string, any>();
-    const roots: any[] = [];
-
-    items.forEach(item => {
-      map.set(item.id, { ...item, children: [] });
-    });
-
-    items.forEach(item => {
-      if (item.parentId && map.has(item.parentId)) {
-        map.get(item.parentId).children.push(map.get(item.id));
-      } else {
-        roots.push(map.get(item.id));
-      }
-    });
-
-    // Sort folders first, then alphabetically
-    const sortNodes = (nodes: any[]) => {
-      nodes.sort((a, b) => {
-        if (a.nodeType === 'folder' && b.nodeType !== 'folder') return -1;
-        if (a.nodeType !== 'folder' && b.nodeType === 'folder') return 1;
-        return a.name.localeCompare(b.name);
-      });
-      nodes.forEach(node => {
-        if (node.children.length > 0) sortNodes(node.children);
-      });
-    };
-    sortNodes(roots);
-
-    return roots;
-  };
-
-  const treeData = buildTree(files);
 
   return (
-    <div ref={containerRef} className="flex-1 w-full h-full overflow-hidden">
-      <Tree
-        data={treeData}
-        width={dimensions.width}
-        height={dimensions.height}
-        rowHeight={28}
-        onMove={handleMove}
-        onRename={handleRename}
-        onSelect={(nodes) => {
-          if (nodes.length > 0) {
-            const node = nodes[0];
-            setSelectedNodeId(node.id);
-            if (onFileSelect) onFileSelect(node.data);
-          } else {
-            setSelectedNodeId(null);
-          }
-        }}
-        onToggle={(id) => toggleExpanded(id)}
-        // The tree expects a boolean map for open states if controlled
-        // Let's keep it simple and just rely on the component's internal state + initialOpenState if needed
-      >
-        {(nodeProps) => (
-          <FileTreeNode 
-            {...nodeProps} 
-            onContextMenu={onContextMenu}
-            onDoubleClick={(node) => {
-              if (onFileDoubleClick) onFileDoubleClick(node.data);
+    <div ref={containerRef} className="flex h-full w-full flex-1 flex-col overflow-hidden bg-[var(--wb-sidebar)]">
+      <div className="border-b border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] px-2 py-2">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1 overflow-x-auto text-xs text-[var(--wb-text-muted)]">
+            <button
+              onClick={() => setCurrentPath('/')}
+              className={`rounded px-1.5 py-0.5 hover:bg-white/5 ${
+                currentPath === '/' ? 'text-[var(--wb-text)]' : ''
+              }`}
+            >
+              Workspace
+            </button>
+            {breadcrumbPaths.map((segment) => (
+              <React.Fragment key={segment.path}>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                <button
+                  onClick={() => setCurrentPath(segment.path)}
+                  className={`rounded px-1.5 py-0.5 hover:bg-white/5 ${
+                    currentPath === segment.path ? 'text-[var(--wb-text)]' : ''
+                  }`}
+                >
+                  {segment.label}
+                </button>
+              </React.Fragment>
+            ))}
+          </div>
+          <button
+            onClick={() => {
+              const parent = getParentPath(currentPath);
+              if (parent) setCurrentPath(parent);
             }}
-          />
-        )}
-      </Tree>
+            disabled={currentPath === '/'}
+            className="inline-flex h-7 items-center gap-1 rounded px-2 text-xs text-[var(--wb-text-muted)] hover:bg-white/5 hover:text-[var(--wb-text)] disabled:opacity-40"
+            title="Go to parent folder"
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+            Up
+          </button>
+        </div>
 
-      {contextMenu && (
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setExplorerView('path')}
+            className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${
+              explorerView === 'path'
+                ? 'bg-[var(--wb-accent-soft)] text-[var(--wb-text)]'
+                : 'text-[var(--wb-text-muted)] hover:bg-white/5'
+            }`}
+          >
+            <FolderTree className="h-3.5 w-3.5" />
+            Path
+          </button>
+          <button
+            onClick={() => setExplorerView('tags')}
+            className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs ${
+              explorerView === 'tags'
+                ? 'bg-[var(--wb-accent-soft)] text-[var(--wb-text)]'
+                : 'text-[var(--wb-text-muted)] hover:bg-white/5'
+            }`}
+          >
+            <Tag className="h-3.5 w-3.5" />
+            Tags
+          </button>
+        </div>
+      </div>
+
+      {treeData.length === 0 ? (
+        <div className="flex flex-col gap-2 p-4 text-sm text-[var(--wb-text-muted)]">
+          <p>{explorerView === 'path' ? 'No files in this folder yet.' : 'No tagged files in this scope yet.'}</p>
+          {explorerView === 'path' && (
+            <button
+              onClick={() => void handleCreateFolder()}
+              className="text-left text-[var(--wb-accent)] hover:underline"
+            >
+              Create a folder to start
+            </button>
+          )}
+        </div>
+      ) : (
+        <Tree
+          ref={treeRef}
+          data={treeData}
+          width={dimensions.width}
+          height={Math.max(0, dimensions.height - 62)}
+          rowHeight={30}
+          indent={18}
+          onMove={handleMove}
+          onRename={handleRename}
+          disableDrag={(node: any) =>
+            explorerView === 'tags' || Boolean(node?.data?.syntheticKind ?? node?.syntheticKind)
+          }
+          disableDrop={({ parentNode, dragNodes }) => !canDropOnParent(parentNode, dragNodes)}
+          dndRootElement={containerRef.current}
+          dndManager={enableWorkbenchDrag && explorerView === 'path' ? dndManager : undefined}
+          className="h-full bg-transparent"
+          onSelect={(nodes) => {
+            if (nodes.length === 0) {
+              setSelectedNodeId(null);
+              return;
+            }
+
+            const node = nodes[0];
+            if (node.data.syntheticKind) {
+              setSelectedNodeId(null);
+              return;
+            }
+
+            setSelectedNodeId(node.id);
+            if (node.data.nodeType === 'file') {
+              onFileSelect?.(node.data);
+            }
+          }}
+          onToggle={(id) => toggleExpanded(id)}
+        >
+          {(props) => (
+            <FileTreeNode
+              {...props}
+              onContextMenu={onContextMenu}
+              onDoubleClick={(node: any) => {
+                if (node.data.syntheticKind) return;
+                if (node.data.nodeType === 'folder' && explorerView === 'path') {
+                  setCurrentPath(node.data.path);
+                  return;
+                }
+                if (node.data.nodeType === 'file') {
+                  onFileDoubleClick?.(node.data);
+                }
+              }}
+              enableWorkbenchDrag={enableWorkbenchDrag}
+            />
+          )}
+        </Tree>
+      )}
+
+      {contextMenu && !contextMenu.node.data.syntheticKind && (
         <FileContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
           node={contextMenu.node}
           onClose={() => setContextMenu(null)}
-          onRename={(id) => contextMenu.node.edit()}
-          onDelete={(id) => {
-            if (confirm(`Are you sure you want to delete ${contextMenu.node.data.name}?`)) {
-              commands.deleteNode(id);
+          onRename={(id) => treeRef.current?.get(id)?.edit()}
+          onDelete={async (id) => {
+            if (confirm('Delete this item?')) {
+              await commands.deleteNode(id);
             }
           }}
-          onCopy={(id) => commands.moveNode(id)} // using moveNode as placeholder, should be copyNode which takes targetParentId
+          onCopy={(id, targetParentId) => commands.copyNode(id, targetParentId)}
+          onMove={handleMoveTo}
+          onEditTags={handleEditTags}
           onDownload={(id) => {
             window.open(fileSystemApi.downloadUrl(workspaceId, id), '_blank');
           }}
-          onCreateFile={handleCreateFile}
-          onCreateFolder={handleCreateFolder}
-          onUpload={handleUpload}
+          onCreateFile={(parentId, parentPath) => void handleCreateFile(parentId, parentPath)}
+          onCreateNote={(parentId, parentPath) => void handleCreateNote(parentId, parentPath)}
+          onCreateFolder={(parentId, parentPath) => void handleCreateFolder(parentId, parentPath)}
+          onUpload={(parentId, parentPath) => void handleUpload(parentId, parentPath)}
         />
       )}
     </div>

@@ -1,0 +1,1 @@
+{"version":3,"file":"type.d.ts","sourceRoot":"","sources":["../../../src/store/addon/type.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,WAAW,CAAC;AAE3C,qBAAa,sBAAuB,YAAW,SAAS;IACtD,SAAS,EAAG,SAAS,CAAC,WAAW,CAAC,CAAC;IAEnC,iBAAiB,EAAG,SAAS,CAAC,mBAAmB,CAAC,CAAC;CACpD"}

@@ -1,0 +1,1 @@
+{"version":3,"file":"consts.js","sourceRoot":"","sources":["../../../../../src/rich-text/inline/presets/nodes/consts.ts"],"names":[],"mappings":"AAAA,MAAM,CAAC,MAAM,cAAc,GAAG,GAAG,CAAC;AAClC,MAAM,CAAC,MAAM,gBAAgB,GAAG,UAAU,CAAC","sourcesContent":["export const REFERENCE_NODE = ' ';\nexport const DEFAULT_DOC_NAME = 'Untitled';\n"]}

@@ -1,0 +1,19 @@
+export declare const styles: import("lit").CSSResult;
+export declare const LinkedDocDeletedIcon: import("lit-html").TemplateResult<1>;
+export declare const LightLinkedPageEmptySmallBanner: import("lit-html").TemplateResult<1>;
+export declare const DarkLinkedPageEmptySmallBanner: import("lit-html").TemplateResult<1>;
+export declare const LightLinkedPageEmptyLargeBanner: import("lit-html").TemplateResult<1>;
+export declare const DarkLinkedPageEmptyLargeBanner: import("lit-html").TemplateResult<1>;
+export declare const LightLinkedPageDeletedSmallBanner: import("lit-html").TemplateResult<1>;
+export declare const DarkLinkedPageDeletedSmallBanner: import("lit-html").TemplateResult<1>;
+export declare const LightLinkedPageDeletedLargeBanner: import("lit-html").TemplateResult<1>;
+export declare const DarkLinkedPageDeletedLargeBanner: import("lit-html").TemplateResult<1>;
+export declare const LightLinkedEdgelessEmptySmallBanner: import("lit-html").TemplateResult<1>;
+export declare const DarkLinkedEdgelessEmptySmallBanner: import("lit-html").TemplateResult<1>;
+export declare const LightLinkedEdgelessEmptyLargeBanner: import("lit-html").TemplateResult<1>;
+export declare const DarkLinkedEdgelessEmptyLargeBanner: import("lit-html").TemplateResult<1>;
+export declare const LightLinkedEdgelessDeletedSmallBanner: import("lit-html").TemplateResult<1>;
+export declare const DarkLinkedEdgelessDeletedSmallBanner: import("lit-html").TemplateResult<1>;
+export declare const LightLinkedEdgelessDeletedLargeBanner: import("lit-html").TemplateResult<1>;
+export declare const DarkLinkedEdgelessDeletedLargeBanner: import("lit-html").TemplateResult<1>;
+//# sourceMappingURL=styles.d.ts.map

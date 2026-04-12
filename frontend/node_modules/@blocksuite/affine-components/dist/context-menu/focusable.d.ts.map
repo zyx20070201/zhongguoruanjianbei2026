@@ -1,0 +1,1 @@
+{"version":3,"file":"focusable.d.ts","sourceRoot":"","sources":["../../src/context-menu/focusable.ts"],"names":[],"mappings":"AAEA,OAAO,EAAE,QAAQ,EAAE,MAAM,WAAW,CAAC;AAErC,8BAAsB,aAAc,SAAQ,QAAQ;IAClD,UAAU,yDAA4D;IAE7D,iBAAiB;IAKjB,KAAK;IAId,QAAQ,CAAC,YAAY,IAAI,IAAI;CAC9B"}

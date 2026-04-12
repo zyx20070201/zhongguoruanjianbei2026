@@ -1,0 +1,1 @@
+{"version":3,"file":"note.js","sourceRoot":"","sources":["../../src/consts/note.ts"],"names":[],"mappings":"AAAA,MAAM,CAAC,MAAM,aAAa,GACxB,qFAAqF,CAAC","sourcesContent":["export const NOTE_SELECTOR =\n  'affine-note, affine-edgeless-note .edgeless-note-page-content, affine-edgeless-text';\n"]}

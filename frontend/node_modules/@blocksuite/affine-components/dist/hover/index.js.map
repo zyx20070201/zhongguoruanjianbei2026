@@ -1,0 +1,1 @@
+{"version":3,"file":"index.js","sourceRoot":"","sources":["../../src/hover/index.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,eAAe,EAAE,MAAM,iBAAiB,CAAC;AAElD,OAAO,EAAE,SAAS,EAAE,MAAM,iBAAiB,CAAC","sourcesContent":["export { HoverController } from './controller.js';\nexport type * from './types.js';\nexport { whenHover } from './when-hover.js';\n"]}

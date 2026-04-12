@@ -1,0 +1,1 @@
+{"version":3,"file":"index.js","sourceRoot":"","sources":["../../../src/store/addon/index.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,IAAI,EAAE,MAAM,WAAW,CAAC;AACjC,OAAO,EAAE,sBAAsB,EAAE,MAAM,WAAW,CAAC","sourcesContent":["export { test } from './test.js';\nexport { DocCollectionAddonType } from './type.js';\n"]}

@@ -1,0 +1,1 @@
+{"version":3,"file":"event.js","sourceRoot":"","sources":["../../../src/core/utils/event.ts"],"names":[],"mappings":"AAAA,MAAM,UAAU,eAAe,CAAC,KAAY;IAC1C,KAAK,CAAC,eAAe,EAAE,CAAC;AAC1B,CAAC","sourcesContent":["export function stopPropagation(event: Event) {\n  event.stopPropagation();\n}\n"]}

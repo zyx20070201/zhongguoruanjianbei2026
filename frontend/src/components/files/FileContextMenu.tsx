@@ -7,10 +7,12 @@ import {
   Edit2, 
   Trash2, 
   Copy, 
+  Move,
   Download,
   Plus,
   FolderPlus,
-  Upload
+  Upload,
+  FileText
 } from 'lucide-react';
 
 interface FileContextMenuProps {
@@ -20,9 +22,12 @@ interface FileContextMenuProps {
   onClose: () => void;
   onRename: (id: string) => void;
   onDelete: (id: string) => void;
-  onCopy: (id: string) => void;
+  onCopy: (id: string, targetParentId?: string | null) => void;
+  onMove: (id: string) => void;
+  onEditTags?: (id: string) => void;
   onDownload: (id: string) => void;
   onCreateFile?: (parentId: string, parentPath: string) => void;
+  onCreateNote?: (parentId: string, parentPath: string) => void;
   onCreateFolder?: (parentId: string, parentPath: string) => void;
   onUpload?: (parentId: string, parentPath: string) => void;
 }
@@ -35,8 +40,11 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
   onRename,
   onDelete,
   onCopy,
+  onMove,
+  onEditTags,
   onDownload,
   onCreateFile,
+  onCreateNote,
   onCreateFolder,
   onUpload
 }) => {
@@ -50,55 +58,73 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
         onContextMenu={(e) => { e.preventDefault(); onClose(); }}
       />
       <div 
-        className="fixed z-50 bg-white border border-gray-200 rounded-md shadow-lg py-1 min-w-[160px] text-sm"
+        className="fixed z-50 min-w-[160px] rounded-md border border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] py-1 text-sm text-[var(--wb-text)] shadow-lg"
         style={{ left: x, top: y }}
       >
         {isFolder && (
           <>
             <button 
-              className="w-full text-left px-3 py-1.5 hover:bg-blue-50 flex items-center gap-2"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
               onClick={() => { onCreateFile?.(node.id, node.data.path); onClose(); }}
             >
               <Plus size={14} /> New File
             </button>
             <button 
-              className="w-full text-left px-3 py-1.5 hover:bg-blue-50 flex items-center gap-2"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
+              onClick={() => { onCreateNote?.(node.id, node.data.path); onClose(); }}
+            >
+              <FileText size={14} /> New Note
+            </button>
+            <button 
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
               onClick={() => { onCreateFolder?.(node.id, node.data.path); onClose(); }}
             >
               <FolderPlus size={14} /> New Folder
             </button>
             <button 
-              className="w-full text-left px-3 py-1.5 hover:bg-blue-50 flex items-center gap-2"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
               onClick={() => { onUpload?.(node.id, node.data.path); onClose(); }}
             >
               <Upload size={14} /> Upload
             </button>
-            <div className="h-px bg-gray-100 my-1" />
+            <div className="my-1 h-px bg-[var(--wb-border)]" />
           </>
         )}
         <button 
-          className="w-full text-left px-3 py-1.5 hover:bg-blue-50 flex items-center gap-2"
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
           onClick={() => { onRename(node.id); onClose(); }}
         >
           <Edit2 size={14} /> Rename
         </button>
         <button 
-          className="w-full text-left px-3 py-1.5 hover:bg-blue-50 flex items-center gap-2"
-          onClick={() => { onCopy(node.id); onClose(); }}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
+          onClick={() => { onCopy(node.id, node.data.parentId || null); onClose(); }}
         >
           <Copy size={14} /> Duplicate
         </button>
+        <button 
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
+          onClick={() => { onMove(node.id); onClose(); }}
+        >
+          <Move size={14} /> Move to...
+        </button>
+        <button
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
+          onClick={() => { onEditTags?.(node.id); onClose(); }}
+        >
+          <MoreVertical size={14} /> Edit Tags
+        </button>
         {!isFolder && (
           <button 
-            className="w-full text-left px-3 py-1.5 hover:bg-blue-50 flex items-center gap-2"
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
             onClick={() => { onDownload(node.id); onClose(); }}
           >
             <Download size={14} /> Download
           </button>
         )}
-        <div className="h-px bg-gray-100 my-1" />
+        <div className="my-1 h-px bg-[var(--wb-border)]" />
         <button 
-          className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2"
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-red-300 hover:bg-red-500/10"
           onClick={() => { onDelete(node.id); onClose(); }}
         >
           <Trash2 size={14} /> Delete

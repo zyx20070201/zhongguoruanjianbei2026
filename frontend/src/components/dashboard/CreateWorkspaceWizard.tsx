@@ -7,20 +7,49 @@ interface CreateWorkspaceWizardProps {
   onSubmit: (data: CreateWorkspaceFormData) => void;
 }
 
+const initialFormData: CreateWorkspaceFormData = {
+  courseName: '',
+  description: '',
+  major: '',
+  resources: [],
+  initMode: 'empty'
+};
+
 export default function CreateWorkspaceWizard({ isOpen, onClose, onSubmit }: CreateWorkspaceWizardProps) {
   const [step, setStep] = useState(1);
-  const [formData, setFormData] = useState<CreateWorkspaceFormData>({
-    courseName: '',
-    description: '',
-    major: '',
-    resources: [],
-    initMode: 'empty'
-  });
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [formData, setFormData] = useState<CreateWorkspaceFormData>(initialFormData);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      setStep(1);
+      setIsDragging(false);
+      setFormData(initialFormData);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleNext = () => setStep(s => Math.min(s + 1, 3));
   const handlePrev = () => setStep(s => Math.max(s - 1, 1));
+
+  const addResources = (files: FileList | File[]) => {
+    const nextFiles = Array.from(files);
+    if (nextFiles.length === 0) return;
+
+    setFormData(current => ({
+      ...current,
+      resources: [...current.resources, ...nextFiles]
+    }));
+  };
+
+  const removeResource = (index: number) => {
+    setFormData(current => ({
+      ...current,
+      resources: current.resources.filter((_, fileIndex) => fileIndex !== index)
+    }));
+  };
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,7 +92,7 @@ export default function CreateWorkspaceWizard({ isOpen, onClose, onSubmit }: Cre
           <div className="flex justify-between mt-2 text-xs font-medium text-gray-500 px-1">
             <span>Course Basics</span>
             <span>Import Resources</span>
-            <span>AI Init</span>
+            <span>Review</span>
           </div>
         </div>
 
@@ -114,67 +143,114 @@ export default function CreateWorkspaceWizard({ isOpen, onClose, onSubmit }: Cre
                   Upload course videos, slides, textbooks, lecture notes, exercises, code samples, etc. to jumpstart your workspace.
                 </p>
               </div>
+
+              {formData.resources.length > 0 && (
+                <div className="border border-blue-200 bg-blue-50/40 rounded-lg overflow-hidden">
+                  <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-blue-100">
+                    <p className="text-sm font-semibold text-blue-900">
+                      {formData.resources.length} files selected
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setFormData(current => ({ ...current, resources: [] }))}
+                      className="text-xs text-blue-700 hover:text-blue-900 px-2 py-1 rounded"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <div className="max-h-36 overflow-y-auto divide-y divide-blue-100/70">
+                    {formData.resources.map((file, index) => (
+                      <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-800 truncate">{file.name}</p>
+                          <p className="text-xs text-gray-500">{Math.ceil(file.size / 1024)} KB</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeResource(index)}
+                          className="text-gray-500 hover:text-red-600 px-2 py-1 rounded"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               
-              <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:bg-gray-50 transition-colors cursor-pointer group">
-                <div className="w-16 h-16 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
+              <div
+                className={`border-2 border-dashed rounded-xl text-center transition-colors cursor-pointer group ${
+                  isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:bg-gray-50'
+                } ${formData.resources.length > 0 ? 'p-5' : 'p-8'}`}
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  addResources(e.dataTransfer.files);
+                }}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files) addResources(e.target.files);
+                    e.target.value = '';
+                  }}
+                />
+                <div className={`${formData.resources.length > 0 ? 'w-12 h-12 mb-3' : 'w-16 h-16 mb-4'} bg-blue-50 text-blue-500 rounded-full flex items-center justify-center mx-auto group-hover:scale-110 transition-transform`}>
                   <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
                 </div>
-                <h3 className="text-lg font-medium text-gray-900 mb-1">Click or drag files to upload</h3>
-                <p className="text-sm text-gray-500 mb-6">Support PDF, MP4, PPTX, DOCX, ZIP, etc.</p>
+                <h3 className="text-lg font-medium text-gray-900 mb-1">
+                  {formData.resources.length > 0 ? 'Click or drag to add more files' : 'Click or drag files to upload'}
+                </h3>
+                <p className={`text-sm text-gray-500 ${formData.resources.length > 0 ? 'mb-0' : 'mb-6'}`}>
+                  Support PDF, MP4, PPTX, DOCX, ZIP, etc.
+                </p>
                 
+                {formData.resources.length === 0 && (
                 <div className="flex flex-wrap justify-center gap-2">
                   <span className="px-3 py-1 bg-gray-100 text-gray-600 text-xs rounded-full border border-gray-200">Slides</span>
                   <span className="px-3 py-1 bg-gray-100 text-gray-600 text-xs rounded-full border border-gray-200">Textbook</span>
                   <span className="px-3 py-1 bg-gray-100 text-gray-600 text-xs rounded-full border border-gray-200">Notes</span>
                   <span className="px-3 py-1 bg-gray-100 text-gray-600 text-xs rounded-full border border-gray-200">Videos</span>
                 </div>
+                )}
               </div>
             </div>
 
-            {/* Step 3: Initialize Workspace with AI */}
+            {/* Step 3: Review */}
             <div className={step === 3 ? 'block space-y-4 animate-in slide-in-from-right-4' : 'hidden'}>
-              <div className="bg-purple-50 border border-purple-100 rounded-lg p-4 mb-6 flex items-start gap-3">
-                <span className="text-purple-600 mt-0.5">✨</span>
-                <div>
-                  <h4 className="font-medium text-purple-900 mb-1">Let AI Organize Your Workspace</h4>
-                  <p className="text-sm text-purple-800/80">
-                    AI can suggest an initial folder structure and create your first Workbench based on the course type.
-                  </p>
-                </div>
+              <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 mb-4">
+                <h4 className="font-medium text-blue-900 mb-1">Ready to create</h4>
+                <p className="text-sm text-blue-800">
+                  Uploaded files will be placed in a new folder named uploaded resources so you can reorganize them later.
+                </p>
               </div>
 
-              <div className="space-y-3">
-                {[
-                  { id: 'ai', title: 'AI Recommend Structure', desc: 'Auto-generate folders and setup first workbench', icon: '✨', color: 'border-purple-200 bg-purple-50/30' },
-                  { id: 'study', title: 'Study Mode Template', desc: 'Standard layout for lectures, notes, and reading', icon: '📚', color: 'border-gray-200 hover:border-blue-300' },
-                  { id: 'lab', title: 'Lab / Practice Mode', desc: 'Optimized for coding, experiments, and exercises', icon: '💻', color: 'border-gray-200 hover:border-blue-300' },
-                  { id: 'review', title: 'Review Mode Template', desc: 'Focus on summaries, flashcards, and exam prep', icon: '🎯', color: 'border-gray-200 hover:border-blue-300' },
-                  { id: 'empty', title: 'Empty Workspace', desc: 'Start fresh with no pre-configured structure', icon: '📄', color: 'border-gray-200 hover:border-blue-300' },
-                ].map((mode) => (
-                  <label 
-                    key={mode.id}
-                    className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                      formData.initMode === mode.id ? 'border-blue-500 bg-blue-50/50 shadow-sm' : mode.color
-                    }`}
-                  >
-                    <div className="flex items-center h-6">
-                      <input 
-                        type="radio" 
-                        name="initMode" 
-                        checked={formData.initMode === mode.id}
-                        onChange={() => setFormData({...formData, initMode: mode.id as any})}
-                        className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300"
-                      />
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-lg">{mode.icon}</span>
-                        <span className="font-bold text-gray-900">{mode.title}</span>
-                      </div>
-                      <p className="text-sm text-gray-500">{mode.desc}</p>
-                    </div>
-                  </label>
-                ))}
+              <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase">Workspace</p>
+                  <p className="text-sm font-medium text-gray-900">{formData.courseName || 'Untitled workspace'}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase">Major</p>
+                  <p className="text-sm text-gray-700">{formData.major || 'General'}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase">Initial resources</p>
+                  <p className="text-sm text-gray-700">
+                    {formData.resources.length > 0
+                      ? `${formData.resources.length} files will be uploaded`
+                      : 'No files selected'}
+                  </p>
+                </div>
               </div>
             </div>
           </form>
@@ -199,7 +275,7 @@ export default function CreateWorkspaceWizard({ isOpen, onClose, onSubmit }: Cre
             {step < 3 ? (
               <>Next Step <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path></svg></>
             ) : (
-              <>Create Workspace <span className="text-blue-200">✨</span></>
+              <>Create Workspace</>
             )}
           </button>
         </div>

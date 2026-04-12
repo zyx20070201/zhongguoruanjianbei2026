@@ -12,6 +12,7 @@ export interface CreateFileDTO {
   parentId?: string;
   parentPath?: string;
   fileCategory?: string;
+  tags?: string[];
 }
 
 export interface RenameNodeDTO {
@@ -38,6 +39,12 @@ export interface SaveGeneratedContentDTO {
   filename: string;
   content: string;
   category?: string;
+}
+
+export interface UpdateNodeTagsDTO {
+  workspaceId: string;
+  id: string;
+  tags: string[];
 }
 
 export class FileSystemError extends Error {

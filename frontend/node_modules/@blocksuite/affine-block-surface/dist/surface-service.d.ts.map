@@ -1,0 +1,1 @@
+{"version":3,"file":"surface-service.d.ts","sourceRoot":"","sources":["../src/surface-service.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,YAAY,EAAE,MAAM,uBAAuB,CAAC;AAGrD,OAAO,EAAE,KAAK,iBAAiB,EAAsB,MAAM,oBAAoB,CAAC;AAEhF,qBAAa,mBAAoB,SAAQ,YAAY;IACnD,gBAAyB,OAAO,mBAAoC;IAEpE,OAAO,EAAG,iBAAiB,CAAC;IAE5B,IAAI,KAAK,qDAER;IAEQ,OAAO,IAAI,IAAI;CAoBzB"}

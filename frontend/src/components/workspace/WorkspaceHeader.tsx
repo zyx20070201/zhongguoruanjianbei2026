@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowLeft, Upload, Plus, Sparkles, Settings, MoreHorizontal } from 'lucide-react';
+import { ArrowLeft, Upload, Plus, Settings, LogOut } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 interface WorkspaceHeaderProps {
@@ -8,8 +8,8 @@ interface WorkspaceHeaderProps {
   updatedAt: string;
   onUpload: () => void;
   onNewWorkbench: () => void;
-  onToggleAI: () => void;
   onOpenSettings: () => void;
+  onLogout: () => void;
 }
 
 export default function WorkspaceHeader({
@@ -18,32 +18,32 @@ export default function WorkspaceHeader({
   updatedAt,
   onUpload,
   onNewWorkbench,
-  onToggleAI,
-  onOpenSettings
+  onOpenSettings,
+  onLogout
 }: WorkspaceHeaderProps) {
   const navigate = useNavigate();
 
   return (
-    <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between sticky top-0 z-30">
+    <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[var(--app-border)] bg-[var(--app-surface)] px-6 py-3 backdrop-blur">
       <div className="flex items-center gap-4">
         <button 
           onClick={() => navigate('/workspaces')}
-          className="p-2 hover:bg-gray-100 rounded-full text-gray-500 transition-colors"
+          className="rounded-full p-2 text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)]"
           title="Back to Dashboard"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
         
-        <div className="h-8 w-px bg-gray-200 mx-1"></div>
+        <div className="mx-1 h-8 w-px bg-[var(--app-border)]"></div>
         
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-lg font-bold text-gray-900">{courseName}</h1>
-            <span className="px-2 py-0.5 bg-blue-50 text-blue-700 text-xs font-medium rounded border border-blue-100">
+            <h1 className="text-lg font-bold text-[var(--app-text)]">{courseName}</h1>
+            <span className="rounded border border-[var(--app-border)] bg-[var(--app-accent-soft)] px-2 py-0.5 text-xs font-medium text-[var(--app-accent)]">
               {major}
             </span>
           </div>
-          <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
             Updated {updatedAt}
           </p>
         </div>
@@ -52,7 +52,7 @@ export default function WorkspaceHeader({
       <div className="flex items-center gap-2">
         <button 
           onClick={onUpload}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--app-text)] transition-colors hover:bg-[var(--app-hover)]"
         >
           <Upload className="w-4 h-4" />
           <span className="hidden sm:inline">Upload</span>
@@ -60,32 +60,26 @@ export default function WorkspaceHeader({
         
         <button 
           onClick={onNewWorkbench}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--app-text)] transition-colors hover:bg-[var(--app-hover)]"
         >
           <Plus className="w-4 h-4" />
           <span className="hidden sm:inline">New Workbench</span>
         </button>
 
-        <div className="w-px h-6 bg-gray-200 mx-1"></div>
-
-        <button 
-          onClick={onToggleAI}
-          className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 rounded-lg shadow-sm transition-all"
-        >
-          <Sparkles className="w-4 h-4" />
-          <span>AI Terminal</span>
-        </button>
-
         <button 
           onClick={onOpenSettings}
-          className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
+          className="rounded-lg p-2 text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)]"
           title="Workspace Settings"
         >
           <Settings className="w-5 h-5" />
         </button>
         
-        <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
-          <MoreHorizontal className="w-5 h-5" />
+        <button
+          onClick={onLogout}
+          className="rounded-lg p-2 text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)]"
+          title="Logout"
+        >
+          <LogOut className="w-5 h-5" />
         </button>
       </div>
     </header>

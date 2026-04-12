@@ -1,0 +1,2 @@
+export declare const booleanFilter: import("./create.js").FilterConfig<import("../../logical/data-type.js").DTInstance<"Boolean", boolean, import("zod").ZodBoolean>, never[], import("../../logical/type-variable.js").TypeVarDefinitionInstance<string, import("../../index.js").TypeInstance>[]>[];
+//# sourceMappingURL=boolean.d.ts.map

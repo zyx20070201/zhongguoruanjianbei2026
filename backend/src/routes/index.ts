@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import authRoutes from './auth';
 import workspaceRoutes from './workspace';
-import workbenchRoutes from './workbench';
+import workbenchRoutes from './workbenches';
 import fileRoutes from './file';
 
 const router = Router();

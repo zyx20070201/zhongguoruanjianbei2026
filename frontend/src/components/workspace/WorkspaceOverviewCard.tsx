@@ -1,12 +1,11 @@
 import React from 'react';
 import { WorkspaceOverview } from '../../types';
-import { Sparkles, Upload, Plus, PlayCircle, Folder } from 'lucide-react';
+import { Upload, Plus, PlayCircle, Folder } from 'lucide-react';
 
 interface WorkspaceOverviewCardProps {
   overview: WorkspaceOverview;
   onUploadMaterials: () => void;
   onCreateWorkbench: () => void;
-  onAskAI: () => void;
   onResumeTask: () => void;
 }
 
@@ -14,7 +13,6 @@ export default function WorkspaceOverviewCard({
   overview,
   onUploadMaterials,
   onCreateWorkbench,
-  onAskAI,
   onResumeTask
 }: WorkspaceOverviewCardProps) {
   return (
@@ -25,9 +23,6 @@ export default function WorkspaceOverviewCard({
           <div className="flex-1">
             <div className="flex items-center gap-2 mb-2">
               <h2 className="text-2xl font-bold text-gray-900">{overview.courseName}</h2>
-              <span className="px-2.5 py-0.5 bg-blue-50 text-blue-700 text-xs font-medium rounded-full border border-blue-100">
-                {overview.status}
-              </span>
             </div>
             
             <p className="text-gray-600 text-sm mb-4 max-w-2xl">
@@ -61,14 +56,6 @@ export default function WorkspaceOverviewCard({
                     <span className="font-medium text-gray-800">{overview.recentActivity}</span>
                   </div>
                 )}
-                {overview.suggestedNextStep && (
-                  <div className="flex-1 sm:border-l sm:border-gray-200 sm:pl-4">
-                    <span className="text-purple-600 mr-2 font-medium flex items-center gap-1 inline-flex">
-                      <Sparkles className="w-3.5 h-3.5" /> Suggestion:
-                    </span>
-                    <span className="text-gray-800">{overview.suggestedNextStep}</span>
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -79,12 +66,6 @@ export default function WorkspaceOverviewCard({
               className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
             >
               Resume Recent Task
-            </button>
-            <button 
-              onClick={onAskAI}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 text-sm font-medium rounded-lg border border-purple-200 transition-colors"
-            >
-              <Sparkles className="w-4 h-4" /> Ask AI to Organize
             </button>
             <button 
               onClick={onCreateWorkbench}

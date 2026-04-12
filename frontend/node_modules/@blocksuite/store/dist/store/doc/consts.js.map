@@ -1,0 +1,1 @@
+{"version":3,"file":"consts.js","sourceRoot":"","sources":["../../../src/store/doc/consts.ts"],"names":[],"mappings":"AAAA,MAAM,CAAN,IAAY,aAIX;AAJD,WAAY,aAAa;IACvB,kCAAiB,CAAA;IACjB,oCAAmB,CAAA;IACnB,kCAAiB,CAAA;AACnB,CAAC,EAJW,aAAa,KAAb,aAAa,QAIxB","sourcesContent":["export enum BlockViewType {\n  Bypass = 'bypass',\n  Display = 'display',\n  Hidden = 'hidden',\n}\n"]}

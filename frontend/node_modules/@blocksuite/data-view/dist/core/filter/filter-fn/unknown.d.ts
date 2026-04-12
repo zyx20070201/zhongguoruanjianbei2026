@@ -1,0 +1,2 @@
+export declare const unknownFilter: import("./create.js").FilterConfig<import("../../logical/data-type.js").DTInstance<"Unknown", never, import("zod").ZodUnknown>, [], import("../../logical/type-variable.js").TypeVarDefinitionInstance<string, import("../../index.js").TypeInstance>[]>[];
+//# sourceMappingURL=unknown.d.ts.map
