@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { FileSystemService } from '../services/fileSystemService';
 import { DocumentPreviewService } from '../services/documentPreviewService';
+import prisma from '../config/db';
 import { 
   validateWorkspaceId, 
   validateNodeId, 
@@ -252,9 +253,6 @@ export const downloadFile = async (req: Request, res: Response) => {
     validateWorkspaceId(workspaceId);
     validateNodeId(id);
 
-    // we need to query db to get storageKey
-    const { prisma } = require('../config/db');
-    
     const file = await prisma.fileSystemObject.findFirst({
       where: { id, workspaceId }
     });
@@ -267,17 +265,29 @@ export const downloadFile = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Cannot download a folder' });
     }
 
+    const extension = file.name.split('.').pop()?.toLowerCase() || '';
+    const isInlineHtml = extension === 'html';
+
     if (!file.storageKey) {
       // It's a text file stored directly in DB content field
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.name)}"`);
-      res.setHeader('Content-Type', file.mimeType || 'text/plain');
+      res.setHeader(
+        'Content-Disposition',
+        `${isInlineHtml ? 'inline' : 'attachment'}; filename="${encodeURIComponent(file.name)}"`
+      );
+      res.setHeader('Content-Type', isInlineHtml ? 'text/html; charset=utf-8' : file.mimeType || 'text/plain; charset=utf-8');
       return res.send(file.content || '');
     }
 
     // It's a real file stored on disk
     const { LocalStorageService } = require('../services/storage/localStorageService');
     const filePath = LocalStorageService.getFilePath(file.storageKey);
-    
+
+    if (isInlineHtml) {
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.name)}"`);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.sendFile(filePath);
+    }
+
     res.download(filePath, file.name, (err) => {
       if (err) {
         console.error('Download error:', err);

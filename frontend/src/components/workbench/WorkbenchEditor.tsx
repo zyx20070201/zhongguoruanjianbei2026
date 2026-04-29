@@ -55,7 +55,10 @@ interface WorkbenchEditorProps {
   onAddEditor: () => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   aiContext?: {
+    workbenchTitle?: string;
+    workbenchDescription?: string;
     activeFile?: { name: string; path: string } | null;
+    activeFileContent?: string | null;
     activeExternal?: { title: string; url: string; description?: string } | null;
   };
 }
@@ -174,7 +177,10 @@ function EditorBreadcrumbs({
   editor: EditorState;
   resource: ResourceReference | null;
   aiContext?: {
+    workbenchTitle?: string;
+    workbenchDescription?: string;
     activeFile?: { name: string; path: string } | null;
+    activeFileContent?: string | null;
     activeExternal?: { title: string; url: string; description?: string } | null;
   };
 }) {
@@ -264,7 +270,10 @@ function EditorLeafView({
     placement: WorkbenchDropPlacement
   ) => void;
   aiContext?: {
+    workbenchTitle?: string;
+    workbenchDescription?: string;
     activeFile?: { name: string; path: string } | null;
+    activeFileContent?: string | null;
     activeExternal?: { title: string; url: string; description?: string } | null;
   };
 }) {
@@ -464,7 +473,10 @@ function LayoutNodeView(props: {
   onAddEditor: () => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
   aiContext?: {
+    workbenchTitle?: string;
+    workbenchDescription?: string;
     activeFile?: { name: string; path: string } | null;
+    activeFileContent?: string | null;
     activeExternal?: { title: string; url: string; description?: string } | null;
   };
 }) {

@@ -1334,6 +1334,3217 @@
         },
         "version": 1
       }
+    },
+    {
+      "id": "c880c24b-dff4-449a-a89a-b33df0c0aeb1",
+      "workspaceId": "0d8e80db-9e6c-41f8-8f8b-c70c42dc0df2",
+      "title": "Learning HQ",
+      "description": "Roadmap, review checklist, visual guide, external references, and planning AI.",
+      "rootPath": "/Learning HQ",
+      "createdAt": "2026-04-15T10:33:26.442Z",
+      "updatedAt": "2026-04-15T10:58:06.700Z",
+      "lastOpenedAt": "2026-04-15T10:57:29.407Z",
+      "state": {
+        "workbenchId": "c880c24b-dff4-449a-a89a-b33df0c0aeb1",
+        "editors": [
+          {
+            "id": "editor-roadmap",
+            "type": "notes",
+            "title": "learning-roadmap.md",
+            "resourceId": "8dcae545-f248-454f-8229-6cf3fd2cb921",
+            "resourcePath": "/course-overview/learning-roadmap.md",
+            "x": 48,
+            "y": 48,
+            "w": 420,
+            "h": 320,
+            "zIndex": 1,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "learning-roadmap.md",
+              "resourceType": "note",
+              "mode": "preview",
+              "blocksuiteMode": "page"
+            }
+          },
+          {
+            "id": "editor-final-checklist",
+            "type": "notes",
+            "title": "final-review-checklist.md",
+            "resourceId": "7b62a285-f832-4257-9a14-ab5bb6c7cda3",
+            "resourcePath": "/course-overview/final-review-checklist.md",
+            "x": 76,
+            "y": 72,
+            "w": 420,
+            "h": 320,
+            "zIndex": 2,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "final-review-checklist.md",
+              "resourceType": "note",
+              "mode": "preview",
+              "blocksuiteMode": "page"
+            }
+          },
+          {
+            "id": "editor-visual-guide",
+            "type": "notes",
+            "title": "visual-study-guide.md",
+            "resourceId": "c9a22cd3-e0a7-4015-a5d2-c419243bc30d",
+            "resourcePath": "/ai-generated/visual-study-guide.md",
+            "x": 104,
+            "y": 96,
+            "w": 420,
+            "h": 320,
+            "zIndex": 3,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "visual-study-guide.md",
+              "resourceType": "generated",
+              "mode": "preview",
+              "blocksuiteMode": "page"
+            }
+          },
+          {
+            "id": "editor-oiwiki",
+            "type": "external",
+            "title": "OI Wiki",
+            "x": 132,
+            "y": 120,
+            "w": 460,
+            "h": 320,
+            "zIndex": 4,
+            "minimized": false,
+            "viewState": {
+              "externalResource": {
+                "title": "OI Wiki",
+                "url": "https://oi-wiki.org/",
+                "description": "A practical reference for data structures, graph algorithms, and common problem-solving patterns."
+              }
+            }
+          },
+          {
+            "id": "editor-planning-ai",
+            "type": "ai",
+            "title": "Planning AI",
+            "x": 160,
+            "y": 144,
+            "w": 420,
+            "h": 320,
+            "zIndex": 5,
+            "minimized": false,
+            "viewState": {
+              "messages": [
+                {
+                  "role": "assistant",
+                  "content": "Use this panel to break the course into weekly targets, compare open notes with the external reference, and plan assignment work."
+                }
+              ]
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-roadmap",
+        "activeEditorPaneId": "pane-left-a",
+        "editorLayout": {
+          "id": "split-root-a",
+          "type": "split",
+          "direction": "row",
+          "ratio": 0.5,
+          "children": [
+            {
+              "id": "pane-left-a",
+              "type": "leaf",
+              "editorIds": [
+                "editor-roadmap",
+                "editor-final-checklist",
+                "editor-visual-guide"
+              ],
+              "activeEditorId": "editor-roadmap"
+            },
+            {
+              "id": "split-right-a",
+              "type": "split",
+              "direction": "column",
+              "ratio": 0.55,
+              "children": [
+                {
+                  "id": "pane-top-right-a",
+                  "type": "leaf",
+                  "editorIds": [
+                    "editor-oiwiki"
+                  ],
+                  "activeEditorId": "editor-oiwiki"
+                },
+                {
+                  "id": "pane-bottom-right-a",
+                  "type": "leaf",
+                  "editorIds": [
+                    "editor-planning-ai"
+                  ],
+                  "activeEditorId": "editor-planning-ai"
+                }
+              ]
+            }
+          ]
+        },
+        "version": 1
+      }
+    },
+    {
+      "id": "ecf2320f-60f0-432f-ada8-900200832095",
+      "workspaceId": "0d8e80db-9e6c-41f8-8f8b-c70c42dc0df2",
+      "title": "Trees and Graphs Lab",
+      "description": "Topic notes, code templates, and an AI topic assistant for tree and graph study.",
+      "rootPath": "/Trees and Graphs Lab",
+      "createdAt": "2026-04-15T10:33:26.442Z",
+      "updatedAt": "2026-04-15T15:27:53.403Z",
+      "lastOpenedAt": "2026-04-15T15:27:46.080Z",
+      "state": {
+        "workbenchId": "ecf2320f-60f0-432f-ada8-900200832095",
+        "editors": [
+          {
+            "id": "editor-tree-note",
+            "type": "notes",
+            "title": "trees-and-binary-trees.md",
+            "resourceId": "0332d46f-1236-4fb5-8eee-ccb528cd993f",
+            "resourcePath": "/trees-and-graphs/trees-and-binary-trees.md",
+            "x": 48,
+            "y": 48,
+            "w": 420,
+            "h": 320,
+            "zIndex": 1,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "trees-and-binary-trees.md",
+              "resourceType": "note",
+              "mode": "preview",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "4T6V4ykO0D",
+                  "title": "Untitled",
+                  "createDate": 1776252028371,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "CsW5Hhzzcj",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "GCiRBI5XSi",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "yikL2uXmMS",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,95]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "xNbFqKuZ51",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h1",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Trees And Binary Trees"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "OnaqRs8Xdu",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Concept Map"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "EEPnED-6Hk",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "text",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "A tree is a hierarchical structure. In algorithm problems, trees usually help us organize recursion, divide structure into left and right subproblems, and reason about traversal order."
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "B14RuztCms",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Core Concepts"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "EKSpu49aLf",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Node: the basic unit"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "dZIQWvNelL",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Edge: the connection between nodes"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "AEmNWQioPG",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Root: the starting node of the tree"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "VNmdlE-m4P",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Depth: distance from root to current node"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "44cybfPfOa",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Height: longest path from current node down to a leaf"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "pCWtmLGfon",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Leaf: node with no children"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "IJCXKxbo0y",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Binary Tree Traversal"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "zRo9ABA8fN",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h3",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Preorder"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "zsUW37x9Rh",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Visit root first"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "CZVYQjLdkh",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Then explore left subtree"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "XKJT_OXZdf",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Then explore right subtree"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "L6JpTQkWxF",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Useful when you want to copy structure or record construction order"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "h5aexGWFuo",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h3",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Inorder"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "KK2Gf509Tk",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Explore left subtree first"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "ZFq9krVRm8",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Visit root second"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "FOcUM9lRSz",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Explore right subtree last"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "sg4Sj00N1E",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "For BST, this produces sorted order"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "XnvpalrHYL",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h3",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Postorder"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "FTaAdG1XXs",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Explore children first"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "zne9PYTKtM",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Visit root last"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "f5YV3lD9ek",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Useful for deleting tree nodes or collecting child information before parent decisions"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "wX_EN8HyuV",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h3",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Level Order"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "OWwxykr83a",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Use a queue"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "NlnWXmeukk",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Visit nodes layer by layer"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "aaBNeWEfU5",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Useful for shortest-step style tree questions"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "9F3p1EWc65",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Typical Exam And Assignment Points"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "RESfHO0qEH",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Recursive traversal"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "Nlx0ODrGTk",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Iterative traversal with stack"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "lcqNq46rCk",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Tree height and diameter"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "AQd75EgjVX",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "BST insert, search, and delete"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "zpXJidLDM3",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Heap construction and adjustment"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "ryIDKv0RKv",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "How To Think Recursively"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "zbAwX0YzJn",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "text",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "When writing a recursive tree solution, define clearly:"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "7OAVeRmuxo",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "What the function returns"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "dpfRDFehcl",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "What one subtree means"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "cIybOJ-mte",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "What the base case is"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "NMq8uBtVfa",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "How the left and right answers combine"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "el2BJ7Kgz1",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Common Mistakes"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "xFzlPLHmX6",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Forgetting the null-node base case"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "rm8iZHkJvd",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Mixing up preorder and inorder positions"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "y0cNJEttqS",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Treating queue-based traversal like recursion"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "ImLV-kyExU",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Not distinguishing height from depth"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "editor-graph-note",
+            "type": "notes",
+            "title": "graph-algorithms.md",
+            "resourceId": "8a267e36-de14-4cde-85e5-8996646cc379",
+            "resourcePath": "/trees-and-graphs/graph-algorithms.md",
+            "x": 76,
+            "y": 72,
+            "w": 420,
+            "h": 320,
+            "zIndex": 2,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "graph-algorithms.md",
+              "resourceType": "note",
+              "mode": "preview",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 1
+            }
+          },
+          {
+            "id": "editor-dijkstra-code",
+            "type": "code",
+            "title": "dijkstra.py",
+            "resourceId": "e6416ae5-de65-43da-80df-e9b6c1f14640",
+            "resourcePath": "/code-templates/dijkstra.py",
+            "x": 132,
+            "y": 120,
+            "w": 380,
+            "h": 260,
+            "zIndex": 4,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "dijkstra.py",
+              "resourceType": "code",
+              "codeOpenMode": "plain",
+              "mode": "edit",
+              "editorGroupId": "group-1",
+              "editorOrder": 3
+            }
+          },
+          {
+            "id": "editor-topic-ai",
+            "type": "ai",
+            "title": "Topic AI",
+            "x": 160,
+            "y": 144,
+            "w": 420,
+            "h": 320,
+            "zIndex": 6,
+            "minimized": false,
+            "viewState": {
+              "messages": [
+                {
+                  "role": "assistant",
+                  "content": "Open one note and one code template side by side, then ask for traversal logic, shortest-path intuition, or template adaptation."
+                }
+              ],
+              "editorGroupId": "group-1",
+              "editorOrder": 4
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-topic-ai",
+        "activeEditorPaneId": "pane-left-b",
+        "editorLayout": {
+          "id": "split-root-b",
+          "type": "split",
+          "direction": "row",
+          "ratio": 0.48,
+          "children": [
+            {
+              "id": "pane-left-b",
+              "type": "leaf",
+              "editorIds": [
+                "editor-tree-note",
+                "editor-graph-note",
+                "editor-topic-ai"
+              ],
+              "activeEditorId": "editor-topic-ai"
+            },
+            {
+              "id": "pane-bottom-right-b",
+              "type": "leaf",
+              "editorIds": [
+                "editor-dijkstra-code"
+              ],
+              "activeEditorId": "editor-dijkstra-code"
+            }
+          ]
+        },
+        "version": 1
+      }
+    },
+    {
+      "id": "1cf39adc-fc33-4cf9-ad44-a9734d0ea481",
+      "workspaceId": "0d8e80db-9e6c-41f8-8f8b-c70c42dc0df2",
+      "title": "Practice and Review Desk",
+      "description": "Problem schedule, review template, external visualization, and review AI.",
+      "rootPath": "/Practice and Review Desk",
+      "createdAt": "2026-04-15T10:33:26.442Z",
+      "updatedAt": "2026-04-15T14:26:10.132Z",
+      "lastOpenedAt": "2026-04-15T14:26:08.796Z",
+      "state": {
+        "workbenchId": "1cf39adc-fc33-4cf9-ad44-a9734d0ea481",
+        "editors": [
+          {
+            "id": "editor-practice-plan",
+            "type": "notes",
+            "title": "leetcode-plan.md",
+            "resourceId": "3b3e89d5-9a9a-4ebd-9ce7-54fcf896cf63",
+            "resourcePath": "/practice-plan/leetcode-plan.md",
+            "x": 48,
+            "y": 48,
+            "w": 420,
+            "h": 320,
+            "zIndex": 1,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "leetcode-plan.md",
+              "resourceType": "note",
+              "mode": "preview",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "TVon7dFC6X",
+                  "title": "Untitled",
+                  "createDate": 1776263169340,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "05FmhZWJmK",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "DkYmQ0yl9C",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "rHt_tAEfUF",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,95]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "rKuaAkAOyv",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h1",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "LeetCode Practice Plan"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "Y1HiYdc51h",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Goal"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "PIDU68YfHr",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "text",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Build a topic-driven practice routine instead of solving questions randomly."
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "jMqiFmoV06",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Week 1: Linear Structures"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "MyxnbrVXM6",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Valid Parentheses"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "sCaS5hyoxw",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Min Stack"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "kLyIPRdpzQ",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Implement Queue using Stacks"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "GPJjCRGXVX",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Reverse Linked List"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "zPZEjjpsJE",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Linked List Cycle"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "LQ3mls6-Rc",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Week 2: Trees"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "T20MrPsFDN",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Binary Tree Preorder Traversal"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "JxdiZyAQBT",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Binary Tree Inorder Traversal"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "XhTrufguPg",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Binary Tree Level Order Traversal"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "JaolKlknVU",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Validate Binary Search Tree"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "zNWJ5jlWAA",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Lowest Common Ancestor"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "dxcnrorz6g",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Week 3: Graphs"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "kvP4uN60Xt",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Number of Islands"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "e0gC2HaH_I",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Course Schedule"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "XX16ZaToqc",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Clone Graph"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "ZqyNPgn0Ea",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Network Delay Time"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "cCjRGF8bmJ",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Redundant Connection"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "Fn9VqShosY",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Week 4: Review And Assignments"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "Iph7aO-1yn",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Pick one weak topic"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "_VPZKbPh6W",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Rewrite two templates"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "qkhYOMZP-u",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Finish one assignment-style implementation"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "tiVKHAetUJ",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Write one review summary"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "GKZH3c0GxE",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "For Each Problem Record"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "lr8Sjs7juE",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Problem type"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "2TSiAsUrOg",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Main idea"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "YcjXdxpsnB",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Complexity"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "CBc9JPtN92",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Key data structure"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "RSDeM_cF1E",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "What confused me"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "VUlJzclD91",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "What pattern this belongs to"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "editor-weekly-review",
+            "type": "notes",
+            "title": "weekly-review-template.md",
+            "resourceId": "8de2c9be-86ae-464e-ad05-6107aa6a9476",
+            "resourcePath": "/practice-plan/weekly-review-template.md",
+            "x": 76,
+            "y": 72,
+            "w": 420,
+            "h": 320,
+            "zIndex": 2,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "weekly-review-template.md",
+              "resourceType": "note",
+              "mode": "edit",
+              "blocksuiteMode": "page",
+              "editorGroupId": "group-1",
+              "editorOrder": 1,
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "rqAh2Z7Yji",
+                  "title": "Untitled",
+                  "createDate": 1776263169342,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "33HIAaKS4T",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "iTeA3Z1fRj",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "DeLs2AW8hh",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,95]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "aNg-yLHY-w",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h1",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Weekly Review Template"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "fqA-DqiGar",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "What I finished"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "MXBD64TYh2",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": []
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "msq6D2L-iI",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "What I understand well"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "0FV4v2RLXZ",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": []
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "t0HjlUkwaa",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "What is still weak"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "MaBDL3aUws",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": []
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "Zddyi_iREK",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Questions for AI"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "qXOrZhVeJH",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Why is BFS better here than DFS?"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "KMFQU2x3MW",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "How do I define recursion naturally for this tree problem?"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "J9c1jy8Fqt",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "What is the key difference between Prim and Kruskal?"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "mzR3xUyE4-",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Next week goals"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "KOzloiaGtZ",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": []
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "editor-union-find",
+            "type": "code",
+            "title": "union_find.py",
+            "resourceId": "be389d50-debc-4806-9ff6-70b40b510f83",
+            "resourcePath": "/code-templates/union_find.py",
+            "x": 104,
+            "y": 96,
+            "w": 380,
+            "h": 260,
+            "zIndex": 3,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "union_find.py",
+              "resourceType": "code",
+              "codeOpenMode": "plain",
+              "mode": "edit",
+              "editorGroupId": "group-1",
+              "editorOrder": 2
+            }
+          },
+          {
+            "id": "editor-visualgo",
+            "type": "external",
+            "title": "VisuAlgo",
+            "x": 132,
+            "y": 120,
+            "w": 460,
+            "h": 320,
+            "zIndex": 6,
+            "minimized": false,
+            "viewState": {
+              "externalResource": {
+                "title": "VisuAlgo",
+                "url": "https://visualgo.net/zh",
+                "description": "Use this external site to visualize stacks, queues, trees, graphs, and shortest-path procedures while reviewing problems."
+              },
+              "editorGroupId": "group-1",
+              "editorOrder": 3
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-visualgo",
+        "activeEditorPaneId": "pane-left-c",
+        "editorLayout": {
+          "id": "split-root-c",
+          "type": "split",
+          "direction": "row",
+          "ratio": 0.5,
+          "children": [
+            {
+              "id": "split-left-c",
+              "type": "split",
+              "direction": "column",
+              "ratio": 0.5,
+              "children": [
+                {
+                  "id": "pane-left-c",
+                  "type": "leaf",
+                  "editorIds": [
+                    "editor-practice-plan"
+                  ],
+                  "activeEditorId": "editor-practice-plan"
+                },
+                {
+                  "id": "pane-bottom-left-c",
+                  "type": "leaf",
+                  "editorIds": [
+                    "editor-weekly-review"
+                  ],
+                  "activeEditorId": "editor-weekly-review"
+                }
+              ]
+            },
+            {
+              "id": "pane-top-right-c",
+              "type": "leaf",
+              "editorIds": [
+                "editor-union-find",
+                "editor-visualgo"
+              ],
+              "activeEditorId": "editor-visualgo"
+            }
+          ]
+        },
+        "version": 1
+      }
+    },
+    {
+      "id": "369f1fc2-4dd6-4b7d-8818-753cec0a870a",
+      "workspaceId": "0d8e80db-9e6c-41f8-8f8b-c70c42dc0df2",
+      "title": "Assignment Studio",
+      "description": "Assignment plan, final checklist, implementation template, and coursework AI support.",
+      "rootPath": "/Assignment Studio",
+      "createdAt": "2026-04-15T10:33:26.442Z",
+      "updatedAt": "2026-04-15T15:30:30.690Z",
+      "lastOpenedAt": "2026-04-15T15:30:30.690Z",
+      "state": {
+        "workbenchId": "369f1fc2-4dd6-4b7d-8818-753cec0a870a",
+        "editors": [
+          {
+            "id": "editor-stack-queue",
+            "type": "code",
+            "title": "stack_queue.py",
+            "resourceId": "98b7fc63-c411-4d4e-9c2c-12caf2ce7b7b",
+            "resourcePath": "/code-templates/stack_queue.py",
+            "x": 104,
+            "y": 96,
+            "w": 380,
+            "h": 260,
+            "zIndex": 5,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "stack_queue.py",
+              "resourceType": "code",
+              "codeOpenMode": "plain",
+              "mode": "edit",
+              "editorGroupId": "group-1",
+              "editorOrder": 2
+            }
+          },
+          {
+            "id": "editor-assignment-ai",
+            "type": "ai",
+            "title": "Assignment AI",
+            "x": 132,
+            "y": 120,
+            "w": 420,
+            "h": 320,
+            "zIndex": 8,
+            "minimized": false,
+            "viewState": {
+              "messages": [
+                {
+                  "role": "assistant",
+                  "content": "Use this studio when you are turning topic knowledge into coursework. Ask for edge cases, test design, or code cleanup suggestions."
+                }
+              ],
+              "editorGroupId": "group-1",
+              "editorOrder": 3
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-assignment-ai",
+        "activeEditorPaneId": "pane-bottom-right-d",
+        "editorLayout": {
+          "id": "split-right-d",
+          "type": "split",
+          "direction": "column",
+          "ratio": 0.5,
+          "children": [
+            {
+              "id": "pane-top-right-d",
+              "type": "leaf",
+              "editorIds": [
+                "editor-stack-queue"
+              ],
+              "activeEditorId": "editor-stack-queue"
+            },
+            {
+              "id": "pane-bottom-right-d",
+              "type": "leaf",
+              "editorIds": [
+                "editor-assignment-ai"
+              ],
+              "activeEditorId": "editor-assignment-ai"
+            }
+          ]
+        },
+        "version": 1
+      }
+    },
+    {
+      "id": "9753b81a-84f0-4fdf-9597-6d8766257dcc",
+      "workspaceId": "0d8e80db-9e6c-41f8-8f8b-c70c42dc0df2",
+      "title": "Algorithm Visual Lab",
+      "description": "Interactive algorithm visualizations for sorting, tree traversal, and graph search.",
+      "rootPath": "/Algorithm Visual Lab",
+      "createdAt": "2026-04-15T10:58:06.704Z",
+      "updatedAt": "2026-04-16T06:58:50.366Z",
+      "lastOpenedAt": "2026-04-16T06:57:04.341Z",
+      "state": {
+        "workbenchId": "9753b81a-84f0-4fdf-9597-6d8766257dcc",
+        "editors": [
+          {
+            "id": "editor-1776267105605-6h0gjx",
+            "type": "resource",
+            "title": "graph-search-visualizer.html",
+            "resourceId": "ad4f4216-0f12-469c-a174-9db6b5e1f326",
+            "resourcePath": "/Algorithm Visual Lab/graph-search-visualizer.html",
+            "x": 104,
+            "y": 96,
+            "w": 380,
+            "h": 260,
+            "zIndex": 35,
+            "minimized": false,
+            "viewState": {
+              "resourceName": "graph-search-visualizer.html",
+              "resourceType": "generated",
+              "editorGroupId": "group-1",
+              "editorOrder": 0
+            }
+          },
+          {
+            "id": "editor-1776267108180-kdu5si",
+            "type": "notes",
+            "title": "visual-study-guide.md",
+            "resourceId": "c9a22cd3-e0a7-4015-a5d2-c419243bc30d",
+            "resourcePath": "/Algorithm Visual Lab/visual-study-guide.md",
+            "x": 160,
+            "y": 144,
+            "w": 420,
+            "h": 320,
+            "zIndex": 34,
+            "minimized": false,
+            "viewState": {
+              "content": "",
+              "placeholder": "Write your notes for this task...",
+              "blocksuiteMode": "page",
+              "blocksuiteSnapshot": {
+                "type": "page",
+                "meta": {
+                  "id": "2YCvxV4Hdc",
+                  "title": "Untitled",
+                  "createDate": 1776322722546,
+                  "tags": []
+                },
+                "blocks": {
+                  "type": "block",
+                  "id": "BGBNjjACe1",
+                  "flavour": "affine:page",
+                  "version": 2,
+                  "props": {
+                    "title": {
+                      "$blocksuite:internal:text$": true,
+                      "delta": [
+                        {
+                          "insert": "Untitled"
+                        }
+                      ]
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "block",
+                      "id": "aPp5TE4gUs",
+                      "flavour": "affine:surface",
+                      "version": 5,
+                      "props": {
+                        "elements": {}
+                      },
+                      "children": []
+                    },
+                    {
+                      "type": "block",
+                      "id": "bIj-g2DbmW",
+                      "flavour": "affine:note",
+                      "version": 1,
+                      "props": {
+                        "xywh": "[0,0,800,95]",
+                        "background": "--affine-note-background-white",
+                        "index": "a0",
+                        "lockedBySelf": false,
+                        "hidden": false,
+                        "displayMode": "both",
+                        "edgeless": {
+                          "style": {
+                            "borderRadius": 8,
+                            "borderSize": 4,
+                            "borderStyle": "none",
+                            "shadowType": "--affine-note-shadow-box"
+                          }
+                        }
+                      },
+                      "children": [
+                        {
+                          "type": "block",
+                          "id": "oEjz5Wbum0",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h1",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Visual Study Guide"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "6fzDmQ6-es",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "How To Use The Visual Demos"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "7_oOp3ZmKS",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Open one visualization and one note side by side."
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "szDTadVAk3",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Let the animation show the order of operations first."
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "8L9DKf6ccM",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Then compare the animation with the corresponding code template."
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "W_vtW15j5p",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Finally explain the process in your own words before moving on."
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "D-rQDhws8q",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "What To Observe"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "H5Ac39emTP",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h3",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Sorting Visualizer"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "YXmU2uae_o",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Which pair is being compared"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "a07vbKRlpG",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "When a swap happens"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "cbJ2Wp_VeE",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Why bubble sort is easy to understand but inefficient"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "0blLQHi6dU",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h3",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Tree Traversal Visualizer"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "CaGc9n2d5O",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "How preorder, inorder, postorder, and level order differ"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "CIAc26wHHG",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Why inorder becomes sorted on a BST"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "BIlkIpCe-8",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "How queue-based level order changes the visit pattern"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "gTpuMmoF5T",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h3",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Graph Search Visualizer"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "Vo6Bhzu_uz",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "BFS explores layer by layer"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "aLbyC7sWbD",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "DFS goes deep before backtracking"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "OIsoBdwS5p",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "The same graph produces different visit orders depending on the strategy"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "aMVpSiCyU-",
+                          "flavour": "affine:paragraph",
+                          "version": 1,
+                          "props": {
+                            "type": "h2",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Suggested Pairing"
+                                }
+                              ]
+                            },
+                            "collapsed": false
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "Fasyspmf-8",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Sorting demo + complexity note"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "S_zV-MOi6l",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Tree demo + binary tree traversal code"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        },
+                        {
+                          "type": "block",
+                          "id": "IJP0A8ABUl",
+                          "flavour": "affine:list",
+                          "version": 1,
+                          "props": {
+                            "type": "bulleted",
+                            "text": {
+                              "$blocksuite:internal:text$": true,
+                              "delta": [
+                                {
+                                  "insert": "Graph demo + BFS/DFS or shortest-path note"
+                                }
+                              ]
+                            },
+                            "checked": false,
+                            "collapsed": false,
+                            "order": null
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "resourceName": "visual-study-guide.md",
+              "resourceType": "generated",
+              "editorGroupId": "group-1",
+              "editorOrder": 0
+            }
+          },
+          {
+            "id": "editor-1776267513863-mv6wtc",
+            "type": "ai",
+            "title": "AI Assistant",
+            "x": 188,
+            "y": 168,
+            "w": 420,
+            "h": 320,
+            "zIndex": 28,
+            "minimized": false,
+            "viewState": {
+              "messages": [
+                {
+                  "role": "assistant",
+                  "content": "I can work with files and external references in this workbench. Open both side by side and I will use that context for the current task."
+                },
+                {
+                  "role": "user",
+                  "content": "讲讲bfs"
+                },
+                {
+                  "role": "assistant",
+                  "content": "好的，我们来系统地讲解一下 **广度优先搜索**。\n\nBFS 是一种用于**图**或**树**数据结构的遍历或搜索算法。它的核心思想是“**由近及远，层层推进**”。\n\n### 1. 核心定义与思想\n- **目标**：系统地遍历或搜索图中的所有节点，并找出从起点到目标节点的**最短路径**（在边权为1的无权图中）。\n- **比喻**：像一块石头投入水中，水波（涟漪）一圈一圈地向外扩散。\n- **数据结构**：使用**队列**。这是实现 BFS “先进先出”特性的关键。\n- **状态标记**：使用一个集合（如 `visited`）来记录已访问过的节点，避免重复访问和陷入循环。\n\n### 2. 算法步骤\n假设我们从起点 `start` 开始，遍历整个图。\n\n1. **初始化**：\n   - 创建一个队列 `queue`，将起点 `start` 放入队列。\n   - 创建一个集合 `visited`，将 `start` 标记为已访问。\n   - （可选）创建一个字典 `parent` 或 `distance`，用于记录路径或距离。\n\n2. **循环遍历**：\n   - **当**队列不为空时：\n     1. **出队**：从队列头部取出一个节点 `current`。\n     2. **处理节点**：对 `current` 进行需要的操作（例如，检查是否为目标）。\n     3. **探索邻居**：遍历 `current` 的所有**未访问过的**邻居节点 `neighbor`：\n        - 将 `neighbor` 标记为已访问（加入 `visited` 集合）。\n        - 将 `neighbor` 加入队列尾部。\n        - （可选）记录 `neighbor` 的前驱节点为 `current`，或距离为 `distance[current] + 1`。\n\n3. **结束**：\n   - 当队列为空时，说明所有从起点可达的节点都已被访问，算法结束。\n\n### 3. 复杂度分析\n- **时间复杂度**：`O(V + E)`，其中 `V` 是顶点数，`E` 是边数。每个顶点和每条边都会被访问一次。\n- **空间复杂度**：`O(V)`，主要消耗在队列 `queue` 和已访问集合 `visited` 上。在最坏情况下（例如，星型图），所有节点都可能同时存在于队列中。\n\n### 4. 代码示例（Python）\n这里提供一个通用的、基于邻接表的 BFS 模板。\n\n```python\nfrom collections import deque\n\ndef bfs(graph, start):\n    \"\"\"\n    :param graph: 邻接表表示的图，例如 {0: [1, 2], 1: [0, 3], ...}\n    :param start: 起始节点\n    \"\"\"\n    # 初始化\n    queue = deque([start])\n    visited = set([start])\n    # 可选：记录每个节点的前驱节点，用于回溯路径\n    parent = {start: None}\n    # 可选：记录从起点到每个节点的距离\n    distance = {start: 0}\n\n    while queue:\n        current = queue.popleft()\n        print(f\"正在访问节点: {current}\")  # 处理当前节点\n\n        # 探索邻居\n        for neighbor in graph.get(current, []):\n            if neighbor not in visited:\n                visited.add(neighbor)\n                queue.append(neighbor)\n                # 记录路径信息\n                parent[neighbor] = current\n                distance[neighbor] = distance[current] + 1\n\n    # 返回访问记录、路径信息和距离信息\n    return visited, parent, distance\n\n# 示例图\ngraph = {\n    0: [1, 2],\n    1: [0, 3, 4],\n    2: [0, 5],\n    3: [1],\n    4: [1, 5],\n    5: [2, 4]\n}\n\nvisited, parent, distance = bfs(graph, 0)\nprint(f\"访问顺序（BFS序）: {list(visited)}\")\nprint(f\"父节点关系: {parent}\")\nprint(f\"距离: {distance}\")\n```\n\n### 5. 关键特性与应用场景\n- **最短路径**：在**无权图**中，BFS 首次访问到某个节点时，所经过的路径就是从起点到该节点的**最短路径**。\n- **层序遍历**：BFS 天然地按“层”输出节点，常用于树的层序遍历。\n- **连通性检查**：判断图中两个节点是否连通，或找出一个连通分量中的所有节点。\n- **扩散问题**：如迷宫最短路径、单词接龙、腐烂的橘子、网络广播等。\n\n### 6. 与 DFS 的对比\n| 特性 | BFS (广度优先) | DFS (深度优先) |\n| :--- | :--- | :--- |\n| **数据结构** | 队列 (Queue) | 栈 (Stack)，通常用递归 |\n| **遍历顺序** | 按距离起点“近→远” | 一条路走到黑，再回溯 |\n| **最短路径** | **天然解决**无权图最短路径 | 不能直接得到，需额外记录 |\n| **空间复杂度** | `O(V)`，可能较高（存储整层节点） | `O(h)`，`h`为图深度，通常较低 |\n| **适用场景** | 找最短路径、扩散问题 | 拓扑排序、路径存在性、回溯问题 |\n\n### 7. 练习建议\n1.  **基础**：在 `graph-search-visualizer.html` 中，用 BFS 遍历一个简单的网格或树，观察其“层层扩散”的过程。\n2.  **经典问题**：\n    - **LeetCode 200. 岛屿数量**（BFS/DFS 均可，用于连通分量计数）。\n    - **LeetCode 102. 二叉树的层序遍历**（BFS 的经典应用）。\n    - **LeetCode 127. 单词接龙**（将问题抽象为图，用 BFS 找最短转换序列）。\n3.  **进阶**：尝试实现**双向BFS**，用于优化起点和终点都已知的搜索问题，能大幅减少搜索空间。\n\n希望这个清晰的讲解能帮助你掌握 BFS！你可以打开 `graph-search-visualizer.html` 工作台，选择一个图，然后选择 BFS 算法来直观地观察它的执行过程。如果有具体的代码或问题想讨论，随时告诉我。"
+                },
+                {
+                  "role": "user",
+                  "content": "Compare BFS and DFS"
+                },
+                {
+                  "role": "assistant",
+                  "content": "好的，我们来详细对比一下 **BFS（广度优先搜索）** 和 **DFS（深度优先搜索）**。这是图搜索中最核心的两个算法，理解它们的差异至关重要。\n\n我将从多个维度进行结构化对比，并附上一个决策流程图来帮助你根据问题选择算法。\n\n---\n\n### 核心思想对比\n\n| 特性 | BFS (广度优先搜索) | DFS (深度优先搜索) |\n| :--- | :--- | :--- |\n| **核心比喻** | **水波扩散**：像石头扔进水里，涟漪一圈圈荡开。 | **走迷宫**：选择一条路走到尽头，碰壁后原路返回，尝试下一条岔路。 |\n| **遍历顺序** | **由近及远，层层推进**。先访问所有距离为1的节点，再距离为2的，以此类推。 | **一路到底，回溯探索**。尽可能深地探索图的分支，直到无法继续，然后回溯。 |\n| **数据结构** | **队列**。先进先出，保证“先被发现的节点先被探索”。 | **栈**（递归调用栈或显式栈）。后进先出，模拟“深度优先”的探索过程。 |\n| **空间消耗** | 主要消耗在存储**当前层的所有节点**。在最坏情况下（如完全二叉树），需要存储约 `O(N)` 个节点。 | 主要消耗在存储**从根到当前节点的路径**。在最坏情况下（如一条链），也需要 `O(N)`，但平均情况通常比 BFS 小。 |\n\n### 算法特性与应用场景对比\n\n| 特性 | BFS | DFS |\n| :--- | :--- | :--- |\n| **最短路径** | **天然优势**。在**无权图**中，BFS 第一次访问到某个节点时，走过的路径就是**最短路径**。 | **不能直接获得**。DFS 找到的路径不保证最短，需要遍历所有可能路径并比较长度。 |\n| **空间复杂度** | `O(V)` 或 `O(b^d)`，其中 `b` 是分支因子，`d` 是目标深度。在树宽很大时非常消耗内存。 | `O(h)` 或 `O(d)`，其中 `h` 是树的最大深度。在树很深但较窄时更节省内存。 |\n| **时间复杂度** | 两者都是 `O(V + E)`，因为每个节点和边最多被访问一次。但在特定问题中，由于搜索顺序不同，实际访问的节点数可能差异巨大。 |\n| **解的性质** | 找到的**第一个解**通常是最优解（如最短路径）。 | 找到的**第一个解**可能是任意一个可行解，不保证最优。 |\n| **代码实现** | 通常使用**循环 + 队列**，结构清晰。 | 通常使用**递归**，代码简洁；也可用显式栈实现迭代版本。 |\n\n### 经典应用场景\n\n| 算法 | 典型应用场景 | 原因 |\n| :--- | :--- | :--- |\n| **BFS** | 1. **无权图的最短路径**（迷宫、单词接龙）<br>2. **树的层序遍历**<br>3. **社交网络中的“度”分离**（如几度好友）<br>4. **广播网络/腐烂的橘子**（模拟扩散过程） | 需要“最近”或“最快”的结果，过程天然按距离排序。 |\n| **DFS** | 1. **路径存在性检查**（是否能从A到B）<br>2. **拓扑排序**<br>3. **检测图中的环**<br>4. **回溯问题**（八皇后、数独、全排列）<br>5. **连通分量计数** | 需要探索所有可能性，或问题结构是“深度优先”的（如回溯）。 |\n\n### 可视化对比（基于你的工作台）\n\n在你的 `graph-search-visualizer.html` 中，可以非常直观地看到差异：\n\n1.  **BFS**：你会看到搜索 frontier（边界）像一个**不断扩大的圆圈**，均匀地覆盖整个图。节点被访问的顺序大致是**从中心向外辐射**。\n2.  **DFS**：你会看到搜索路径像一条**不断延伸的触手**，深入到图的一个分支尽头，然后快速缩回并“弹”到另一个分支。访问顺序是**跳跃式的**。\n\n### 决策流程图：我该用 BFS 还是 DFS？\n\n```mermaid\ngraph TD\n    A[开始选择] --> B{问题是否要求<br>最短路径/最小步数?};\n    B -- 是 --> C[**优先选择 BFS**];\n    B -- 否 --> D{图/树非常深<br>且目标可能在浅层?};\n    D -- 是 --> E[**优先选择 BFS**<br>避免DFS陷入深层];\n    D -- 否 --> F{需要遍历所有可能路径<br>或解空间巨大(如排列组合)?};\n    F -- 是 --> G[**优先选择 DFS (回溯)**];\n    F -- 否 --> H{图非常宽<br>内存是主要限制?};\n    H -- 是 --> I[**考虑 DFS**<br>节省队列空间];\n    H -- 否 --> J{代码简洁性更重要?};\n    J -- 是 --> K[**考虑 DFS (递归)**];\n    J -- 否 --> L[根据问题直觉选择<br>或两者都尝试];\n    \n    C --> M[结束];\n    E --> M;\n    G --> M;\n    I --> M;\n    K --> M;\n    L --> M;\n```\n\n### 总结与记忆口诀\n\n- **BFS 是“面”的搜索**，追求广度，稳扎稳打，保证最优（最短），但可能耗内存。\n- **DFS 是“线”的搜索**，追求深度，勇往直前，可能很快找到解（但不一定最短），内存占用通常更友好。\n\n**一个简单的选择原则**：\n> **如果要找“最近”、“最快”、“最少步数” -> 用 BFS。**\n> **如果要找“是否存在”、“所有可能”、“遍历全部状态” -> 用 DFS。**\n\n在你的算法可视化实验室里，多运行几次对比，感受它们探索图的不同“性格”，这对建立直觉非常有帮助。如果需要针对某个具体问题分析，随时可以告诉我。"
+                }
+              ],
+              "contextHint": "workbench",
+              "editorGroupId": "group-1",
+              "editorOrder": 0,
+              "lastModel": "deepseek-chat"
+            }
+          }
+        ],
+        "layoutMode": "freeform",
+        "activeEditorId": "editor-1776267105605-6h0gjx",
+        "activeEditorPaneId": "pane-1",
+        "editorLayout": {
+          "id": "pane-1-split-left-1776267718457",
+          "type": "split",
+          "direction": "row",
+          "ratio": 0.5,
+          "children": [
+            {
+              "id": "pane-1776267725649-076pwn",
+              "type": "leaf",
+              "editorIds": [
+                "editor-1776267513863-mv6wtc"
+              ],
+              "activeEditorId": "editor-1776267513863-mv6wtc"
+            },
+            {
+              "id": "pane-1",
+              "type": "leaf",
+              "editorIds": [
+                "editor-1776267105605-6h0gjx",
+                "editor-1776267108180-kdu5si"
+              ],
+              "activeEditorId": "editor-1776267105605-6h0gjx"
+            }
+          ]
+        },
+        "version": 1
+      }
     }
   ]
 }

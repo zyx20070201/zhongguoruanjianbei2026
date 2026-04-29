@@ -1,4 +1,4 @@
-export type WorkbenchEditorType = 'resource' | 'notes' | 'code' | 'video';
+export type WorkbenchEditorType = 'resource' | 'notes' | 'code' | 'video' | 'external' | 'ai';
 export type WorkbenchPanelType = WorkbenchEditorType;
 
 export interface ResourceReference {

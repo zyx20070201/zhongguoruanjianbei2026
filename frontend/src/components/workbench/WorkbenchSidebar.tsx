@@ -65,6 +65,27 @@ const normalizePath = (value?: string) => {
   return `/${value.replace(/^\/+|\/+$/g, '')}`;
 };
 
+const getPathSegments = (value: string) => normalizePath(value).split('/').filter(Boolean);
+
+const getCommonParentPath = (paths: string[]) => {
+  if (paths.length === 0) return '/';
+
+  const segmentedPaths = paths.map((path) => getPathSegments(path));
+  const shortestLength = Math.min(...segmentedPaths.map((segments) => segments.length));
+  const sharedSegments: string[] = [];
+
+  for (let index = 0; index < shortestLength; index += 1) {
+    const candidate = segmentedPaths[0][index];
+    if (segmentedPaths.every((segments) => segments[index] === candidate)) {
+      sharedSegments.push(candidate);
+    } else {
+      break;
+    }
+  }
+
+  return sharedSegments.length > 0 ? `/${sharedSegments.join('/')}` : '/';
+};
+
 const getParentPath = (path: string) => {
   if (path === '/') return null;
   const normalized = normalizePath(path);
@@ -143,13 +164,35 @@ export default function WorkbenchSidebar({
   const [openEditorsHeight, setOpenEditorsHeight] = useState(220);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchTreeExpanded, setSearchTreeExpanded] = useState<Record<string, boolean>>({});
-  const [searchScopePath, setSearchScopePath] = useState(() => normalizePath(workbenchRootPath));
-
   const normalizedWorkbenchRootPath = normalizePath(workbenchRootPath);
+  const fallbackScopePath = useMemo(() => {
+    const openResourcePaths = editors
+      .map((editor) => resources.find((resource) => resource.id === editor.resourceId)?.path)
+      .filter((path): path is string => Boolean(path))
+      .map((path) => normalizePath(path));
+
+    if (openResourcePaths.length === 0) {
+      return normalizedWorkbenchRootPath;
+    }
+
+    const hasResourceInWorkbenchRoot = openResourcePaths.some(
+      (path) =>
+        normalizedWorkbenchRootPath === '/' ||
+        path === normalizedWorkbenchRootPath ||
+        path.startsWith(`${normalizedWorkbenchRootPath}/`)
+    );
+
+    if (hasResourceInWorkbenchRoot) {
+      return normalizedWorkbenchRootPath;
+    }
+
+    return getCommonParentPath(openResourcePaths);
+  }, [editors, normalizedWorkbenchRootPath, resources]);
+  const [searchScopePath, setSearchScopePath] = useState(() => fallbackScopePath);
 
   useEffect(() => {
-    setSearchScopePath(normalizedWorkbenchRootPath);
-  }, [normalizedWorkbenchRootPath]);
+    setSearchScopePath(fallbackScopePath);
+  }, [fallbackScopePath]);
 
   const saveLabel = useMemo(() => {
     switch (saveStatus) {
@@ -353,7 +396,7 @@ export default function WorkbenchSidebar({
       <div className="min-h-0 flex-1 overflow-hidden">
         <FileSystemSidebar
           workspaceId={workspaceId}
-          initialPath={workbenchRootPath}
+          initialPath={fallbackScopePath}
           title="Explorer"
           embedded
           hideHeader
@@ -412,6 +455,12 @@ export default function WorkbenchSidebar({
         <div className="mb-3 text-xs text-[var(--wb-text-dim)]">
           Default workbench scope: <span className="text-[var(--wb-text)]">{normalizedWorkbenchRootPath}</span>
         </div>
+        {fallbackScopePath !== normalizedWorkbenchRootPath && (
+          <div className="mb-3 rounded border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+            Open files are currently outside the workbench root, so Explorer is showing{' '}
+            <span className="font-medium">{fallbackScopePath}</span>.
+          </div>
+        )}
 
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--wb-text-dim)]" />

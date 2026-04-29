@@ -69,6 +69,7 @@ const flattenResources = (nodes: FileSystemObject[]): ResourceReference[] => {
 const getEditorTypeForResource = (resource: ResourceReference): WorkbenchEditorType => {
   const kind = getResourceKind(resource);
   if (kind === 'video') return 'video';
+  if (kind === 'html') return 'resource';
   if (kind === 'markdown' || kind === 'note') return 'notes';
   if (kind === 'code' || kind === 'structured') return 'code';
   return 'resource';
@@ -192,11 +193,27 @@ function WorkbenchPageContent() {
         ?.viewState?.externalResource ?? null
     ) as { title: string; url: string; description?: string } | null;
   }, [activeEditor, state?.editors]);
+  const preferredFileEditor = useMemo(() => {
+    if (!state?.editors?.length) return null;
+
+    const candidates = state.editors.filter((editor) => editor.resourceId);
+    if (candidates.length === 0) return null;
+
+    if (activeEditor?.resourceId) {
+      return activeEditor;
+    }
+
+    return [...candidates].sort((left, right) => right.zIndex - left.zIndex)[0] ?? null;
+  }, [activeEditor, state?.editors]);
   const activeFileContext = useMemo(() => {
-    if (!activeEditor?.resourceId) return null;
-    const resource = resourceMap.get(activeEditor.resourceId);
+    if (!preferredFileEditor?.resourceId) return null;
+    const resource = resourceMap.get(preferredFileEditor.resourceId);
     return resource ? { name: resource.name, path: resource.path } : null;
-  }, [activeEditor, resourceMap]);
+  }, [preferredFileEditor, resourceMap]);
+  const activeFileContent = useMemo(() => {
+    if (!preferredFileEditor?.resourceId) return null;
+    return documentStateByResourceId[preferredFileEditor.resourceId]?.content ?? null;
+  }, [documentStateByResourceId, preferredFileEditor]);
   const commandPaletteItems = useMemo<CommandPaletteItem[]>(
     () => [
       {
@@ -973,7 +990,10 @@ function WorkbenchPageContent() {
               });
             }}
             aiContext={{
+              workbenchTitle: workbench.title,
+              workbenchDescription: workbench.description,
               activeFile: activeFileContext,
+              activeFileContent,
               activeExternal: activeExternalContext
             }}
           />

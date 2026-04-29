@@ -14,6 +14,7 @@ import {
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { EditorState, ResourceReference } from '../../types';
 import { FilePreviewInfo, fileSystemApi } from '../../services/fileSystemApi';
+import { aiApi, AiChatMessage } from '../../services/aiApi';
 import MarkdownPreview from './MarkdownPreview';
 import SyntaxHighlightedCode from './SyntaxHighlightedCode';
 import {
@@ -36,7 +37,10 @@ interface WorkbenchEditorContentProps {
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
   onBindResource: (editorId: string) => void;
   aiContext?: {
+    workbenchTitle?: string;
+    workbenchDescription?: string;
     activeFile?: { name: string; path: string } | null;
+    activeFileContent?: string | null;
     activeExternal?: { title: string; url: string; description?: string } | null;
   };
 }
@@ -163,6 +167,43 @@ function DocumentPreview({
               )}
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HtmlVisualizationPreview({
+  resource,
+  workspaceId
+}: {
+  resource: ResourceReference;
+  workspaceId: string;
+}) {
+  const previewUrl = fileSystemApi.downloadUrl(workspaceId, resource.id);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--wb-editor)]">
+      <div className="flex items-center justify-between border-b border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-2.5">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-[var(--wb-text)]">{resource.name}</div>
+          <div className="truncate text-xs text-[var(--wb-text-dim)]">
+            Interactive visualization
+          </div>
+        </div>
+        <a
+          href={previewUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 rounded border border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] px-3 py-1.5 text-xs text-[var(--wb-text)] hover:bg-white/5"
+        >
+          <ArrowUpRight className="h-3.5 w-3.5" />
+          Open Fullscreen
+        </a>
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden p-3">
+        <div className="h-full overflow-hidden rounded border border-[var(--wb-border)] bg-white shadow-sm">
+          <iframe title={resource.name} src={previewUrl} className="h-full w-full bg-white" />
         </div>
       </div>
     </div>
@@ -384,6 +425,8 @@ function AiEditorView({
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
 }) {
   const [input, setInput] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const messages = useMemo(
     () =>
       Array.isArray(editor.viewState?.messages) && editor.viewState.messages.length > 0
@@ -398,27 +441,57 @@ function AiEditorView({
     [editor.viewState?.messages]
   );
 
-  const handleSend = () => {
-    if (!input.trim()) return;
+  const handleSend = async () => {
+    const trimmedInput = input.trim();
+    if (!trimmedInput || isSending) return;
 
-    const userMessage = { role: 'user', content: input.trim() };
-    const contextLines = [
-      aiContext?.activeExternal
-        ? `External: ${aiContext.activeExternal.title} (${aiContext.activeExternal.url})`
-        : null,
-      aiContext?.activeFile ? `File: ${aiContext.activeFile.path}` : null
-    ].filter(Boolean);
-    const assistantMessage = {
-      role: 'assistant',
-      content: contextLines.length
-        ? `I will use the current workbench context for this task.\n${contextLines.join('\n')}`
-        : 'I can help with the current workbench task. Open a file or external resource to give me more context.'
-    };
+    const previousMessages = [...messages] as AiChatMessage[];
+    const nextMessages: AiChatMessage[] = [
+      ...previousMessages,
+      { role: 'user', content: trimmedInput }
+    ];
 
-    onUpdateViewState?.(editor.id, {
-      messages: [...messages, userMessage, assistantMessage]
-    });
+    onUpdateViewState?.(editor.id, { messages: nextMessages });
     setInput('');
+    setError(null);
+    setIsSending(true);
+
+    try {
+      const response = await aiApi.chat({
+        messages: nextMessages,
+        context: {
+          workbenchTitle: aiContext?.workbenchTitle,
+          workbenchDescription: aiContext?.workbenchDescription,
+          activeFile: aiContext?.activeFile
+            ? {
+                ...aiContext.activeFile,
+                content: aiContext.activeFileContent || undefined
+              }
+            : null,
+          activeExternal: aiContext?.activeExternal || null
+        }
+      });
+
+      onUpdateViewState?.(editor.id, {
+        messages: [
+          ...nextMessages,
+          {
+            role: 'assistant',
+            content: response.reply
+          }
+        ],
+        lastModel: response.model || 'deepseek-chat'
+      });
+    } catch (sendError: any) {
+      const message =
+        sendError?.response?.data?.error ||
+        sendError?.message ||
+        'AI request failed. Please check the backend configuration.';
+      setError(message);
+      onUpdateViewState?.(editor.id, { messages: previousMessages });
+    } finally {
+      setIsSending(false);
+    }
   };
 
   return (
@@ -430,12 +503,12 @@ function AiEditorView({
             <div className="min-w-0">
               <div className="truncate text-sm font-medium text-[var(--wb-text)]">{editor.title}</div>
               <div className="truncate text-xs text-[var(--wb-text-dim)]">
-                Scoped to the current workbench context
+                DeepSeek chat scoped to the current workbench context
               </div>
             </div>
           </div>
           <div className="rounded-sm bg-[rgba(90,166,255,0.14)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--wb-accent)]">
-            AI
+            {isSending ? 'Thinking' : 'DeepSeek'}
           </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
@@ -450,6 +523,11 @@ function AiEditorView({
             </span>
           )}
         </div>
+        {error && (
+          <div className="mt-3 rounded border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+            {error}
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto bg-[var(--wb-editor)] px-5 py-4">
@@ -480,9 +558,15 @@ function AiEditorView({
             </button>
             <button
               onClick={() => setInput('Compare the open file with the current external resource')}
-                className="rounded-full border border-[var(--wb-border)] px-3 py-1 text-xs font-medium text-[var(--wb-text-muted)] hover:bg-white/5"
+              className="rounded-full border border-[var(--wb-border)] px-3 py-1 text-xs font-medium text-[var(--wb-text-muted)] hover:bg-white/5"
             >
               Compare file and reference
+            </button>
+            <button
+              onClick={() => setInput('请结合当前文件内容，讲解这段代码或知识点的核心思路、复杂度和常见考点')}
+              className="rounded-full border border-[var(--wb-border)] px-3 py-1 text-xs font-medium text-[var(--wb-text-muted)] hover:bg-white/5"
+            >
+              Explain current file
             </button>
           </div>
           <div className="flex items-end gap-3 rounded border border-[var(--wb-border)] bg-[var(--wb-editor)] p-3 shadow-sm">
@@ -492,16 +576,18 @@ function AiEditorView({
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey) {
                   event.preventDefault();
-                  handleSend();
+                  void handleSend();
                 }
               }}
               rows={2}
               placeholder="Ask AI to work with the current file and external context..."
+              disabled={isSending}
               className="min-h-[52px] flex-1 resize-none border-0 bg-transparent text-sm text-[var(--wb-text)] outline-none"
             />
             <button
-              onClick={handleSend}
-              className="inline-flex h-10 w-10 items-center justify-center rounded bg-[var(--wb-accent)] text-[#08111c] transition hover:brightness-110"
+              onClick={() => void handleSend()}
+              disabled={isSending || !input.trim()}
+              className="inline-flex h-10 w-10 items-center justify-center rounded bg-[var(--wb-accent)] text-[#08111c] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               title="Send"
             >
               <Send className="h-4 w-4" />
@@ -570,6 +656,10 @@ export default function WorkbenchEditorContent({
   }
 
   const resourceKind = getResourceKind(resource);
+
+  if (resourceKind === 'html') {
+    return <HtmlVisualizationPreview resource={resource} workspaceId={workspaceId} />;
+  }
 
   if (editor.type === 'video' || resourceKind === 'video') {
     return (

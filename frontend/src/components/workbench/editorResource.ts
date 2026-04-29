@@ -25,7 +25,6 @@ const CODE_EXTENSIONS = new Set([
   'sh',
   'bash',
   'zsh',
-  'html',
   'css',
   'scss',
   'less'
@@ -45,6 +44,7 @@ const CONVERTIBLE_DOCUMENT_EXTENSIONS = new Set([
 ]);
 
 export type EditorResourceKind =
+  | 'html'
   | 'markdown'
   | 'note'
   | 'code'
@@ -64,6 +64,7 @@ export const getLanguageLabel = (resource: ResourceReference | null | undefined)
   const extension = getResourceExtension(resource);
 
   const labels: Record<string, string> = {
+    html: 'HTML Demo',
     md: 'Markdown',
     markdown: 'Markdown',
     txt: 'Text',
@@ -77,7 +78,6 @@ export const getLanguageLabel = (resource: ResourceReference | null | undefined)
     c: 'C',
     h: 'C Header',
     hpp: 'C++ Header',
-    html: 'HTML',
     css: 'CSS',
     scss: 'SCSS',
     less: 'LESS',
@@ -104,6 +104,8 @@ export const getResourceKind = (
   const type = resource.type.toLowerCase();
   const fileCategory = resource.fileCategory?.toLowerCase() || '';
 
+  if (extension === 'html') return 'html';
+
   if (fileCategory.includes('note') || NOTE_EXTENSIONS.has(extension)) {
     return extension === 'md' || extension === 'markdown' ? 'markdown' : 'note';
   }
@@ -123,7 +125,13 @@ export const getResourceKind = (
 
 export const canEditResource = (resource: ResourceReference | null | undefined) => {
   const kind = getResourceKind(resource);
-  return kind === 'markdown' || kind === 'note' || kind === 'code' || kind === 'structured';
+  return (
+    kind === 'html' ||
+    kind === 'markdown' ||
+    kind === 'note' ||
+    kind === 'code' ||
+    kind === 'structured'
+  );
 };
 
 export const isMarkdownResource = (resource: ResourceReference | null | undefined) =>
