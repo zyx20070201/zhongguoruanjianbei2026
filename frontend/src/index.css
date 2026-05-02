@@ -7,35 +7,35 @@
   font-family: 'Segoe UI', 'SF Pro Text', system-ui, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #16202d;
-  background-color: #f4f8fc;
-  --app-bg: #f4f8fc;
-  --app-bg-elevated: #edf3f9;
+  color: #202124;
+  background-color: #fbfbfa;
+  --app-bg: #fbfbfa;
+  --app-bg-elevated: #f7f7f5;
   --app-surface: rgba(255, 255, 255, 0.92);
   --app-surface-strong: #ffffff;
-  --app-border: #d6e0eb;
-  --app-text: #16202d;
-  --app-muted: #64748b;
-  --app-accent: #2d6cdf;
-  --app-accent-soft: rgba(45, 108, 223, 0.12);
-  --app-hover: rgba(148, 163, 184, 0.12);
-  --wb-bg: #edf3f8;
-  --wb-titlebar: #f8fbff;
-  --wb-activitybar: #e7eef6;
-  --wb-sidebar: #f4f8fc;
-  --wb-sidebar-alt: #e9f0f7;
-  --wb-border: #cfdae6;
+  --app-border: #deded9;
+  --app-text: #202124;
+  --app-muted: #777b80;
+  --app-accent: #1683ff;
+  --app-accent-soft: rgba(22, 131, 255, 0.1);
+  --app-hover: rgba(0, 0, 0, 0.05);
+  --wb-bg: #fbfbfa;
+  --wb-titlebar: #f6f6f4;
+  --wb-activitybar: #eeeeec;
+  --wb-sidebar: #f6f6f4;
+  --wb-sidebar-alt: #eeeeec;
+  --wb-border: #deded9;
   --wb-panel: #ffffff;
-  --wb-editor: #f8fbff;
-  --wb-tab: #edf3fa;
+  --wb-editor: #fbfbfa;
+  --wb-tab: #f1f1ef;
   --wb-tab-active: #ffffff;
-  --wb-tab-hover: #e4edf7;
-  --wb-text: #16202d;
-  --wb-text-muted: #5f7085;
-  --wb-text-dim: #8191a4;
-  --wb-accent: #2d6cdf;
-  --wb-accent-soft: rgba(45, 108, 223, 0.12);
-  --wb-status: #2d6cdf;
+  --wb-tab-hover: #e8e8e4;
+  --wb-text: #202124;
+  --wb-text-muted: #777b80;
+  --wb-text-dim: #96999d;
+  --wb-accent: #1683ff;
+  --wb-accent-soft: rgba(22, 131, 255, 0.1);
+  --wb-status: #1683ff;
   --wb-status-text: #ffffff;
 }
 
@@ -94,4 +94,116 @@ body {
 ::selection {
   background: rgba(90, 166, 255, 0.35);
   color: #ffffff;
+}
+
+@keyframes workspace-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes workspace-slide-right {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes workspace-soft-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.workspace-sidebar {
+  animation: workspace-slide-right 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.workspace-main,
+.workspace-terminal,
+.workspace-hero {
+  animation: workspace-fade-up 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.workspace-files-panel {
+  animation: workspace-slide-right 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: right center;
+}
+
+.workspace-composer,
+.workspace-card-in {
+  animation: workspace-soft-scale 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.workspace-message,
+.workspace-suggestion {
+  animation: workspace-fade-up 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.workspace-nav-item,
+.workspace-list-item,
+.workspace-suggestion,
+.workspace-composer,
+.workspace-files-panel,
+.workspace-sidebar button,
+.workspace-main button {
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.workspace-nav-item:hover,
+.workspace-list-item:hover,
+.workspace-suggestion:hover {
+  transform: translateY(-1px);
+}
+
+.workspace-sidebar button:active,
+.workspace-main button:active,
+.workspace-suggestion:active {
+  transform: scale(0.985);
+}
+
+.workspace-composer:focus-within {
+  transform: translateY(-1px);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-sidebar,
+  .workspace-main,
+  .workspace-terminal,
+  .workspace-hero,
+  .workspace-files-panel,
+  .workspace-composer,
+  .workspace-card-in,
+  .workspace-message,
+  .workspace-suggestion {
+    animation: none;
+  }
+
+  .workspace-nav-item,
+  .workspace-list-item,
+  .workspace-suggestion,
+  .workspace-composer,
+  .workspace-files-panel,
+  .workspace-sidebar button,
+  .workspace-main button {
+    transition: none;
+  }
 }

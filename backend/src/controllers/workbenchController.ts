@@ -8,10 +8,13 @@ const getSingleParam = (value: string | string[] | undefined | null): string => 
 };
 
 export const createWorkbench = async (req: Request, res: Response) => {
-  const { name, layout, workspaceId } = req.body;
+  const { name, title, description, layout, workspaceId } = req.body;
+  const resolvedTitle = title || name || 'Untitled Workbench';
   const workbench = await prisma.workbench.create({
     data: {
-      name,
+      name: resolvedTitle,
+      title: resolvedTitle,
+      description: description || '',
       layout,
       workspaceId
     }
@@ -62,12 +65,14 @@ export const createPanel = async (req: Request, res: Response) => {
 
 export const updateWorkbench = async (req: Request, res: Response) => {
   const id = getSingleParam(req.params.id);
-  const { name, layout } = req.body;
+  const { name, title, description, layout } = req.body;
+  const resolvedTitle = title || name;
   try {
     const workbench = await prisma.workbench.update({
       where: { id },
       data: {
-        name,
+        ...(resolvedTitle ? { name: resolvedTitle, title: resolvedTitle } : {}),
+        ...(description !== undefined ? { description } : {}),
         layout,
       },
     });
@@ -82,6 +87,12 @@ export const deleteWorkbench = async (req: Request, res: Response) => {
   try {
     // Delete panels first to avoid foreign key constraints
     await prisma.panel.deleteMany({
+      where: { workbenchId: id }
+    });
+    await prisma.learningEvent.deleteMany({
+      where: { workbenchId: id }
+    });
+    await prisma.learningTrace.deleteMany({
       where: { workbenchId: id }
     });
     await prisma.workbench.delete({

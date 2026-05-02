@@ -188,6 +188,32 @@ export interface WorkbenchItem {
   description?: string;
 }
 
+export interface LearningGoalDraft {
+  title: string;
+  goalText: string;
+  skills: string[];
+  weaknesses: string[];
+  suggestedMode: 'quick-start' | 'project' | 'review';
+}
+
+export interface LearningTerminalMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  goalDraft?: LearningGoalDraft;
+}
+
+export interface LearningTerminalAction {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+export interface LearningTerminalResponse {
+  reply: string;
+  goalDraft?: LearningGoalDraft;
+  suggestedActions?: LearningTerminalAction[];
+}
+
 export interface ContinueLearningItem {
   id: string;
   workspaceId: string;

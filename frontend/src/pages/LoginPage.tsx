@@ -69,46 +69,19 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-full flex-1 bg-[radial-gradient(circle_at_top,_rgba(90,166,255,0.18),_transparent_38%),linear-gradient(180deg,var(--app-bg)_0%,var(--app-bg)_45%,var(--app-bg-elevated)_100%)]">
-      <div className="mx-auto flex w-full max-w-6xl flex-1 items-center px-6 py-10 lg:px-10">
-        <div className="grid w-full gap-8 lg:grid-cols-[1.1fr_0.9fr]">
-          <section className="relative flex flex-col justify-center rounded-[2rem] border border-[var(--app-border)] bg-[var(--app-surface)] p-8 shadow-[0_30px_80px_rgba(15,23,42,0.10)] backdrop-blur md:p-12">
-            <div className="absolute right-6 top-6">
-              <ThemeToggle />
-            </div>
-            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--app-border)] bg-[var(--app-accent-soft)] px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--app-accent)]">
-              Study Workspace
-            </div>
-            <h1 className="mt-6 max-w-xl text-4xl font-semibold tracking-tight text-[var(--app-text)] md:text-5xl">
-              Sign in to keep your courses, files and workbenches in sync.
-            </h1>
-            <p className="mt-5 max-w-2xl text-base leading-8 text-[var(--app-muted)]">
-              Use your email and password to manage learning workspaces, continue recent tasks,
-              and open the same study context across dashboard, workspace and workbench pages.
-            </p>
-            <div className="mt-10 grid gap-4 sm:grid-cols-3">
-              <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-strong)] p-4 shadow-sm">
-                <div className="text-sm font-semibold text-[var(--app-text)]">Email Login</div>
-                <div className="mt-2 text-sm leading-6 text-[var(--app-muted)]">
-                  Sign in with email or username plus password.
-                </div>
-              </div>
-              <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-strong)] p-4 shadow-sm">
-                <div className="text-sm font-semibold text-[var(--app-text)]">Workspace Memory</div>
-                <div className="mt-2 text-sm leading-6 text-[var(--app-muted)]">
-                  Your recent workspaces stay available after refresh.
-                </div>
-              </div>
-              <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-strong)] p-4 shadow-sm">
-                <div className="text-sm font-semibold text-[var(--app-text)]">Workbench Continuity</div>
-                <div className="mt-2 text-sm leading-6 text-[var(--app-muted)]">
-                  Jump back into resource previews and notes without losing state.
-                </div>
-              </div>
-            </div>
-          </section>
+    <div className="workspace-shell flex min-h-full flex-1 bg-[#fbfbfa] text-[#202124]">
+      <div className="absolute right-6 top-5">
+        <ThemeToggle />
+      </div>
+      <div className="workspace-main mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center px-6 py-10">
+        <div className="workspace-hero mb-10 text-center">
+          <p className="mb-4 text-sm font-medium text-[#777b80]">AI Learning Workspace</p>
+          <h1 className="text-4xl font-semibold tracking-normal text-[#202124] md:text-5xl">
+            Ready when you are.
+          </h1>
+        </div>
 
-          <section className="rounded-[2rem] border border-[var(--app-border)] bg-[var(--app-surface-strong)] p-6 shadow-[0_24px_70px_rgba(15,23,42,0.10)] md:p-8">
+        <div className="workspace-composer w-full max-w-md rounded-[28px] border border-[#deded9] bg-white p-6 shadow-[0_24px_70px_rgba(0,0,0,0.10)]">
             <div className="flex rounded-2xl bg-[var(--app-bg-elevated)] p-1">
               <button
                 type="button"
@@ -144,18 +117,13 @@ export default function LoginPage() {
               <h2 className="text-2xl font-semibold text-[var(--app-text)]">
                 {mode === 'login' ? 'Welcome back' : 'Create your account'}
               </h2>
-              <p className="mt-2 text-sm text-[var(--app-muted)]">
-                {mode === 'login'
-                  ? 'Use your email or username and password to continue.'
-                  : 'Register with username, email and password.'}
-              </p>
             </div>
 
             <form onSubmit={handleSubmit} className="mt-8 space-y-4">
               {mode === 'register' && (
                 <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-[var(--app-text)]">Username</span>
-                  <div className="flex items-center rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-strong)] px-4 shadow-sm focus-within:border-[var(--app-accent)] focus-within:ring-4 focus-within:ring-[var(--app-accent-soft)]">
+                <span className="mb-2 block text-sm font-medium text-[var(--app-text)]">Username</span>
+                  <div className="flex items-center rounded-2xl border border-[#deded9] bg-white px-4 shadow-sm transition focus-within:border-[#c8c8c2]">
                     <UserRound className="h-4 w-4 text-[var(--app-muted)]" />
                     <input
                       type="text"
@@ -173,7 +141,7 @@ export default function LoginPage() {
                 <span className="mb-2 block text-sm font-medium text-[var(--app-text)]">
                   {mode === 'login' ? 'Email or Username' : 'Email'}
                 </span>
-                <div className="flex items-center rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-strong)] px-4 shadow-sm focus-within:border-[var(--app-accent)] focus-within:ring-4 focus-within:ring-[var(--app-accent-soft)]">
+                <div className="flex items-center rounded-2xl border border-[#deded9] bg-white px-4 shadow-sm transition focus-within:border-[#c8c8c2]">
                   <Mail className="h-4 w-4 text-[var(--app-muted)]" />
                   <input
                     type={mode === 'login' ? 'text' : 'email'}
@@ -192,7 +160,7 @@ export default function LoginPage() {
 
               <label className="block">
                 <span className="mb-2 block text-sm font-medium text-[var(--app-text)]">Password</span>
-                <div className="flex items-center rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-strong)] px-4 shadow-sm focus-within:border-[var(--app-accent)] focus-within:ring-4 focus-within:ring-[var(--app-accent-soft)]">
+                <div className="flex items-center rounded-2xl border border-[#deded9] bg-white px-4 shadow-sm transition focus-within:border-[#c8c8c2]">
                   <KeyRound className="h-4 w-4 text-[var(--app-muted)]" />
                   <input
                     type="password"
@@ -208,7 +176,7 @@ export default function LoginPage() {
               {mode === 'register' && (
                 <label className="block">
                   <span className="mb-2 block text-sm font-medium text-[var(--app-text)]">Confirm Password</span>
-                  <div className="flex items-center rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-strong)] px-4 shadow-sm focus-within:border-[var(--app-accent)] focus-within:ring-4 focus-within:ring-[var(--app-accent-soft)]">
+                  <div className="flex items-center rounded-2xl border border-[#deded9] bg-white px-4 shadow-sm transition focus-within:border-[#c8c8c2]">
                     <KeyRound className="h-4 w-4 text-[var(--app-muted)]" />
                     <input
                       type="password"
@@ -231,13 +199,12 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[var(--app-accent)] px-5 py-3.5 text-sm font-medium text-white transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#202124] px-5 py-3.5 text-sm font-medium text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <span>{loading ? 'Please wait...' : mode === 'login' ? 'Login' : 'Create Account'}</span>
                 {!loading && <ArrowRight className="h-4 w-4" />}
               </button>
             </form>
-          </section>
         </div>
       </div>
     </div>

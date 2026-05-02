@@ -18,6 +18,7 @@ import {
 } from '../utils/path';
 import { LocalStorageService } from './storage/localStorageService';
 import { inferFileCategory, isTextLikeFile } from './fileTypeService';
+import { knowledgeIndexingService } from './knowledgeIndexingService';
 
 const CJK_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
 const SUSPICIOUS_LATIN1_PATTERN = /[À-ÿ]/;
@@ -76,7 +77,48 @@ const mapFileSystemObject = (node: any) => ({
   tags: parseStoredTags(node.tags)
 });
 
+const INDEXABLE_EXTENSIONS = new Set([
+  'pdf',
+  'docx',
+  'md',
+  'markdown',
+  'txt',
+  'csv',
+  'json',
+  'yaml',
+  'yml',
+  'xml',
+  'html',
+  'css',
+  'js',
+  'ts',
+  'tsx',
+  'jsx',
+  'py',
+  'java',
+  'cpp',
+  'c',
+  'go',
+  'rs',
+  'sql'
+]);
+
 export class FileSystemService {
+  private static async indexFileForKnowledge(node: any) {
+    const extension = (node.extension || getExtension(node.name)).toLowerCase();
+    const shouldIndex =
+      node?.nodeType === 'file' &&
+      (isTextLikeFile(node) || INDEXABLE_EXTENSIONS.has(extension) || node.fileCategory === 'generated');
+
+    if (!shouldIndex) return;
+
+    await knowledgeIndexingService.indexFile({
+      workspaceId: node.workspaceId,
+      fileObjectId: node.id,
+      reason: node.fileCategory === 'generated' ? 'generated-resource' : 'workspace-file'
+    });
+  }
+
   private static async repairNormalizedNames(workspaceId: string) {
     const nodes = await prisma.fileSystemObject.findMany({
       where: { workspaceId },
@@ -187,7 +229,7 @@ export class FileSystemService {
       size = storage.size;
     }
 
-    return prisma.fileSystemObject.create({
+    const created = await prisma.fileSystemObject.create({
       data: {
         name,
         nodeType: 'file',
@@ -201,7 +243,9 @@ export class FileSystemService {
         workspaceId,
         parentId
       }
-    }).then((node) => mapFileSystemObject(node));
+    });
+    await FileSystemService.indexFileForKnowledge(created);
+    return mapFileSystemObject(created);
   }
 
   static async handleUploadedFile(
@@ -228,7 +272,7 @@ export class FileSystemService {
       fileCategory: inferredCategory
     });
 
-    return prisma.fileSystemObject.create({
+    const created = await prisma.fileSystemObject.create({
       data: {
         name: normalizedName,
         nodeType: 'file',
@@ -243,7 +287,9 @@ export class FileSystemService {
         workspaceId,
         parentId
       }
-    }).then((node) => mapFileSystemObject(node));
+    });
+    await FileSystemService.indexFileForKnowledge(created);
+    return mapFileSystemObject(created);
   }
 
   static async renameNode(dto: RenameNodeDTO) {
@@ -351,7 +397,7 @@ export class FileSystemService {
     });
     if (!node) throw new FileSystemError(404, 'Node not found');
 
-    const objectsToDelete = [];
+    const objectsToDelete: any[] = [];
     if (node.nodeType === 'folder') {
       const descendants = await prisma.fileSystemObject.findMany({
         where: { workspaceId, path: { startsWith: `${node.path}/` } }
@@ -362,6 +408,19 @@ export class FileSystemService {
     }
 
     const result = await prisma.$transaction(async (tx: any) => {
+      await tx.knowledgeChunk.deleteMany({
+        where: {
+          workspaceId,
+          fileObjectId: { in: objectsToDelete.map((object: any) => object.id) }
+        }
+      });
+      await tx.knowledgeIndexJob.deleteMany({
+        where: {
+          workspaceId,
+          fileObjectId: { in: objectsToDelete.map((object: any) => object.id) }
+        }
+      });
+
       if (node.nodeType === 'folder') {
         await tx.fileSystemObject.deleteMany({
           where: {
@@ -510,10 +569,12 @@ export class FileSystemService {
 
     const { storageKey, size } = await LocalStorageService.saveTextFile(content, file.storageKey || undefined);
 
-    return prisma.fileSystemObject.update({
+    const updated = await prisma.fileSystemObject.update({
       where: { id },
       data: { content, storageKey, size, isBinary: false }
-    }).then((node) => mapFileSystemObject(node));
+    });
+    await FileSystemService.indexFileForKnowledge(updated);
+    return mapFileSystemObject(updated);
   }
 
   static async saveGeneratedContent(dto: SaveGeneratedContentDTO) {
@@ -566,7 +627,7 @@ export class FileSystemService {
 
     const { storageKey, size } = await LocalStorageService.saveTextFile(content);
 
-    return prisma.fileSystemObject.create({
+    const created = await prisma.fileSystemObject.create({
       data: {
         name: finalFilename,
         nodeType: 'file',
@@ -580,7 +641,9 @@ export class FileSystemService {
         workspaceId,
         parentId: folder.id
       }
-    }).then((node) => mapFileSystemObject(node));
+    });
+    await FileSystemService.indexFileForKnowledge(created);
+    return mapFileSystemObject(created);
   }
 
   static async updateNodeTags(dto: UpdateNodeTagsDTO) {

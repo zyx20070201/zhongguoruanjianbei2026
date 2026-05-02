@@ -57,7 +57,8 @@ interface WorkbenchEditorProps {
   aiContext?: {
     workbenchTitle?: string;
     workbenchDescription?: string;
-    activeFile?: { name: string; path: string } | null;
+    workbenchId?: string;
+    activeFile?: { id?: string; name: string; path: string } | null;
     activeFileContent?: string | null;
     activeExternal?: { title: string; url: string; description?: string } | null;
   };
@@ -141,26 +142,28 @@ function EditorTab({
       ref={(element) => {
         drag(element);
       }}
-      className={`group flex min-w-[160px] max-w-[280px] items-center border-r border-[var(--wb-border)] ${
-        isActive ? 'bg-[var(--wb-tab-active)]' : 'bg-[var(--wb-tab)]'
+      className={`group my-1 flex min-w-[150px] max-w-[280px] items-center rounded-xl border transition-all duration-200 ${
+        isActive
+          ? 'border-[#e5e5e1] bg-white shadow-sm'
+          : 'border-transparent bg-transparent hover:bg-[#f1f1ef]'
       } ${isDragging ? 'opacity-50' : ''}`}
     >
       <button
         onClick={onActivate}
-        className="flex min-w-0 flex-1 cursor-grab items-center gap-2 px-3 py-2 text-left text-sm active:cursor-grabbing hover:bg-[var(--wb-tab-hover)]"
+        className="flex min-w-0 flex-1 cursor-grab items-center gap-2 px-3 py-2 text-left text-sm active:cursor-grabbing"
       >
-        <span className={`truncate ${isActive ? 'text-[var(--wb-text)]' : 'text-[var(--wb-text-muted)]'}`}>
+        <span className={`truncate ${isActive ? 'text-[#25272b]' : 'text-[#777a80]'}`}>
           {editor.title}
         </span>
-        {resource && <span className="truncate text-xs text-[var(--wb-text-dim)]">{resource.name}</span>}
-        {isDirty && <span className="text-[10px] font-semibold text-[var(--wb-accent)]">M</span>}
+        {resource && <span className="truncate text-xs text-[#96999d]">{resource.name}</span>}
+        {isDirty && <span className="text-[10px] font-semibold text-[#16833a]">M</span>}
       </button>
       <button
         onClick={(event) => {
           event.stopPropagation();
           onClose();
         }}
-        className="mr-2 rounded p-1 text-[var(--wb-text-dim)] opacity-0 transition-opacity hover:bg-white/5 hover:text-[var(--wb-text)] group-hover:opacity-100"
+        className="mr-2 rounded-full p-1 text-[#96999d] opacity-0 transition-all duration-150 hover:bg-[#ececea] hover:text-[#202124] group-hover:opacity-100"
         title="Close editor"
       >
         <X className="h-3.5 w-3.5" />
@@ -179,7 +182,8 @@ function EditorBreadcrumbs({
   aiContext?: {
     workbenchTitle?: string;
     workbenchDescription?: string;
-    activeFile?: { name: string; path: string } | null;
+    workbenchId?: string;
+    activeFile?: { id?: string; name: string; path: string } | null;
     activeFileContent?: string | null;
     activeExternal?: { title: string; url: string; description?: string } | null;
   };
@@ -187,15 +191,15 @@ function EditorBreadcrumbs({
   const resourceParts = resource?.path.split('/').filter(Boolean) ?? [];
 
   let crumbs = resourceParts;
-  let leadingIcon = <FileText className="h-3.5 w-3.5 text-[var(--wb-accent)]" />;
+  let leadingIcon = <FileText className="h-3.5 w-3.5 text-[#16833a]" />;
   let trailingLabel = resource ? getLanguageLabel(resource) : editor.type;
 
   if (editor.type === 'external') {
-    leadingIcon = <Globe className="h-3.5 w-3.5 text-[var(--wb-accent)]" />;
+    leadingIcon = <Globe className="h-3.5 w-3.5 text-[#16833a]" />;
     crumbs = ['REFERENCES', editor.viewState?.externalResource?.title || editor.title];
     trailingLabel = 'External';
   } else if (editor.type === 'ai') {
-    leadingIcon = <Bot className="h-3.5 w-3.5 text-[var(--wb-accent)]" />;
+    leadingIcon = <Bot className="h-3.5 w-3.5 text-[#16833a]" />;
     crumbs = [
       'AI',
       aiContext?.activeFile?.name || aiContext?.activeExternal?.title || editor.title || 'Conversation'
@@ -206,15 +210,15 @@ function EditorBreadcrumbs({
   }
 
   return (
-    <div className="flex h-7 items-center gap-1 border-b border-[var(--wb-border)] bg-[var(--wb-panel)] px-3 text-xs text-[var(--wb-text-dim)]">
+    <div className="flex h-9 items-center gap-1 border-b border-[#eeeeeb] bg-white px-4 text-xs text-[#96999d]">
       <span className="mr-1">{leadingIcon}</span>
       {crumbs.map((crumb, index) => (
         <div key={`${crumb}-${index}`} className="flex items-center gap-1">
-          {index > 0 && <ChevronRight className="h-3 w-3 text-[var(--wb-text-dim)]" />}
+          {index > 0 && <ChevronRight className="h-3 w-3 text-[#c2c3c5]" />}
           <span
             className={
               index === crumbs.length - 1
-                ? 'max-w-[240px] truncate text-[var(--wb-text)]'
+                ? 'max-w-[240px] truncate text-[#34373c]'
                 : 'max-w-[160px] truncate'
             }
           >
@@ -222,7 +226,7 @@ function EditorBreadcrumbs({
           </span>
         </div>
       ))}
-      <span className="ml-auto rounded-sm bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-[var(--wb-text-muted)]">
+      <span className="ml-auto rounded-full bg-[#f1f1ef] px-2 py-0.5 text-[10px] font-medium text-[#777a80]">
         {trailingLabel}
       </span>
     </div>
@@ -272,7 +276,8 @@ function EditorLeafView({
   aiContext?: {
     workbenchTitle?: string;
     workbenchDescription?: string;
-    activeFile?: { name: string; path: string } | null;
+    workbenchId?: string;
+    activeFile?: { id?: string; name: string; path: string } | null;
     activeFileContent?: string | null;
     activeExternal?: { title: string; url: string; description?: string } | null;
   };
@@ -371,13 +376,13 @@ function EditorLeafView({
         paneRef.current = element;
         drop(element);
       }}
-      className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-r border-[var(--wb-border)] last:border-r-0 bg-[var(--wb-editor)]"
+      className="workspace-card-in relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white shadow-sm"
       onMouseDown={() => onActivatePane(normalizedLeaf.id)}
       data-workbench-pane-id={normalizedLeaf.id}
     >
       <DropHint placement={dropPlacement} />
 
-      <div className="flex items-stretch overflow-x-auto border-b border-[var(--wb-border)] bg-[var(--wb-tab)]">
+      <div className="flex items-stretch gap-1 overflow-x-auto border-b border-[#eeeeeb] bg-[#fbfbfa] px-2">
         {leafEditors.map((editor) => {
           const resource = getBoundResource(editor, resources);
           const docState = resource?.id ? documentStateByResourceId[resource.id] : undefined;
@@ -437,7 +442,7 @@ function EditorLeafView({
             </div>
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center bg-[var(--wb-editor)] text-sm text-[var(--wb-text-muted)]">
+          <div className="flex h-full items-center justify-center bg-white text-sm text-[#777a80]">
             Drop a file here to open it in this editor pane.
           </div>
         )}
@@ -475,7 +480,8 @@ function LayoutNodeView(props: {
   aiContext?: {
     workbenchTitle?: string;
     workbenchDescription?: string;
-    activeFile?: { name: string; path: string } | null;
+    workbenchId?: string;
+    activeFile?: { id?: string; name: string; path: string } | null;
     activeFileContent?: string | null;
     activeExternal?: { title: string; url: string; description?: string } | null;
   };
@@ -539,7 +545,7 @@ function LayoutNodeView(props: {
       </div>
 
       <div
-        className={`${isRow ? 'h-full w-px cursor-col-resize' : 'h-px w-full cursor-row-resize'} shrink-0 bg-[var(--wb-border)] hover:bg-[var(--wb-accent)]`}
+        className={`${isRow ? 'h-full w-3 cursor-col-resize' : 'h-3 w-full cursor-row-resize'} shrink-0 bg-[#fbfbfa] transition-colors hover:bg-[#eeeeeb]`}
         onMouseDown={(event) => {
           event.preventDefault();
           const element = containerRef.current;
@@ -681,21 +687,21 @@ export default function WorkbenchEditor({
           rootRef.current = element;
           dropEmptyState(element);
         }}
-        className="relative flex h-full items-center justify-center overflow-hidden bg-[var(--wb-editor)] px-8"
+        className="relative flex h-full items-center justify-center overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white px-8 shadow-sm"
       >
         {isOverEmptyState && canDropEmptyState && <DropHint placement="center" />}
-        <div className="max-w-xl rounded border border-[var(--wb-border)] bg-[var(--wb-panel)] p-8 text-center shadow-sm">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded border border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] text-[var(--wb-text-muted)]">
+        <div className="workspace-soft-scale max-w-xl rounded-3xl border border-[#e5e5e1] bg-white p-8 text-center shadow-sm">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#e5e5e1] bg-[#f6f6f4] text-[#777a80]">
             <Columns2 className="h-6 w-6" />
           </div>
-          <h2 className="text-xl font-semibold text-[var(--wb-text)]">No editors open</h2>
-          <p className="mt-3 text-sm leading-6 text-[var(--wb-text-muted)]">
+          <h2 className="text-xl font-semibold text-[#25272b]">No editors open</h2>
+          <p className="mt-3 text-sm leading-6 text-[#777a80]">
             Open a resource from the explorer or drag a file here to start working.
           </p>
           <div className="mt-5 flex items-center justify-center">
             <button
               onClick={onAddEditor}
-              className="inline-flex items-center gap-2 rounded bg-[var(--wb-accent)] px-4 py-2 text-sm font-medium text-[#08111c] hover:brightness-110"
+              className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-4 py-2 text-sm font-medium text-white transition-all duration-200 hover:bg-[#34373c] active:scale-95"
             >
               <Plus className="h-4 w-4" />
               New Notes Editor
@@ -707,7 +713,7 @@ export default function WorkbenchEditor({
   }
 
   return (
-    <div ref={rootRef} className="flex h-full min-w-0 overflow-hidden bg-[var(--wb-editor)]">
+    <div ref={rootRef} className="flex h-full min-w-0 overflow-hidden bg-[#fbfbfa]">
       <LayoutNodeView
         node={normalizedLayout}
         workspaceId={workspaceId}

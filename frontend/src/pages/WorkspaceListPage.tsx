@@ -3,10 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { workspaceApi } from '../api/client';
 import { fileSystemApi } from '../services/fileSystemApi';
 import { useAuthStore } from '../store/authStore';
-import { Workspace, WorkspaceCardData, ContinueLearningItem, CreateWorkspaceFormData } from '../types';
+import { Workspace, WorkspaceCardData, CreateWorkspaceFormData } from '../types';
 
 import DashboardHeader from '../components/dashboard/DashboardHeader';
-import ContinueLearningSection from '../components/dashboard/ContinueLearningSection';
 import WorkspaceCard from '../components/dashboard/WorkspaceCard';
 import CreateWorkspaceWizard from '../components/dashboard/CreateWorkspaceWizard';
 
@@ -196,20 +195,6 @@ export default function WorkspaceListPage() {
     };
   };
 
-  const getContinueLearningItems = (): ContinueLearningItem[] => {
-    return [...workspaces]
-      .sort((a, b) => new Date(getWorkspaceActivityTime(b)).getTime() - new Date(getWorkspaceActivityTime(a)).getTime())
-      .slice(0, 3)
-      .map((ws) => ({
-        id: `cl-${ws.id}`,
-        workspaceId: ws.id,
-        courseName: ws.name,
-        taskName: `Last used ${ws.name}`,
-        recentContent: `${ws._count?.workbenches || 0} workbenches, ${ws._count?.fileObjects ?? ws.fileObjects?.length ?? 0} files`,
-        updatedAt: formatActivityTime(getWorkspaceActivityTime(ws))
-      }));
-  };
-
   // Filter and sort workspaces
   const processedWorkspaces = workspaces
     .filter(ws => {
@@ -236,17 +221,18 @@ export default function WorkspaceListPage() {
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[var(--app-bg)]">
+      <div className="flex h-screen items-center justify-center bg-[#fbfbfa]">
         <div className="text-center">
-          <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-lg text-[var(--app-muted)]">Loading your learning space...</p>
+          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-[#e2e2de] border-t-[#202124]"></div>
+          <p className="text-sm text-[#777b80]">Loading workspaces...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto min-h-screen max-w-7xl bg-[var(--app-bg)] p-8 text-[var(--app-text)]">
+    <div className="workspace-shell min-h-screen bg-[#fbfbfa] p-6 text-[#202124] md:p-8">
+      <div className="mx-auto max-w-7xl">
       
       <DashboardHeader 
         searchTerm={searchTerm}
@@ -260,45 +246,34 @@ export default function WorkspaceListPage() {
         }}
       />
 
-      <ContinueLearningSection 
-        items={getContinueLearningItems()}
-        onOpenWorkspace={(id) => navigate(`/workspaces/${id}`)}
-      />
-
-      <div className="mb-6 flex justify-between items-center">
-        <h2 className="text-xl font-bold text-gray-800">My Workspaces</h2>
-        <span className="text-sm text-gray-500">{processedWorkspaces.length} courses</span>
+      <div className="workspace-card mb-6 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-[#34373c]">Recent</h2>
+        <span className="text-sm text-[#8a8d91]">{processedWorkspaces.length}</span>
       </div>
 
       {workspaces.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-2xl border border-gray-200 shadow-sm">
-          <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6 text-blue-500">
-            <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
-          </div>
-          <h3 className="text-xl font-bold text-gray-900 mb-2">Create your first course workspace</h3>
-          <p className="text-gray-500 mb-6 max-w-md mx-auto">
-            Import materials and organize a learning space tailored for your specific course needs.
-          </p>
+        <div className="workspace-composer mx-auto max-w-xl rounded-[28px] border border-[#deded9] bg-white px-8 py-12 text-center shadow-[0_24px_70px_rgba(0,0,0,0.08)]">
+          <h3 className="mb-6 text-2xl font-semibold text-[#202124]">Create your first workspace</h3>
           <button 
             onClick={() => setIsWizardOpen(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg font-medium transition-colors inline-flex items-center gap-2"
+            className="inline-flex items-center gap-2 rounded-2xl bg-[#202124] px-5 py-3 text-sm font-medium text-white transition hover:bg-black"
           >
-            <span>+</span> New Workspace
+            <span>+</span> New workspace
           </button>
         </div>
       ) : processedWorkspaces.length === 0 ? (
-        <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
-          <p className="text-gray-500 text-lg mb-4">No workspaces found matching your search.</p>
+        <div className="rounded-2xl border border-dashed border-[#deded9] bg-white py-12 text-center">
+          <p className="mb-4 text-[#777b80]">No matching workspaces.</p>
           <button 
             onClick={() => { setSearchTerm(''); }}
-            className="text-blue-600 hover:text-blue-800 font-medium"
+            className="font-medium text-[#202124] hover:underline"
           >
             Clear search
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-12">
-          {processedWorkspaces.map(ws => (
+        <div className="grid grid-cols-1 gap-5 pb-12 md:grid-cols-2 lg:grid-cols-3">
+          {processedWorkspaces.map((ws, index) => (
             <WorkspaceCard 
               key={ws.id}
               data={getCardData(ws)}
@@ -306,6 +281,7 @@ export default function WorkspaceListPage() {
               onEdit={handleEdit}
               onDuplicate={handleDuplicate}
               onDelete={handleDelete}
+              style={{ animationDelay: `${index * 60}ms` }}
             />
           ))}
         </div>
@@ -323,50 +299,50 @@ export default function WorkspaceListPage() {
           onClick={() => setEditingWorkspace(null)}
         >
           <form
-            className="bg-white rounded-lg shadow-xl border border-gray-200 w-full max-w-lg p-6"
+          className="workspace-composer w-full max-w-lg rounded-[24px] border border-[#deded9] bg-white p-6 shadow-xl"
             onSubmit={handleSaveEdit}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="text-lg font-bold text-gray-900 mb-4">Edit workspace info</h2>
-            <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="workspace-name">
+            <h2 className="mb-4 text-lg font-semibold text-[#202124]">Edit workspace</h2>
+            <label className="mb-1 block text-sm font-medium text-[#34373c]" htmlFor="workspace-name">
               Name
             </label>
             <input
               id="workspace-name"
               value={editForm.name}
               onChange={(e) => setEditForm(form => ({ ...form, name: e.target.value }))}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 mb-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="mb-4 w-full rounded-xl border border-[#deded9] px-3 py-2 text-sm outline-none focus:border-[#c8c8c2]"
               required
             />
-            <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="workspace-major">
+            <label className="mb-1 block text-sm font-medium text-[#34373c]" htmlFor="workspace-major">
               Major
             </label>
             <input
               id="workspace-major"
               value={editForm.major}
               onChange={(e) => setEditForm(form => ({ ...form, major: e.target.value }))}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 mb-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="mb-4 w-full rounded-xl border border-[#deded9] px-3 py-2 text-sm outline-none focus:border-[#c8c8c2]"
             />
-            <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="workspace-description">
+            <label className="mb-1 block text-sm font-medium text-[#34373c]" htmlFor="workspace-description">
               Description
             </label>
             <textarea
               id="workspace-description"
               value={editForm.description}
               onChange={(e) => setEditForm(form => ({ ...form, description: e.target.value }))}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 mb-6 text-sm min-h-28 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="mb-6 min-h-28 w-full rounded-xl border border-[#deded9] px-3 py-2 text-sm outline-none focus:border-[#c8c8c2]"
             />
             <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setEditingWorkspace(null)}
-                className="px-4 py-2 text-sm border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                className="rounded-xl border border-[#deded9] px-4 py-2 text-sm text-[#34373c] hover:bg-[#f6f6f4]"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                className="rounded-xl bg-[#202124] px-4 py-2 text-sm text-white hover:bg-black"
               >
                 Save
               </button>
@@ -374,6 +350,7 @@ export default function WorkspaceListPage() {
           </form>
         </div>
       )}
+      </div>
     </div>
   );
 }

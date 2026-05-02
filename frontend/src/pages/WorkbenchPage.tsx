@@ -1,9 +1,15 @@
-import { Bot, FolderOpen, Search, Sparkles } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { FolderOpen, PanelLeftOpen, Search, Sparkles } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DndProvider, useDragDropManager } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { EditorLayoutNode, FileSystemObject, ResourceReference, WorkbenchEditorType } from '../types';
+import {
+  EditorLayoutNode,
+  FileSystemObject,
+  ResourceReference,
+  Workbench,
+  WorkbenchEditorType
+} from '../types';
 import { fileSystemApi } from '../services/fileSystemApi';
 import { useWorkbenchStore } from '../store/useWorkbenchStore';
 import { workbenchApi } from '../services/workbenchApi';
@@ -75,7 +81,6 @@ const getEditorTypeForResource = (resource: ResourceReference): WorkbenchEditorT
   return 'resource';
 };
 
-type WorkbenchSidebarView = 'files' | 'search' | 'ai';
 type OpenResourceOptions =
   | { kind: 'tab'; paneId?: string | null; bindEditorId?: string | null }
   | { kind: 'split'; paneId: string | null; placement: WorkbenchDropPlacement };
@@ -99,7 +104,6 @@ function WorkbenchPageContent() {
   const dndManager = useDragDropManager();
   const [searchParams, setSearchParams] = useSearchParams();
   const [resourcePickerEditorId, setResourcePickerEditorId] = useState<string | null>(null);
-  const [activeSidebarView, setActiveSidebarView] = useState<WorkbenchSidebarView>('files');
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [pendingCodeOpenRequest, setPendingCodeOpenRequest] = useState<PendingCodeOpenRequest | null>(
@@ -107,6 +111,10 @@ function WorkbenchPageContent() {
   );
   const [commandQuery, setCommandQuery] = useState('');
   const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [isSidebarPinned, setIsSidebarPinned] = useState(false);
+  const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
+  const sidebarPreviewCloseTimer = useRef<number | null>(null);
+  const [workspaceWorkbenches, setWorkspaceWorkbenches] = useState<Workbench[]>([]);
   const [documentStateByResourceId, setDocumentStateByResourceId] = useState<
     Record<string, { content: string; savedContent: string; loading?: boolean }>
   >({});
@@ -138,6 +146,32 @@ function WorkbenchPageContent() {
     reset
   } = useWorkbenchStore();
 
+  const openSidebarPreview = () => {
+    if (sidebarPreviewCloseTimer.current) {
+      window.clearTimeout(sidebarPreviewCloseTimer.current);
+      sidebarPreviewCloseTimer.current = null;
+    }
+    setIsSidebarPreviewOpen(true);
+  };
+
+  const scheduleCloseSidebarPreview = () => {
+    if (sidebarPreviewCloseTimer.current) {
+      window.clearTimeout(sidebarPreviewCloseTimer.current);
+    }
+    sidebarPreviewCloseTimer.current = window.setTimeout(() => {
+      setIsSidebarPreviewOpen(false);
+      sidebarPreviewCloseTimer.current = null;
+    }, 180);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (sidebarPreviewCloseTimer.current) {
+        window.clearTimeout(sidebarPreviewCloseTimer.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     if (!id) return;
 
@@ -158,6 +192,18 @@ function WorkbenchPageContent() {
         console.error('Failed to load workspace resources:', loadError);
       });
   }, [workbench?.workspaceId, setResources]);
+
+  useEffect(() => {
+    if (!workbench?.workspaceId) return;
+
+    void workbenchApi
+      .listByWorkspace(workbench.workspaceId)
+      .then(setWorkspaceWorkbenches)
+      .catch((loadError) => {
+        console.error('Failed to load workspace workbenches:', loadError);
+        setWorkspaceWorkbenches(workbench ? [workbench] : []);
+      });
+  }, [workbench]);
 
   useEffect(() => {
     if (files.length > 0) {
@@ -208,7 +254,7 @@ function WorkbenchPageContent() {
   const activeFileContext = useMemo(() => {
     if (!preferredFileEditor?.resourceId) return null;
     const resource = resourceMap.get(preferredFileEditor.resourceId);
-    return resource ? { name: resource.name, path: resource.path } : null;
+    return resource ? { id: resource.id, name: resource.name, path: resource.path } : null;
   }, [preferredFileEditor, resourceMap]);
   const activeFileContent = useMemo(() => {
     if (!preferredFileEditor?.resourceId) return null;
@@ -217,25 +263,11 @@ function WorkbenchPageContent() {
   const commandPaletteItems = useMemo<CommandPaletteItem[]>(
     () => [
       {
-        id: 'view.explorer',
-        title: 'View: Show Explorer',
-        subtitle: 'Focus the file explorer',
-        icon: FolderOpen,
-        run: () => setActiveSidebarView('files')
-      },
-      {
-        id: 'view.search',
-        title: 'View: Show Search',
-        subtitle: 'Search files from the current workbench scope',
-        icon: Search,
-        run: () => setActiveSidebarView('search')
-      },
-      {
-        id: 'view.ai',
-        title: 'View: Show AI',
-        subtitle: 'Focus the AI workbench view',
-        icon: Bot,
-        run: () => setActiveSidebarView('ai')
+        id: 'view.sidebar',
+        title: 'View: Toggle Sidebar',
+        subtitle: 'Pin or unpin the workbench sidebar',
+        icon: PanelLeftOpen,
+        run: () => setIsSidebarPinned((value) => !value)
       },
       {
         id: 'workbench.new-ai',
@@ -243,7 +275,6 @@ function WorkbenchPageContent() {
         subtitle: 'Create a new AI editor in the current workbench',
         icon: Sparkles,
         run: () => {
-          setActiveSidebarView('ai');
           handleCreateAiPanel();
         }
       },
@@ -628,6 +659,29 @@ function WorkbenchPageContent() {
     }
   };
 
+  const handleUploadResources = () => {
+    if (!workbench?.workspaceId) return;
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = async (event) => {
+      const selectedFiles = Array.from((event.target as HTMLInputElement).files || []);
+      if (selectedFiles.length === 0) return;
+
+      const { parentId, parentPath } = getCreationTarget();
+
+      try {
+        await fileSystemApi.upload(workbench.workspaceId, selectedFiles, parentId, parentPath);
+        const latestTree = await fileSystemApi.getTree(workbench.workspaceId);
+        useFileTreeStore.getState().setFiles(latestTree);
+      } catch (uploadError) {
+        console.error('Failed to upload resources:', uploadError);
+      }
+    };
+    input.click();
+  };
+
   const handleCreateAiPanel = () => {
     addEditor('ai', undefined, {
       messages: [],
@@ -845,13 +899,13 @@ function WorkbenchPageContent() {
 
   if (error) {
     return (
-      <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-slate-50 p-8">
-        <div className="max-w-md rounded-xl border border-red-200 bg-white p-6 text-center shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Unable to load workbench</h2>
-          <p className="mt-2 text-sm text-slate-500">{error}</p>
+      <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-[#fbfbfa] p-8">
+        <div className="workspace-card-in max-w-md rounded-3xl border border-[#e5e5e1] bg-white p-6 text-center shadow-sm">
+          <h2 className="text-lg font-semibold text-[#25272b]">Unable to load workbench</h2>
+          <p className="mt-2 text-sm text-[#777a80]">{error}</p>
           <button
             onClick={() => navigate(-1)}
-            className="mt-4 rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="mt-4 rounded-full border border-[#e5e5e1] bg-white px-4 py-2 text-sm font-medium text-[#34373c] transition-all duration-200 hover:bg-[#f6f6f4] active:scale-95"
           >
             Go Back
           </button>
@@ -862,41 +916,49 @@ function WorkbenchPageContent() {
 
   if (loading || !workbench || !state) {
     return (
-      <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-slate-50">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-blue-400/20 border-t-blue-400" />
+      <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-[#fbfbfa]">
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-[#e5e5e1] border-t-[#202124]" />
       </div>
     );
   }
 
   return (
-    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-slate-50">
+    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#fbfbfa] text-[#202124]">
       <WorkbenchTopBar
         workspaceId={workbench.workspaceId}
         title={workbench.title}
         onRename={handleRename}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        panelCount={state.editors.length}
+        onToggleSidebar={() => setIsSidebarPinned((value) => !value)}
+        onSidebarPreviewStart={() => {
+          if (!isSidebarPinned) openSidebarPreview();
+        }}
+        onSidebarPreviewEnd={() => {
+          if (!isSidebarPinned) scheduleCloseSidebarPreview();
+        }}
+        isSidebarPinned={isSidebarPinned}
+        workbenches={workspaceWorkbenches}
       />
 
       {isCommandPaletteOpen && (
-        <div className="absolute inset-0 z-50 flex items-start justify-center bg-black/35 pt-16 backdrop-blur-[2px]">
-          <div className="w-full max-w-2xl overflow-hidden rounded-md border border-[var(--wb-border)] bg-[var(--wb-panel)] shadow-2xl">
-            <div className="flex items-center gap-3 border-b border-[var(--wb-border)] px-4 py-3">
-              <Search className="h-4 w-4 text-[var(--wb-text-dim)]" />
+        <div className="absolute inset-0 z-50 flex items-start justify-center bg-black/20 pt-20 backdrop-blur-[3px]">
+          <div className="workspace-soft-scale w-full max-w-2xl overflow-hidden rounded-3xl border border-[#e5e5e1] bg-white shadow-[0_24px_80px_rgba(0,0,0,0.16)]">
+            <div className="flex items-center gap-3 border-b border-[#eeeeeb] px-5 py-4">
+              <Search className="h-4 w-4 text-[#96999d]" />
               <input
                 autoFocus
                 value={commandQuery}
                 onChange={(event) => setCommandQuery(event.target.value)}
                 placeholder="Type a command"
-                className="h-8 flex-1 border-0 bg-transparent text-sm text-[var(--wb-text)] outline-none"
+                className="h-8 flex-1 border-0 bg-transparent text-sm text-[#202124] outline-none placeholder:text-[#a6a8ab]"
               />
-              <span className="rounded border border-[var(--wb-border)] px-2 py-1 text-[10px] uppercase tracking-wide text-[var(--wb-text-dim)]">
+              <span className="rounded-lg border border-[#e5e5e1] bg-[#f6f6f4] px-2 py-1 text-[10px] uppercase tracking-wide text-[#96999d]">
                 Esc
               </span>
             </div>
             <div className="max-h-[420px] overflow-y-auto py-2">
               {filteredCommandItems.length === 0 ? (
-                <div className="px-4 py-6 text-sm text-[var(--wb-text-muted)]">No commands found.</div>
+                <div className="px-5 py-6 text-sm text-[#777a80]">No commands found.</div>
               ) : (
                 filteredCommandItems.map((item) => {
                   const Icon = item.icon;
@@ -908,15 +970,15 @@ function WorkbenchPageContent() {
                         setCommandQuery('');
                         item.run();
                       }}
-                      className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-white/5"
+                      className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors duration-150 hover:bg-[#f6f6f4]"
                     >
-                      <div className="rounded bg-white/5 p-2 text-[var(--wb-text-muted)]">
+                      <div className="rounded-xl bg-[#f1f1ef] p-2 text-[#777a80]">
                         <Icon className="h-4 w-4" />
                       </div>
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-[var(--wb-text)]">{item.title}</div>
+                        <div className="truncate text-sm font-medium text-[#25272b]">{item.title}</div>
                         {item.subtitle && (
-                          <div className="truncate text-xs text-[var(--wb-text-muted)]">{item.subtitle}</div>
+                          <div className="truncate text-xs text-[#96999d]">{item.subtitle}</div>
                         )}
                       </div>
                     </button>
@@ -928,26 +990,70 @@ function WorkbenchPageContent() {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 overflow-hidden bg-[var(--wb-editor)]">
-        <WorkbenchSidebar
-          workspaceId={workbench.workspaceId}
-          workbenchRootPath={workbench.rootPath}
-          dndManager={dndManager}
-          editors={state.editors}
-          activeEditorId={state.activeEditorId}
-          activeView={activeSidebarView}
-          resources={resourceOptions}
-          documentStateByResourceId={documentStateByResourceId}
-          onActivateEditor={activateEditor}
-          onActiveViewChange={setActiveSidebarView}
-          onCloseEditor={closeEditor}
-          onFileOpen={handleOpenResourceInWorkbench}
-          onSave={() => void handleSaveAllEditors()}
-          saveStatus={saveStatus}
-          width={sidebarWidth}
-          onResizeStart={handleSidebarResizeStart}
-          onCreateAiPanel={handleCreateAiPanel}
-        />
+      <div className="workspace-main relative flex min-h-0 flex-1 overflow-hidden bg-[#fbfbfa] p-3 pt-16">
+        {isSidebarPinned ? (
+          <div className="mr-3 min-h-0 shrink-0">
+            <WorkbenchSidebar
+              workspaceId={workbench.workspaceId}
+              workbenchRootPath={workbench.rootPath}
+              dndManager={dndManager}
+              editors={state.editors}
+              workbenches={workspaceWorkbenches}
+              currentWorkbenchId={workbench.id}
+              activeEditorId={state.activeEditorId}
+              onActivateEditor={activateEditor}
+              onFileOpen={handleOpenResourceInWorkbench}
+              onNewChat={handleCreateAiPanel}
+              onNewNote={() => void handleCreateNote()}
+              onUploadResources={handleUploadResources}
+              onSearch={() => {
+                setCommandQuery('');
+                setIsCommandPaletteOpen(true);
+              }}
+              onOpenWorkbench={(workbenchId) => navigate(`/workbenches/${workbenchId}`)}
+              width={sidebarWidth}
+              onResizeStart={handleSidebarResizeStart}
+            />
+          </div>
+        ) : (
+          <div
+            className="group/sidebar absolute bottom-12 left-0 top-14 z-20 w-4"
+            onMouseEnter={openSidebarPreview}
+            onMouseLeave={scheduleCloseSidebarPreview}
+          >
+            <div
+              className={`absolute left-0 top-0 h-full w-[min(420px,calc(100vw-40px))] transition-all duration-300 ease-out ${
+                isSidebarPreviewOpen
+                  ? 'pointer-events-auto translate-x-3 opacity-100'
+                  : 'pointer-events-none -translate-x-[calc(100%-12px)] opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:translate-x-3 group-hover/sidebar:opacity-100 group-focus-within/sidebar:pointer-events-auto group-focus-within/sidebar:translate-x-3 group-focus-within/sidebar:opacity-100'
+              }`}
+              onMouseEnter={openSidebarPreview}
+              onMouseLeave={scheduleCloseSidebarPreview}
+            >
+              <WorkbenchSidebar
+                workspaceId={workbench.workspaceId}
+                workbenchRootPath={workbench.rootPath}
+                dndManager={dndManager}
+                editors={state.editors}
+                workbenches={workspaceWorkbenches}
+                currentWorkbenchId={workbench.id}
+                activeEditorId={state.activeEditorId}
+                onActivateEditor={activateEditor}
+                onFileOpen={handleOpenResourceInWorkbench}
+                onNewChat={handleCreateAiPanel}
+                onNewNote={() => void handleCreateNote()}
+                onUploadResources={handleUploadResources}
+                onSearch={() => {
+                  setCommandQuery('');
+                  setIsCommandPaletteOpen(true);
+                }}
+                onOpenWorkbench={(workbenchId) => navigate(`/workbenches/${workbenchId}`)}
+                width={sidebarWidth}
+                onResizeStart={handleSidebarResizeStart}
+              />
+            </div>
+          </div>
+        )}
 
         <div className="min-w-0 flex-1 overflow-hidden">
           <WorkbenchEditor
@@ -992,6 +1098,7 @@ function WorkbenchPageContent() {
             aiContext={{
               workbenchTitle: workbench.title,
               workbenchDescription: workbench.description,
+              workbenchId: workbench.id,
               activeFile: activeFileContext,
               activeFileContent,
               activeExternal: activeExternalContext
@@ -999,6 +1106,14 @@ function WorkbenchPageContent() {
           />
         </div>
       </div>
+
+      <button
+        onClick={handleCreateAiPanel}
+        className="workspace-soft-scale absolute bottom-14 right-5 z-30 inline-flex h-12 w-12 items-center justify-center rounded-full border border-[#e5e5e1] bg-[#202124] text-white shadow-[0_18px_50px_rgba(0,0,0,0.2)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#34373c] active:scale-95"
+        title="Open AI"
+      >
+        <Sparkles className="h-5 w-5" />
+      </button>
 
       <ResourcePickerDialog
         open={Boolean(resourcePickerEditorId)}
@@ -1040,7 +1155,7 @@ function WorkbenchPageContent() {
         onPromptPreferenceChange={setShouldPromptForCodeOpenMode}
       />
 
-      <footer className="flex h-6 items-center justify-between border-t border-[var(--wb-border)] bg-[var(--wb-status)] px-3 text-[11px] text-[var(--wb-status-text)]">
+      <footer className="flex h-8 shrink-0 items-center justify-between border-t border-[#eeeeeb] bg-[#fbfbfa] px-5 text-[11px] text-[#96999d]">
         <div className="flex items-center gap-3">
           <span>{workbench.title}</span>
           <span>{state.editors.length} open</span>

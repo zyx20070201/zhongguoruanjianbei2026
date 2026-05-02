@@ -8,7 +8,10 @@ export interface AiChatMessage {
 export interface AiChatContext {
   workbenchTitle?: string;
   workbenchDescription?: string;
+  workspaceId?: string;
+  workbenchId?: string;
   activeFile?: {
+    id?: string;
     name?: string;
     path?: string;
     content?: string;

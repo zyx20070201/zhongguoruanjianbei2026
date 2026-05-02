@@ -15,7 +15,7 @@ model User {
   id        String   @id @default(uuid())
   username  String   @unique
   email     String?  @unique
-  password  String   // In real app, hashed
+  password  String // In real app, hashed
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -25,79 +25,96 @@ model User {
 
 model Workspace {
   id          String   @id @default(uuid())
-  name        String   // Course name
-  description String?  // Course description
-  major       String?  // Major/Direction
+  name        String // Course name
+  description String? // Course description
+  major       String? // Major/Direction
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  workbenches Workbench[]
-  fileObjects FileSystemObject[]
-  profiles    Profile[]
-  
+  workbenches        Workbench[]
+  fileObjects        FileSystemObject[]
+  profiles           Profile[]
+  learningGoals      LearningGoal[]
+  learningEvents     LearningEvent[]
+  learningTraces     LearningTrace[]
+  knowledgeChunks    KnowledgeChunk[]
+  knowledgeIndexJobs KnowledgeIndexJob[]
+  learningRuns       LearningRun[]
+
   // Extension point for AI Terminal
   aiTerminalConfig String? // JSON string or relation to a config model
 }
 
 // The unified file system abstraction
 model FileSystemObject {
-  id          String   @id @default(uuid())
-  name        String
-  nodeType    String   // "file" | "folder"
+  id           String   @id @default(uuid())
+  name         String
+  nodeType     String // "file" | "folder"
   fileCategory String? // "note", "code", "document", "media", "generated", "other"
-  tags        String   @default("[]")
-  extension   String?
-  size        Int?
-  isBinary    Boolean  @default(false)
-  path        String   // Virtual path in workspace
-  content     String?  // Content for simple text files, or reference to S3/Local disk
-  mimeType    String?
-  storageKey  String?  // For binary files
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  tags         String   @default("[]")
+  extension    String?
+  size         Int?
+  isBinary     Boolean  @default(false)
+  path         String // Virtual path in workspace
+  content      String? // Content for simple text files, or reference to S3/Local disk
+  mimeType     String?
+  storageKey   String? // For binary files
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id])
-  
-  parentId    String?
-  parent      FileSystemObject?  @relation("FolderChildren", fields: [parentId], references: [id])
-  children    FileSystemObject[] @relation("FolderChildren")
 
-  panels      Panel[]
-  resources   GeneratedResource[]
+  parentId String?
+  parent   FileSystemObject?  @relation("FolderChildren", fields: [parentId], references: [id])
+  children FileSystemObject[] @relation("FolderChildren")
+
+  panels             Panel[]
+  resources          GeneratedResource[]
+  knowledgeChunks    KnowledgeChunk[]
+  knowledgeIndexJobs KnowledgeIndexJob[]
 
   @@unique([workspaceId, path])
 }
 
 // Workbench: Task-oriented container
 model Workbench {
-  id          String   @id @default(uuid())
-  name        String   // Task name (e.g. "Chapter 1 Notes")
-  layout      String?  // JSON string representing layout (e.g. grid layout config)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String    @id @default(uuid())
+  name         String // Task name (e.g. "Chapter 1 Notes")
+  title        String    @default("")
+  description  String    @default("")
+  rootPath     String?
+  layout       String? // JSON string representing layout (e.g. grid layout config)
+  stateJson    String?
+  lastOpenedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id])
 
-  panels      Panel[]
-  
+  panels         Panel[]
+  learningGoalId String?
+  learningGoal   LearningGoal?   @relation(fields: [learningGoalId], references: [id])
+  learningEvents LearningEvent[]
+  learningTraces LearningTrace[]
+
   // Extension point for local AI Assistant
   aiAssistantContext String? // JSON string capturing task context
 }
 
 // Panel: Interactive unit referencing file objects
 model Panel {
-  id          String   @id @default(uuid())
-  title       String?  // Title of the panel
-  panelType   String   // "file-preview-panel", "note-editor-panel", "code-editor-panel", "ai-assistant-panel"
-  config      String?  // JSON string for panel specific settings
-  layoutInfo  String?  // Layout placement info
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(uuid())
+  title      String? // Title of the panel
+  panelType  String // "file-preview-panel", "note-editor-panel", "code-editor-panel", "ai-assistant-panel"
+  config     String? // JSON string for panel specific settings
+  layoutInfo String? // Layout placement info
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   workbenchId String
   workbench   Workbench @relation(fields: [workbenchId], references: [id])
@@ -111,25 +128,163 @@ model Panel {
 model Profile {
   id          String   @id @default(uuid())
   name        String
-  preferences String   // JSON string
+  preferences String // JSON string
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  userId      String
-  user        User      @relation(fields: [userId], references: [id])
-  
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
   workspaceId String?
   workspace   Workspace? @relation(fields: [workspaceId], references: [id])
 }
 
 // Generated Resource: Results from AI
 model GeneratedResource {
-  id          String   @id @default(uuid())
-  prompt      String?
-  status      String   // "PENDING", "COMPLETED", "FAILED"
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(uuid())
+  prompt    String?
+  status    String // "PENDING", "COMPLETED", "FAILED"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   fileObjectId String?
   fileObject   FileSystemObject? @relation(fields: [fileObjectId], references: [id])
+}
+
+// Goal-oriented learning state used by the orchestration layer.
+model LearningGoal {
+  id             String   @id @default(uuid())
+  title          String
+  goalText       String
+  skillsJson     String   @default("[]")
+  weaknessesJson String   @default("[]")
+  mode           String   @default("quick-start")
+  status         String   @default("active")
+  planJson       String   @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  workbenches Workbench[]
+  events      LearningEvent[]
+  traces      LearningTrace[]
+}
+
+// Append-only-ish event stream for learner actions, agent actions and generated artifacts.
+model LearningEvent {
+  id          String   @id @default(uuid())
+  eventType   String
+  actor       String   @default("system")
+  payloadJson String   @default("{}")
+  createdAt   DateTime @default(now())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  workbenchId String?
+  workbench   Workbench? @relation(fields: [workbenchId], references: [id])
+
+  goalId String?
+  goal   LearningGoal? @relation(fields: [goalId], references: [id])
+}
+
+// Condensed memory extracted from events and workbench activity.
+model LearningTrace {
+  id              String   @id @default(uuid())
+  summary         String
+  masteryJson     String   @default("{}")
+  nextActionsJson String   @default("[]")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  workbenchId String?
+  workbench   Workbench? @relation(fields: [workbenchId], references: [id])
+
+  goalId String?
+  goal   LearningGoal? @relation(fields: [goalId], references: [id])
+}
+
+// Searchable grounding units derived from workspace files and generated resources.
+model KnowledgeChunk {
+  id            String   @id @default(uuid())
+  chunkIndex    Int
+  text          String
+  summary       String?
+  metadataJson  String   @default("{}")
+  tokenEstimate Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  fileObjectId String
+  fileObject   FileSystemObject @relation(fields: [fileObjectId], references: [id])
+
+  @@unique([fileObjectId, chunkIndex])
+}
+
+model KnowledgeIndexJob {
+  id           String    @id @default(uuid())
+  status       String    @default("pending")
+  extractor    String?
+  errorMessage String?
+  chunkCount   Int       @default(0)
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  fileObjectId String
+  fileObject   FileSystemObject @relation(fields: [fileObjectId], references: [id])
+
+  @@index([workspaceId, status])
+  @@index([fileObjectId])
+}
+
+model LearningRun {
+  id           String   @id @default(uuid())
+  intent       String
+  status       String   @default("pending")
+  inputJson    String   @default("{}")
+  resultJson   String   @default("{}")
+  errorMessage String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  workbenchId String?
+  goalId      String?
+
+  steps LearningRunStep[]
+
+  @@index([workspaceId, status])
+}
+
+model LearningRunStep {
+  id           String    @id @default(uuid())
+  capability   String
+  status       String    @default("pending")
+  inputJson    String    @default("{}")
+  outputJson   String    @default("{}")
+  errorMessage String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  runId String
+  run   LearningRun @relation(fields: [runId], references: [id])
+
+  @@index([runId, status])
 }

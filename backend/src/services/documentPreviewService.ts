@@ -40,6 +40,21 @@ const fileExists = async (targetPath: string) => {
   }
 };
 
+const getExistingFileStats = async (targetPath: string, message: string) => {
+  try {
+    const stats = await fs.stat(targetPath);
+    if (!stats.isFile() || stats.size === 0) {
+      throw new FileSystemError(404, message);
+    }
+
+    return stats;
+  } catch (error: any) {
+    if (error instanceof FileSystemError) throw error;
+    if (error?.code === 'ENOENT') throw new FileSystemError(404, message);
+    throw error;
+  }
+};
+
 const getExtension = (fileName: string) => fileName.split('.').pop()?.toLowerCase() || '';
 
 const findLibreOfficeBinary = async () => {
@@ -143,8 +158,11 @@ export class DocumentPreviewService {
         throw new FileSystemError(400, 'Preview is unavailable for this PDF file');
       }
 
+      const pdfPath = LocalStorageService.getFilePath(file.storageKey);
+      await getExistingFileStats(pdfPath, 'The stored PDF file is missing');
+
       return {
-        filePath: LocalStorageService.getFilePath(file.storageKey),
+        filePath: pdfPath,
         downloadName: file.name
       };
     }
@@ -160,7 +178,7 @@ export class DocumentPreviewService {
     await ensurePreviewDir();
 
     const sourcePath = LocalStorageService.getFilePath(file.storageKey);
-    const sourceStats = await fs.stat(sourcePath);
+    const sourceStats = await getExistingFileStats(sourcePath, 'The source document file is missing');
     const previewProvider = await getConfiguredPreviewProvider();
     if (!previewProvider) {
       throw new FileSystemError(
@@ -175,11 +193,23 @@ export class DocumentPreviewService {
       previewProvider
     );
     const previewPath = path.join(PREVIEW_DIR, previewFilename);
+    const hasUsableCachedPreview = async () => {
+      try {
+        await getExistingFileStats(previewPath, 'Cached PDF preview is missing');
+        return true;
+      } catch (error) {
+        if (error instanceof FileSystemError) return false;
+        throw error;
+      }
+    };
 
-    if (!(await fileExists(previewPath))) {
+    if (!(await hasUsableCachedPreview())) {
       try {
         if (previewProvider === 'cloudconvert') {
           const converted = await CloudConvertService.convertOfficeToPdf(sourcePath, file.name);
+          if (!converted.pdfBuffer.length) {
+            throw new FileSystemError(500, 'Document conversion produced an empty PDF file');
+          }
           await fs.writeFile(previewPath, converted.pdfBuffer);
         } else {
           const sofficeBinary = await findLibreOfficeBinary();
@@ -209,6 +239,8 @@ export class DocumentPreviewService {
             await fs.rm(tempDir, { recursive: true, force: true });
           }
         }
+
+        await getExistingFileStats(previewPath, 'Document conversion finished without a usable PDF file');
       } catch (error) {
         if (error instanceof FileSystemError) throw error;
         throw new FileSystemError(500, 'Failed to convert document to PDF preview');

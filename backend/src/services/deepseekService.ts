@@ -6,9 +6,12 @@ export interface ChatMessage {
 }
 
 export interface AiChatContext {
+  workspaceId?: string;
+  workbenchId?: string;
   workbenchTitle?: string;
   workbenchDescription?: string;
   activeFile?: {
+    id?: string;
     name?: string;
     path?: string;
     content?: string;
@@ -18,6 +21,16 @@ export interface AiChatContext {
     url?: string;
     description?: string;
   } | null;
+  learningContext?: {
+    goal?: {
+      title: string;
+      goalText: string;
+      skills: string[];
+      weaknesses: string[];
+    } | null;
+    traces?: Array<{ summary: string; nextActions: string[] }>;
+    knowledge?: Array<{ fileName: string; path: string; summary?: string | null; chunkText: string }>;
+  };
 }
 
 interface DeepSeekChatResponse {
@@ -83,7 +96,50 @@ const buildSystemPrompt = (context?: AiChatContext) => {
     lines.push(`外部资料说明: ${context.activeExternal.description}`);
   }
 
+  if (context?.learningContext?.goal) {
+    lines.push('当前学习目标:');
+    lines.push(`标题: ${context.learningContext.goal.title}`);
+    lines.push(`目标: ${context.learningContext.goal.goalText}`);
+    if (context.learningContext.goal.skills.length > 0) {
+      lines.push(`技能拆解: ${context.learningContext.goal.skills.join('、')}`);
+    }
+    if (context.learningContext.goal.weaknesses.length > 0) {
+      lines.push(`已知短板: ${context.learningContext.goal.weaknesses.join('；')}`);
+    }
+  }
+
+  if (context?.learningContext?.traces?.length) {
+    lines.push('近期学习记忆:');
+    context.learningContext.traces.slice(0, 3).forEach((trace, index) => {
+      lines.push(`${index + 1}. ${trace.summary}`);
+      if (trace.nextActions.length > 0) {
+        lines.push(`下一步: ${trace.nextActions.join('；')}`);
+      }
+    });
+  }
+
+  if (context?.learningContext?.knowledge?.length) {
+    lines.push('可引用的相关资料片段:');
+    context.learningContext.knowledge.slice(0, 5).forEach((item, index) => {
+      lines.push(`[${index + 1}] ${item.fileName} (${item.path})`);
+      lines.push(clipText(item.chunkText, 900));
+    });
+  }
+
   return lines.join('\n');
+};
+
+const extractJsonObject = (value: string) => {
+  const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  const raw = fenced || value;
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+
+  if (start < 0 || end <= start) {
+    throw new Error('No JSON object found in model response');
+  }
+
+  return JSON.parse(raw.slice(start, end + 1));
 };
 
 export class DeepSeekService {
@@ -162,6 +218,34 @@ export class DeepSeekService {
       reply: content,
       model: this.model,
       usage: data?.usage ?? null
+    };
+  }
+
+  async json<T>(params: {
+    instruction: string;
+    schema: Record<string, unknown>;
+    input: Record<string, unknown>;
+    context?: AiChatContext;
+  }): Promise<{ data: T; model: string; usage: DeepSeekChatResponse['usage'] | null }> {
+    const response = await this.chat(
+      [
+        {
+          role: 'user',
+          content: [
+            params.instruction,
+            '你必须只输出一个 JSON 对象，不要输出 Markdown，不要输出解释文字。',
+            `JSON schema hint: ${JSON.stringify(params.schema)}`,
+            `Input: ${JSON.stringify(params.input)}`
+          ].join('\n\n')
+        }
+      ],
+      params.context
+    );
+
+    return {
+      data: extractJsonObject(response.reply) as T,
+      model: response.model,
+      usage: response.usage
     };
   }
 }

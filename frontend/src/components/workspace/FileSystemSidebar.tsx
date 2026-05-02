@@ -12,7 +12,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Upload,
-  RefreshCw
+  RefreshCw,
+  Search
 } from 'lucide-react';
 import { useFileCommands } from '../../hooks/useFileCommands';
 import { useFileTreeStore } from '../../store/fileTreeStore';
@@ -28,6 +29,9 @@ interface FileSystemSidebarProps {
   enableWorkbenchDrag?: boolean;
   dndManager?: ReturnType<typeof useDragDropManager>;
   initialPath?: string;
+  codexPanel?: boolean;
+  hideFilter?: boolean;
+  transparentPanel?: boolean;
 }
 
 export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
@@ -40,7 +44,10 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
   showEmbeddedActions = false,
   enableWorkbenchDrag = false,
   dndManager,
-  initialPath
+  initialPath,
+  codexPanel = false,
+  hideFilter = false,
+  transparentPanel = false
 }) => {
   const [isDraggingFiles, setIsDraggingFiles] = React.useState(false);
   const [sidebarWidth, setSidebarWidth] = React.useState(280);
@@ -48,6 +55,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
   const [collapseSignal, setCollapseSignal] = React.useState(0);
   const [isCreateMenuOpen, setIsCreateMenuOpen] = React.useState(false);
   const [currentPath, setCurrentPath] = React.useState(initialPath || '/');
+  const [filterQuery, setFilterQuery] = React.useState('');
   const { refresh, loading } = useFileTree(workspaceId);
   const { createFolder, createFile, uploadFiles } = useFileCommands(workspaceId);
   const { files, selectedNodeId } = useFileTreeStore();
@@ -167,21 +175,31 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
   };
 
   const explorerButtonClass =
-    'inline-flex h-6 w-6 items-center justify-center rounded text-[var(--wb-text-dim)] hover:bg-white/5 hover:text-[var(--wb-text)] disabled:cursor-not-allowed disabled:opacity-50';
+    codexPanel
+      ? 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#777b80] hover:bg-[#f1f1ef] hover:text-[#202124] disabled:cursor-not-allowed disabled:opacity-50'
+      : 'inline-flex h-6 w-6 items-center justify-center rounded text-[var(--wb-text-dim)] hover:bg-white/5 hover:text-[var(--wb-text)] disabled:cursor-not-allowed disabled:opacity-50';
   const renderCreateMenu = () => (
-    <div className="absolute right-0 top-8 z-30 min-w-[150px] overflow-hidden rounded border border-[var(--wb-border)] bg-[var(--wb-panel)] py-1 shadow-lg">
+    <div className={`absolute right-0 top-8 z-30 min-w-[150px] overflow-hidden py-1 shadow-lg ${
+      codexPanel
+        ? 'rounded-xl border border-[#e2e2de] bg-white text-[#202124]'
+        : 'rounded border border-[var(--wb-border)] bg-[var(--wb-panel)]'
+    }`}>
       <button
         onClick={() => {
           void handleCreateFile();
           setIsCreateMenuOpen(false);
         }}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--wb-text)] hover:bg-white/5"
+        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
+          codexPanel ? 'text-[#34373c] hover:bg-[#f6f6f4]' : 'text-[var(--wb-text)] hover:bg-white/5'
+        }`}
       >
         <FilePlus2 size={14} /> New File
       </button>
       <button
         onClick={() => void handleCreateNote()}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--wb-text)] hover:bg-white/5"
+        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
+          codexPanel ? 'text-[#34373c] hover:bg-[#f6f6f4]' : 'text-[var(--wb-text)] hover:bg-white/5'
+        }`}
       >
         <FileText size={14} /> New Note
       </button>
@@ -190,7 +208,9 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
           void handleCreateFolder();
           setIsCreateMenuOpen(false);
         }}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--wb-text)] hover:bg-white/5"
+        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
+          codexPanel ? 'text-[#34373c] hover:bg-[#f6f6f4]' : 'text-[var(--wb-text)] hover:bg-white/5'
+        }`}
       >
         <FolderPlus size={14} /> New Folder
       </button>
@@ -199,7 +219,11 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
 
   return (
     <div
-      className={`group/explorer relative flex h-full min-h-0 flex-col self-stretch shrink-0 border-r border-[var(--wb-border)] bg-[var(--wb-sidebar)] ${
+      className={`group/explorer relative flex h-full min-h-0 flex-col self-stretch shrink-0 ${
+        codexPanel
+          ? transparentPanel ? 'bg-transparent' : 'bg-white'
+          : 'border-r border-[var(--wb-border)] bg-[var(--wb-sidebar)]'
+      } ${
         isDraggingFiles ? 'ring-2 ring-[var(--wb-accent)] ring-inset' : ''
       }`}
       style={embedded ? undefined : { width: isCollapsed ? 40 : sidebarWidth }}
@@ -231,17 +255,29 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
         <div className="fixed inset-0 z-20" onClick={() => setIsCreateMenuOpen(false)} />
       )}
       {isDraggingFiles && !isCollapsed && (
-        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-[var(--wb-accent)] bg-[rgba(90,166,255,0.14)] text-sm font-medium text-[#d9eaff]">
+        <div className={`pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-[var(--wb-accent)] bg-[rgba(90,166,255,0.14)] text-sm font-medium ${
+          codexPanel ? 'text-[#1683ff]' : 'text-[#d9eaff]'
+        }`}>
           Drop files to upload
         </div>
       )}
       {embedded && showEmbeddedActions && (
-        <div className="relative flex h-10 items-center border-b border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] px-2">
-          <div className="ml-auto flex items-center gap-0.5">
+        <div className={`relative flex items-center border-b px-3 ${
+          codexPanel ? 'h-12 border-[#eeeeeb] bg-white' : 'h-10 border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] px-2'
+        }`}>
+          {codexPanel && (
+            <div className="mr-auto flex items-center gap-1 text-xs text-[#96999d]">
+              <span>{currentPath === '/' ? 'Workspace' : currentPath}</span>
+            </div>
+          )}
+          <div className="ml-auto flex items-center gap-1">
             <div className="relative">
               <button
                 onClick={() => setIsCreateMenuOpen((value) => !value)}
-                className="inline-flex h-6 items-center gap-1 rounded px-2 text-[var(--wb-text-dim)] hover:bg-white/5 hover:text-[var(--wb-text)]"
+                className={codexPanel
+                  ? 'inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[#777b80] hover:bg-[#f1f1ef] hover:text-[#202124]'
+                  : 'inline-flex h-6 items-center gap-1 rounded px-2 text-[var(--wb-text-dim)] hover:bg-white/5 hover:text-[var(--wb-text)]'
+                }
                 title="Create"
               >
                 <FilePlus2 size={15} />
@@ -272,6 +308,19 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
               <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
             </button>
           </div>
+        </div>
+      )}
+      {codexPanel && !hideFilter && (
+        <div className="border-b border-[#eeeeeb] bg-white px-4 py-3">
+          <label className="flex h-10 items-center gap-2 rounded-xl border border-[#e6e6e2] bg-white px-3 text-[#9a9da1] shadow-[0_1px_2px_rgba(0,0,0,0.02)] focus-within:border-[#cfcfca]">
+            <Search className="h-4 w-4 shrink-0" />
+            <input
+              value={filterQuery}
+              onChange={(event) => setFilterQuery(event.target.value)}
+              className="min-w-0 flex-1 bg-transparent text-sm text-[#202124] outline-none placeholder:text-[#a8aaad]"
+              placeholder="Filter files..."
+            />
+          </label>
         </div>
       )}
       {!embedded && isCollapsed && (
@@ -331,7 +380,11 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
       </div>
       )}
       
-      <div className={`flex min-h-0 flex-1 overflow-hidden ${isCollapsed ? 'invisible pointer-events-none' : ''}`}>
+      <div
+        className={`flex min-h-0 flex-1 overflow-hidden ${
+          codexPanel ? `${transparentPanel ? 'bg-transparent' : 'bg-white'} px-2 py-1` : ''
+        } ${isCollapsed ? 'invisible pointer-events-none' : ''}`}
+      >
         <FileTreeComponent 
           workspaceId={workspaceId}
           onFileSelect={onFileSelect}
@@ -341,6 +394,9 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
           dndManager={dndManager}
           initialPath={initialPath}
           currentPath={currentPath}
+          filterQuery={filterQuery}
+          compactHeader={codexPanel}
+          transparentBackground={transparentPanel}
           onCurrentPathChange={setCurrentPath}
         />
       </div>

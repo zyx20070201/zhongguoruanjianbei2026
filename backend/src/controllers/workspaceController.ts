@@ -53,9 +53,16 @@ export const deleteWorkspace = async (req: Request, res: Response) => {
   // For simplicity in this task, we'll just delete the workspace. 
   // In a real app, we'd handle cascading deletes for workbenches, fileObjects, etc.
   
-  await prisma.workbench.deleteMany({ where: { workspaceId: workspaceId } });
-  await prisma.fileSystemObject.deleteMany({ where: { workspaceId: workspaceId } });
+  await prisma.learningEvent.deleteMany({ where: { workspaceId } });
+  await prisma.learningTrace.deleteMany({ where: { workspaceId } });
+  await prisma.knowledgeChunk.deleteMany({ where: { workspaceId } });
+  await prisma.knowledgeIndexJob.deleteMany({ where: { workspaceId } });
+  const runs = await prisma.learningRun.findMany({ where: { workspaceId }, select: { id: true } });
+  await prisma.learningRunStep.deleteMany({ where: { runId: { in: runs.map((run) => run.id) } } });
+  await prisma.learningRun.deleteMany({ where: { workspaceId } });
   await workbenchService.deleteByWorkspace(workspaceId);
+  await prisma.learningGoal.deleteMany({ where: { workspaceId } });
+  await prisma.fileSystemObject.deleteMany({ where: { workspaceId: workspaceId } });
   
   await prisma.workspace.delete({
     where: { id: workspaceId },

@@ -1,104 +1,169 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import prisma from '../config/db';
 import { WorkbenchRecord } from '../types/workbench';
 
 interface WorkbenchDatabase {
   workbenches: WorkbenchRecord[];
 }
 
-const DATA_DIR = path.resolve(__dirname, '../../data');
-const DATA_FILE = path.join(DATA_DIR, 'workbenches.json');
+const DATA_FILE = path.resolve(__dirname, '../../data/workbenches.json');
 
-const EMPTY_DB: WorkbenchDatabase = {
-  workbenches: []
+const EMPTY_STATE = (workbenchId: string) => ({
+  workbenchId,
+  editors: [],
+  layoutMode: 'freeform' as const,
+  activeEditorId: null,
+  activeEditorPaneId: null,
+  version: 1
+});
+
+const parseState = (id: string, value?: string | null) => {
+  if (!value) return EMPTY_STATE(id);
+
+  try {
+    return {
+      ...EMPTY_STATE(id),
+      ...JSON.parse(value),
+      workbenchId: id
+    };
+  } catch {
+    return EMPTY_STATE(id);
+  }
+};
+
+const toIso = (value?: Date | string | null) => {
+  if (!value) return new Date().toISOString();
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+};
+
+const buildFallbackRootPath = (title: string) => `/${title || 'Untitled Workbench'}`;
+
+const mapWorkbench = (workbench: any): WorkbenchRecord => {
+  const title = workbench.title || workbench.name || 'Untitled Workbench';
+
+  return {
+    id: workbench.id,
+    workspaceId: workbench.workspaceId,
+    title,
+    description: workbench.description || '',
+    rootPath: workbench.rootPath || buildFallbackRootPath(title),
+    createdAt: toIso(workbench.createdAt),
+    updatedAt: toIso(workbench.updatedAt),
+    lastOpenedAt: toIso(workbench.lastOpenedAt || workbench.updatedAt || workbench.createdAt),
+    state: parseState(workbench.id, workbench.stateJson)
+  };
 };
 
 export class WorkbenchRepository {
-  private async ensureStore() {
-    await fs.mkdir(DATA_DIR, { recursive: true });
+  private legacyMigrationDone = false;
 
-    try {
-      await fs.access(DATA_FILE);
-    } catch {
-      await fs.writeFile(DATA_FILE, JSON.stringify(EMPTY_DB, null, 2), 'utf-8');
-    }
-  }
-
-  private async readStore(): Promise<WorkbenchDatabase> {
-    await this.ensureStore();
-    const raw = await fs.readFile(DATA_FILE, 'utf-8');
-
-    try {
-      const parsed = JSON.parse(raw) as WorkbenchDatabase;
-      if (!Array.isArray(parsed.workbenches)) {
-        return EMPTY_DB;
+  private async persistRecord(record: WorkbenchRecord) {
+    return prisma.workbench.upsert({
+      where: { id: record.id },
+      create: {
+        id: record.id,
+        workspaceId: record.workspaceId,
+        name: record.title,
+        title: record.title,
+        description: record.description || '',
+        rootPath: record.rootPath,
+        stateJson: JSON.stringify(record.state),
+        layout: record.state.editorLayout ? JSON.stringify(record.state.editorLayout) : null,
+        createdAt: new Date(record.createdAt),
+        updatedAt: new Date(record.updatedAt),
+        lastOpenedAt: new Date(record.lastOpenedAt)
+      },
+      update: {
+        name: record.title,
+        title: record.title,
+        description: record.description || '',
+        rootPath: record.rootPath,
+        stateJson: JSON.stringify(record.state),
+        layout: record.state.editorLayout ? JSON.stringify(record.state.editorLayout) : null,
+        updatedAt: new Date(record.updatedAt),
+        lastOpenedAt: new Date(record.lastOpenedAt)
       }
-      return parsed;
-    } catch {
-      return EMPTY_DB;
-    }
+    });
   }
 
-  private async writeStore(data: WorkbenchDatabase) {
-    await this.ensureStore();
-    await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  private async migrateLegacyJsonStore() {
+    if (this.legacyMigrationDone) return;
+    this.legacyMigrationDone = true;
+
+    let parsed: WorkbenchDatabase | null = null;
+    try {
+      const raw = await fs.readFile(DATA_FILE, 'utf-8');
+      parsed = JSON.parse(raw) as WorkbenchDatabase;
+    } catch {
+      return;
+    }
+
+    if (!Array.isArray(parsed?.workbenches)) return;
+
+    for (const record of parsed.workbenches) {
+      if (!record?.id || !record.workspaceId) continue;
+      const existing = await prisma.workbench.findUnique({ where: { id: record.id }, select: { id: true } });
+      if (existing) continue;
+
+      await this.persistRecord({
+        ...record,
+        title: record.title || 'Untitled Workbench',
+        description: record.description || '',
+        rootPath: record.rootPath || buildFallbackRootPath(record.title || 'Untitled Workbench'),
+        createdAt: record.createdAt || new Date().toISOString(),
+        updatedAt: record.updatedAt || new Date().toISOString(),
+        lastOpenedAt: record.lastOpenedAt || record.updatedAt || record.createdAt || new Date().toISOString(),
+        state: record.state || EMPTY_STATE(record.id)
+      });
+    }
   }
 
   async listByWorkspace(workspaceId: string): Promise<WorkbenchRecord[]> {
-    const store = await this.readStore();
-    return store.workbenches
-      .filter((workbench) => workbench.workspaceId === workspaceId)
-      .map((workbench) => ({
-        ...workbench,
-        rootPath: workbench.rootPath || `/${workbench.title || 'Untitled Workbench'}`
-      }))
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    await this.migrateLegacyJsonStore();
+    const workbenches = await prisma.workbench.findMany({
+      where: { workspaceId },
+      orderBy: { updatedAt: 'desc' }
+    });
+
+    return workbenches.map(mapWorkbench);
   }
 
   async findById(id: string): Promise<WorkbenchRecord | null> {
-    const store = await this.readStore();
-    const workbench = store.workbenches.find((item) => item.id === id) ?? null;
-    if (!workbench) return null;
-
-    return {
-      ...workbench,
-      rootPath: workbench.rootPath || `/${workbench.title || 'Untitled Workbench'}`
-    };
+    await this.migrateLegacyJsonStore();
+    const workbench = await prisma.workbench.findUnique({ where: { id } });
+    return workbench ? mapWorkbench(workbench) : null;
   }
 
   async save(record: WorkbenchRecord): Promise<WorkbenchRecord> {
-    const store = await this.readStore();
-    const existingIndex = store.workbenches.findIndex((workbench) => workbench.id === record.id);
+    const saved = await this.persistRecord(record);
 
-    if (existingIndex >= 0) {
-      store.workbenches[existingIndex] = record;
-    } else {
-      store.workbenches.push(record);
-    }
-
-    await this.writeStore(store);
-    return record;
+    return mapWorkbench(saved);
   }
 
   async delete(id: string): Promise<boolean> {
-    const store = await this.readStore();
-    const next = store.workbenches.filter((workbench) => workbench.id !== id);
-    const changed = next.length !== store.workbenches.length;
-
-    if (changed) {
-      await this.writeStore({ workbenches: next });
+    try {
+      await prisma.panel.deleteMany({ where: { workbenchId: id } });
+      await prisma.learningEvent.deleteMany({ where: { workbenchId: id } });
+      await prisma.learningTrace.deleteMany({ where: { workbenchId: id } });
+      await prisma.workbench.delete({ where: { id } });
+      return true;
+    } catch {
+      return false;
     }
-
-    return changed;
   }
 
   async deleteByWorkspace(workspaceId: string): Promise<void> {
-    const store = await this.readStore();
-    const next = store.workbenches.filter((workbench) => workbench.workspaceId !== workspaceId);
+    const workbenches = await prisma.workbench.findMany({
+      where: { workspaceId },
+      select: { id: true }
+    });
+    const ids = workbenches.map((workbench) => workbench.id);
 
-    if (next.length !== store.workbenches.length) {
-      await this.writeStore({ workbenches: next });
-    }
+    await prisma.panel.deleteMany({ where: { workbenchId: { in: ids } } });
+    await prisma.learningEvent.deleteMany({ where: { workbenchId: { in: ids } } });
+    await prisma.learningTrace.deleteMany({ where: { workbenchId: { in: ids } } });
+    await prisma.workbench.deleteMany({ where: { workspaceId } });
   }
 }
 

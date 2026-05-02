@@ -26,6 +26,9 @@ interface FileTreeProps {
   dndManager?: ReturnType<typeof useDragDropManager>;
   initialPath?: string;
   currentPath?: string;
+  filterQuery?: string;
+  compactHeader?: boolean;
+  transparentBackground?: boolean;
   onCurrentPathChange?: (path: string) => void;
 }
 
@@ -126,6 +129,28 @@ const buildTagTree = (files: FileSystemObject[], currentPath: string): FileTreeN
     }));
 };
 
+const filterTreeNodes = (nodes: FileTreeNodeData[], query: string): FileTreeNodeData[] => {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return nodes;
+
+  return nodes.reduce<FileTreeNodeData[]>((matches, node) => {
+    const childMatches = filterTreeNodes(node.children || [], normalizedQuery);
+    const isMatch =
+      node.name.toLowerCase().includes(normalizedQuery) ||
+      node.path.toLowerCase().includes(normalizedQuery) ||
+      (node.tags || []).some((tag) => tag.toLowerCase().includes(normalizedQuery));
+
+    if (isMatch || childMatches.length > 0) {
+      matches.push({
+        ...node,
+        children: childMatches.length > 0 ? childMatches : node.children
+      });
+    }
+
+    return matches;
+  }, []);
+};
+
 export const FileTreeComponent: React.FC<FileTreeProps> = ({
   workspaceId,
   onFileSelect,
@@ -135,6 +160,9 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
   dndManager,
   initialPath,
   currentPath: controlledCurrentPath,
+  filterQuery = '',
+  compactHeader = false,
+  transparentBackground = false,
   onCurrentPathChange
 }) => {
   const { files, loading, error, setSelectedNodeId, toggleExpanded } = useFileTreeStore();
@@ -210,10 +238,10 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
     }));
   }, [currentPath]);
 
-  const treeData = useMemo(
-    () => (explorerView === 'path' ? buildPathTree(files, currentPath) : buildTagTree(files, currentPath)),
-    [currentPath, explorerView, files]
-  );
+  const treeData = useMemo(() => {
+    const data = explorerView === 'path' ? buildPathTree(files, currentPath) : buildTagTree(files, currentPath);
+    return filterTreeNodes(data, filterQuery);
+  }, [currentPath, explorerView, files, filterQuery]);
 
   const canDropOnParent = (
     parentNode: NodeApi<FileTreeNodeData> | null,
@@ -372,7 +400,13 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
   }
 
   return (
-    <div ref={containerRef} className="flex h-full w-full flex-1 flex-col overflow-hidden bg-[var(--wb-sidebar)]">
+    <div
+      ref={containerRef}
+      className={`flex h-full w-full flex-1 flex-col overflow-hidden ${
+        transparentBackground ? 'bg-transparent' : 'bg-white'
+      }`}
+    >
+      {!compactHeader && (
       <div className="border-b border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] px-2 py-2">
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1 overflow-x-auto text-xs text-[var(--wb-text-muted)]">
@@ -437,11 +471,12 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
           </button>
         </div>
       </div>
+      )}
 
       {treeData.length === 0 ? (
         <div className="flex flex-col gap-2 p-4 text-sm text-[var(--wb-text-muted)]">
-          <p>{explorerView === 'path' ? 'No files in this folder yet.' : 'No tagged files in this scope yet.'}</p>
-          {explorerView === 'path' && (
+          <p>{filterQuery.trim() ? 'No files match this filter.' : explorerView === 'path' ? 'No files in this folder yet.' : 'No tagged files in this scope yet.'}</p>
+          {explorerView === 'path' && !filterQuery.trim() && (
             <button
               onClick={() => void handleCreateFolder()}
               className="text-left text-[var(--wb-accent)] hover:underline"
@@ -455,9 +490,9 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
           ref={treeRef}
           data={treeData}
           width={dimensions.width}
-          height={Math.max(0, dimensions.height - 62)}
+          height={Math.max(0, dimensions.height - (compactHeader ? 0 : 62))}
           rowHeight={30}
-          indent={18}
+          indent={compactHeader ? 12 : 18}
           onMove={handleMove}
           onRename={handleRename}
           disableDrag={(node: any) =>

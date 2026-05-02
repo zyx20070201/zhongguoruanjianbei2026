@@ -39,7 +39,8 @@ interface WorkbenchEditorContentProps {
   aiContext?: {
     workbenchTitle?: string;
     workbenchDescription?: string;
-    activeFile?: { name: string; path: string } | null;
+    workbenchId?: string;
+    activeFile?: { id?: string; name: string; path: string } | null;
     activeFileContent?: string | null;
     activeExternal?: { title: string; url: string; description?: string } | null;
   };
@@ -78,7 +79,7 @@ const PlainTextPreview = ({
   }
 
   return (
-    <pre className="h-full overflow-auto whitespace-pre-wrap bg-[var(--wb-editor)] p-6 font-mono text-sm leading-7 text-[var(--wb-text)]">
+    <pre className="h-full overflow-auto whitespace-pre-wrap bg-white p-6 font-mono text-sm leading-7 text-[#25272b]">
       {content}
     </pre>
   );
@@ -92,7 +93,7 @@ function TextEditorShell({
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--wb-editor)]">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white">
       {toolbar}
       <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
     </div>
@@ -138,11 +139,11 @@ function DocumentPreview({
   }, [resource.id, workspaceId]);
 
   return (
-    <div className="h-full overflow-hidden bg-[var(--wb-editor)] p-5 text-[var(--wb-text)]">
-      <div className="flex h-full min-h-0 flex-col rounded border border-[var(--wb-border)] bg-[var(--wb-panel)] p-4 shadow-sm">
-        <div className="min-h-0 flex-1 overflow-hidden rounded border border-[var(--wb-border)] bg-[var(--wb-editor)]">
+    <div className="h-full overflow-hidden bg-white p-5 text-[#25272b]">
+      <div className="flex h-full min-h-0 flex-col rounded-3xl border border-[#e5e5e1] bg-white p-4 shadow-sm">
+        <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-[#eeeeeb] bg-[#fbfbfa]">
           {loading ? (
-            <div className="flex h-full items-center justify-center text-sm text-[var(--wb-text-muted)]">
+            <div className="flex h-full items-center justify-center text-sm text-[#777a80]">
               Preparing document preview...
             </div>
           ) : previewInfo?.status === 'ready' && previewInfo.previewUrl ? (
@@ -152,7 +153,7 @@ function DocumentPreview({
               className="h-full min-h-[320px] w-full bg-white"
             />
           ) : (
-            <div className="flex h-full flex-col justify-center gap-4 p-6 text-sm text-[var(--wb-text-muted)]">
+            <div className="flex h-full flex-col justify-center gap-4 p-6 text-sm text-[#777a80]">
               <p>{previewInfo?.message || 'This document cannot be previewed right now.'}</p>
               <p>当前版本不支持原位编辑，建议外部编辑后回写到工作区文件。</p>
               {previewInfo?.sourceUrl && (
@@ -160,7 +161,7 @@ function DocumentPreview({
                   href={previewInfo.sourceUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex w-fit items-center gap-2 rounded border border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] px-4 py-2 text-[var(--wb-text)] hover:bg-white/5"
+                  className="inline-flex w-fit items-center gap-2 rounded-full border border-[#e5e5e1] bg-white px-4 py-2 text-[#34373c] transition-all duration-200 hover:bg-[#f6f6f4]"
                 >
                   Open Original File
                 </a>
@@ -183,11 +184,11 @@ function HtmlVisualizationPreview({
   const previewUrl = fileSystemApi.downloadUrl(workspaceId, resource.id);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--wb-editor)]">
-      <div className="flex items-center justify-between border-b border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-2.5">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white">
+      <div className="flex items-center justify-between border-b border-[#eeeeeb] bg-white px-4 py-3">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[var(--wb-text)]">{resource.name}</div>
-          <div className="truncate text-xs text-[var(--wb-text-dim)]">
+          <div className="truncate text-sm font-semibold text-[#25272b]">{resource.name}</div>
+          <div className="truncate text-xs text-[#96999d]">
             Interactive visualization
           </div>
         </div>
@@ -195,14 +196,14 @@ function HtmlVisualizationPreview({
           href={previewUrl}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-1 rounded border border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] px-3 py-1.5 text-xs text-[var(--wb-text)] hover:bg-white/5"
+          className="inline-flex items-center gap-1 rounded-full border border-[#e5e5e1] bg-white px-3 py-1.5 text-xs text-[#34373c] transition-all duration-200 hover:bg-[#f6f6f4]"
         >
           <ArrowUpRight className="h-3.5 w-3.5" />
           Open Fullscreen
         </a>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden p-3">
-        <div className="h-full overflow-hidden rounded border border-[var(--wb-border)] bg-white shadow-sm">
+        <div className="h-full overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white shadow-sm">
           <iframe title={resource.name} src={previewUrl} className="h-full w-full bg-white" />
         </div>
       </div>
@@ -250,26 +251,26 @@ function TextEditingSurface({
   return (
     <TextEditorShell
       toolbar={
-        <div className="flex items-center justify-between border-b border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-2">
+        <div className="flex items-center justify-between border-b border-[#eeeeeb] bg-white px-4 py-3">
           <div className="flex items-center gap-2">
             {editor.type === 'code' && (
               <>
                 <button
                   onClick={() => onUpdateViewState?.(editor.id, { codeOpenMode: 'blocksuite' })}
-                  className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium ${
+                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
                     codeOpenMode === 'blocksuite'
-                      ? 'bg-[var(--wb-tab)] text-[var(--wb-text)] shadow-sm ring-1 ring-[var(--wb-border)]'
-                      : 'text-[var(--wb-text-muted)] hover:bg-white/5 hover:text-[var(--wb-text)]'
+                      ? 'bg-[#202124] text-white shadow-sm'
+                      : 'text-[#777a80] hover:bg-[#f1f1ef] hover:text-[#202124]'
                   }`}
                 >
                   BlockSuite
                 </button>
                 <button
                   onClick={() => onUpdateViewState?.(editor.id, { codeOpenMode: 'plain' })}
-                  className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium ${
+                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
                     codeOpenMode === 'plain'
-                      ? 'bg-[var(--wb-tab)] text-[var(--wb-text)] shadow-sm ring-1 ring-[var(--wb-border)]'
-                      : 'text-[var(--wb-text-muted)] hover:bg-white/5 hover:text-[var(--wb-text)]'
+                      ? 'bg-[#202124] text-white shadow-sm'
+                      : 'text-[#777a80] hover:bg-[#f1f1ef] hover:text-[#202124]'
                   }`}
                 >
                   Plain
@@ -278,10 +279,10 @@ function TextEditingSurface({
             )}
             <button
               onClick={() => onUpdateViewState?.(editor.id, { mode: 'edit' })}
-              className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium ${
+              className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
                 previewMode === 'edit'
-                  ? 'bg-[var(--wb-tab)] text-[var(--wb-text)] shadow-sm ring-1 ring-[var(--wb-border)]'
-                  : 'text-[var(--wb-text-muted)] hover:bg-white/5 hover:text-[var(--wb-text)]'
+                  ? 'bg-[#202124] text-white shadow-sm'
+                  : 'text-[#777a80] hover:bg-[#f1f1ef] hover:text-[#202124]'
               }`}
             >
               <PencilLine className="h-3.5 w-3.5" />
@@ -289,22 +290,22 @@ function TextEditingSurface({
             </button>
             <button
               onClick={() => onUpdateViewState?.(editor.id, { mode: 'preview' })}
-              className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium ${
+              className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
                 previewMode === 'preview'
-                  ? 'bg-[var(--wb-tab)] text-[var(--wb-text)] shadow-sm ring-1 ring-[var(--wb-border)]'
-                  : 'text-[var(--wb-text-muted)] hover:bg-white/5 hover:text-[var(--wb-text)]'
+                  ? 'bg-[#202124] text-white shadow-sm'
+                  : 'text-[#777a80] hover:bg-[#f1f1ef] hover:text-[#202124]'
               }`}
             >
               <Eye className="h-3.5 w-3.5" />
               Preview
             </button>
           </div>
-          <div className="flex items-center gap-2 text-xs text-[var(--wb-text-muted)]">
+          <div className="flex items-center gap-2 text-xs text-[#777a80]">
             <span>{languageLabel}</span>
             {showStructuredEditor && isJsonResource(resource) && (
               <button
                 onClick={handleFormat}
-                className="rounded border border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] px-3 py-1.5 font-medium text-[var(--wb-text)] hover:bg-white/5"
+                className="rounded-full border border-[#e5e5e1] bg-white px-3 py-1.5 font-medium text-[#34373c] transition-all duration-200 hover:bg-[#f6f6f4]"
               >
                 Format JSON
               </button>
@@ -317,7 +318,7 @@ function TextEditingSurface({
         <textarea
           value={String(content ?? '')}
           onChange={(event) => resource.id && onChangeContent?.(resource.id, event.target.value)}
-          className="h-full w-full resize-none border-0 bg-[var(--wb-editor)] px-5 py-4 font-mono text-sm leading-6 text-[var(--wb-text)] outline-none"
+          className="h-full w-full resize-none border-0 bg-white px-5 py-4 font-mono text-sm leading-6 text-[#25272b] outline-none placeholder:text-[#a6a8ab]"
           placeholder={isLoading ? 'Loading file content...' : 'Open a file to start editing.'}
           spellCheck={editor.type === 'notes'}
         />
@@ -352,15 +353,15 @@ function ExternalEditorView({
     | undefined;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-[var(--wb-editor)] text-[var(--wb-text)]">
-      <div className="flex items-center justify-between border-b border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-2.5">
+    <div className="flex h-full flex-col overflow-hidden bg-white text-[#25272b]">
+      <div className="flex items-center justify-between border-b border-[#eeeeeb] bg-white px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Globe className="h-4 w-4 shrink-0 text-[var(--wb-accent)]" />
+          <Globe className="h-4 w-4 shrink-0 text-[#16833a]" />
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-[var(--wb-text)]">
+            <div className="truncate text-sm font-medium text-[#25272b]">
               {externalResource?.title || editor.title}
             </div>
-            <div className="truncate text-xs text-[var(--wb-text-dim)]">External Reference</div>
+            <div className="truncate text-xs text-[#96999d]">External Reference</div>
           </div>
         </div>
         {externalResource?.url && (
@@ -368,7 +369,7 @@ function ExternalEditorView({
             href={externalResource.url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1 rounded border border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] px-2.5 py-1.5 text-xs text-[var(--wb-text)] hover:bg-white/5"
+            className="inline-flex items-center gap-1 rounded-full border border-[#e5e5e1] bg-white px-2.5 py-1.5 text-xs text-[#34373c] transition-all duration-200 hover:bg-[#f6f6f4]"
           >
             <ArrowUpRight className="h-3.5 w-3.5" />
             Open
@@ -377,19 +378,19 @@ function ExternalEditorView({
       </div>
 
       <div className="p-5">
-      <div className="rounded border border-[var(--wb-border)] bg-[var(--wb-panel)] p-6 shadow-sm">
-        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--wb-accent)]">
+      <div className="rounded-3xl border border-[#e5e5e1] bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#16833a]">
           <Globe className="h-4 w-4" />
           External Resource
         </div>
-        <div className="mt-4 text-2xl font-semibold text-[var(--wb-text)]">
+        <div className="mt-4 text-2xl font-semibold text-[#25272b]">
           {externalResource?.title || editor.title}
         </div>
-        <div className="mt-2 break-all text-sm text-[var(--wb-text-muted)]">
+        <div className="mt-2 break-all text-sm text-[#777a80]">
           {externalResource?.url || 'No URL provided'}
         </div>
         {externalResource?.description && (
-            <p className="mt-4 max-w-2xl text-sm leading-6 text-[var(--wb-text-muted)]">
+            <p className="mt-4 max-w-2xl text-sm leading-6 text-[#777a80]">
             {externalResource.description}
           </p>
         )}
@@ -399,13 +400,13 @@ function ExternalEditorView({
               href={externalResource.url}
               target="_blank"
               rel="noreferrer"
-                className="inline-flex items-center gap-2 rounded bg-[var(--wb-accent)] px-4 py-2 text-sm font-medium text-[#08111c] transition hover:brightness-110"
+                className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-4 py-2 text-sm font-medium text-white transition-all duration-200 hover:bg-[#34373c] active:scale-95"
             >
               <ExternalLink className="h-4 w-4" />
               Open Source
             </a>
           )}
-          <div className="inline-flex items-center rounded border border-[var(--wb-border)] px-4 py-2 text-sm text-[var(--wb-text-muted)]">
+          <div className="inline-flex items-center rounded-full border border-[#e5e5e1] px-4 py-2 text-sm text-[#777a80]">
             This panel references an external source and does not own storage.
           </div>
         </div>
@@ -417,10 +418,12 @@ function ExternalEditorView({
 
 function AiEditorView({
   editor,
+  workspaceId,
   aiContext,
   onUpdateViewState
 }: {
   editor: EditorState;
+  workspaceId: string;
   aiContext?: WorkbenchEditorContentProps['aiContext'];
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
 }) {
@@ -462,6 +465,8 @@ function AiEditorView({
         context: {
           workbenchTitle: aiContext?.workbenchTitle,
           workbenchDescription: aiContext?.workbenchDescription,
+          workspaceId,
+          workbenchId: aiContext?.workbenchId,
           activeFile: aiContext?.activeFile
             ? {
                 ...aiContext.activeFile,
@@ -495,50 +500,50 @@ function AiEditorView({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--wb-editor)]">
-      <div className="border-b border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-2.5">
+    <div className="flex h-full min-h-0 flex-col bg-white">
+      <div className="border-b border-[#eeeeeb] bg-white px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            <Sparkles className="h-4 w-4 shrink-0 text-[var(--wb-accent)]" />
+            <Sparkles className="h-4 w-4 shrink-0 text-[#16833a]" />
             <div className="min-w-0">
-              <div className="truncate text-sm font-medium text-[var(--wb-text)]">{editor.title}</div>
-              <div className="truncate text-xs text-[var(--wb-text-dim)]">
+              <div className="truncate text-sm font-medium text-[#25272b]">{editor.title}</div>
+              <div className="truncate text-xs text-[#96999d]">
                 DeepSeek chat scoped to the current workbench context
               </div>
             </div>
           </div>
-          <div className="rounded-sm bg-[rgba(90,166,255,0.14)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--wb-accent)]">
+          <div className="rounded-full bg-[#f1f1ef] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#777a80]">
             {isSending ? 'Thinking' : 'DeepSeek'}
           </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           {aiContext?.activeExternal && (
-            <span className="rounded-full bg-[rgba(90,166,255,0.12)] px-3 py-1 text-xs font-medium text-[#dbeaff]">
+            <span className="rounded-full bg-[#f1f1ef] px-3 py-1 text-xs font-medium text-[#34373c]">
               External: {aiContext.activeExternal.title}
             </span>
           )}
           {aiContext?.activeFile && (
-            <span className="rounded-full bg-[rgba(90,166,255,0.18)] px-3 py-1 text-xs font-medium text-[#dbeaff]">
+            <span className="rounded-full bg-[#f1f1ef] px-3 py-1 text-xs font-medium text-[#34373c]">
               File: {aiContext.activeFile.name}
             </span>
           )}
         </div>
         {error && (
-          <div className="mt-3 rounded border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             {error}
           </div>
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-[var(--wb-editor)] px-5 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-white px-5 py-4">
         <div className="mx-auto flex max-w-3xl flex-col gap-4">
           {messages.map((message: { role: string; content: string }, index: number) => (
             <div
               key={`${message.role}-${index}`}
               className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm ${
                 message.role === 'user'
-                  ? 'self-end bg-[var(--wb-accent)] text-[#08111c]'
-                  : 'self-start border border-[var(--wb-border)] bg-[var(--wb-panel)] text-[var(--wb-text)]'
+                  ? 'self-end bg-[#202124] text-white'
+                  : 'self-start border border-[#e5e5e1] bg-[#fbfbfa] text-[#25272b]'
               }`}
             >
               <div className="whitespace-pre-wrap">{message.content}</div>
@@ -547,29 +552,29 @@ function AiEditorView({
         </div>
       </div>
 
-      <div className="border-t border-[var(--wb-border)] bg-[var(--wb-panel)] px-5 py-4">
+      <div className="border-t border-[#eeeeeb] bg-white px-5 py-4">
         <div className="mx-auto max-w-3xl">
           <div className="mb-2 flex flex-wrap gap-2">
             <button
               onClick={() => setInput('Summarize the current external resource')}
-                className="rounded-full border border-[var(--wb-border)] px-3 py-1 text-xs font-medium text-[var(--wb-text-muted)] hover:bg-white/5"
+                className="rounded-full border border-[#e5e5e1] px-3 py-1 text-xs font-medium text-[#777a80] transition-all duration-200 hover:bg-[#f6f6f4]"
             >
               Summarize external resource
             </button>
             <button
               onClick={() => setInput('Compare the open file with the current external resource')}
-              className="rounded-full border border-[var(--wb-border)] px-3 py-1 text-xs font-medium text-[var(--wb-text-muted)] hover:bg-white/5"
+              className="rounded-full border border-[#e5e5e1] px-3 py-1 text-xs font-medium text-[#777a80] transition-all duration-200 hover:bg-[#f6f6f4]"
             >
               Compare file and reference
             </button>
             <button
               onClick={() => setInput('请结合当前文件内容，讲解这段代码或知识点的核心思路、复杂度和常见考点')}
-              className="rounded-full border border-[var(--wb-border)] px-3 py-1 text-xs font-medium text-[var(--wb-text-muted)] hover:bg-white/5"
+              className="rounded-full border border-[#e5e5e1] px-3 py-1 text-xs font-medium text-[#777a80] transition-all duration-200 hover:bg-[#f6f6f4]"
             >
               Explain current file
             </button>
           </div>
-          <div className="flex items-end gap-3 rounded border border-[var(--wb-border)] bg-[var(--wb-editor)] p-3 shadow-sm">
+          <div className="flex items-end gap-3 rounded-3xl border border-[#e5e5e1] bg-white p-3 shadow-[0_18px_60px_rgba(0,0,0,0.08)]">
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
@@ -582,12 +587,12 @@ function AiEditorView({
               rows={2}
               placeholder="Ask AI to work with the current file and external context..."
               disabled={isSending}
-              className="min-h-[52px] flex-1 resize-none border-0 bg-transparent text-sm text-[var(--wb-text)] outline-none"
+              className="min-h-[52px] flex-1 resize-none border-0 bg-transparent text-sm text-[#25272b] outline-none placeholder:text-[#a6a8ab]"
             />
             <button
               onClick={() => void handleSend()}
               disabled={isSending || !input.trim()}
-              className="inline-flex h-10 w-10 items-center justify-center rounded bg-[var(--wb-accent)] text-[#08111c] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-[#202124] text-white transition-all duration-200 hover:bg-[#34373c] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
               title="Send"
             >
               <Send className="h-4 w-4" />
@@ -625,7 +630,7 @@ export default function WorkbenchEditorContent({
   }
 
   if (editor.type === 'ai') {
-    return <AiEditorView editor={editor} aiContext={aiContext} onUpdateViewState={onUpdateViewState} />;
+    return <AiEditorView editor={editor} workspaceId={workspaceId} aiContext={aiContext} onUpdateViewState={onUpdateViewState} />;
   }
 
   if (editor.type === 'external') {
@@ -634,20 +639,20 @@ export default function WorkbenchEditorContent({
 
   if (!resource) {
     return (
-      <div className="flex h-full overflow-hidden flex-col items-center justify-center gap-4 bg-[var(--wb-editor)] px-8 text-center">
-        <div className="rounded border border-[var(--wb-border)] bg-[var(--wb-panel)] p-4 text-[var(--wb-text-muted)] shadow-sm">
+      <div className="flex h-full overflow-hidden flex-col items-center justify-center gap-4 bg-white px-8 text-center">
+        <div className="rounded-2xl border border-[#e5e5e1] bg-[#f6f6f4] p-4 text-[#777a80] shadow-sm">
           {getEditorIcon(editor.type)}
         </div>
         <div>
-          <h3 className="text-sm font-semibold text-[var(--wb-text)]">No resource bound yet</h3>
-          <p className="mt-2 max-w-md text-sm text-[var(--wb-text-muted)]">
+          <h3 className="text-sm font-semibold text-[#25272b]">No resource bound yet</h3>
+          <p className="mt-2 max-w-md text-sm text-[#777a80]">
             This editor references a workspace file. The file content remains in the shared file
             system.
           </p>
         </div>
         <button
           onClick={() => onBindResource(editor.id)}
-          className="rounded border border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] px-4 py-2 text-sm font-medium text-[var(--wb-text)] transition-colors hover:bg-white/5"
+          className="rounded-full border border-[#e5e5e1] bg-white px-4 py-2 text-sm font-medium text-[#34373c] transition-all duration-200 hover:bg-[#f6f6f4] active:scale-95"
         >
           Bind Resource
         </button>
@@ -663,15 +668,15 @@ export default function WorkbenchEditorContent({
 
   if (editor.type === 'video' || resourceKind === 'video') {
     return (
-      <div className="flex h-full overflow-hidden flex-col justify-between bg-[var(--wb-editor)] p-6 text-[var(--wb-text)]">
+      <div className="flex h-full overflow-hidden flex-col justify-between bg-white p-6 text-[#25272b]">
         <div>
           <div className="flex items-center justify-between gap-3">
-            <div className="text-xs uppercase tracking-[0.2em] text-[var(--wb-text-dim)]">Video</div>
+            <div className="text-xs uppercase tracking-[0.14em] text-[#96999d]">Video</div>
           </div>
           <div className="mt-4 text-xl font-semibold">{resource.name}</div>
-          <div className="mt-2 break-all text-sm text-[var(--wb-text-muted)]">{resource.path}</div>
+          <div className="mt-2 break-all text-sm text-[#777a80]">{resource.path}</div>
         </div>
-        <div className="rounded border border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-10 text-center text-sm text-[var(--wb-text-muted)] shadow-sm">
+        <div className="rounded-3xl border border-[#e5e5e1] bg-[#fbfbfa] px-4 py-10 text-center text-sm text-[#777a80] shadow-sm">
           Video playback is intentionally not implemented yet. This editor preserves the resource
           reference and open state.
         </div>

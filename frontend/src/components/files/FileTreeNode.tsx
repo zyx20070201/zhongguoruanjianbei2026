@@ -23,25 +23,25 @@ interface FileTreeNodeProps {
 
 const getFileIcon = (node: FileSystemObject, isOpen: boolean) => {
   if ((node as FileSystemObject & { syntheticKind?: string }).syntheticKind === 'tag-group') {
-    return <Tag size={16} className="mr-1.5 flex-shrink-0 text-[#f0b45c]" />;
+    return <Tag size={16} className="mr-2 flex-shrink-0 text-[#c47a19]" />;
   }
 
   if (node.nodeType === 'folder') {
     return isOpen ? (
-      <FolderOpen size={16} className="mr-1.5 flex-shrink-0 text-[#7fb4ff]" />
+      <FolderOpen size={16} className="mr-2 flex-shrink-0 text-[#70757a]" />
     ) : (
-      <Folder size={16} className="mr-1.5 flex-shrink-0 text-[#6ea7f6]" />
+      <Folder size={16} className="mr-2 flex-shrink-0 text-[#70757a]" />
     );
   }
 
   const ext = node.extension?.toLowerCase().replace(/^\./, '') || '';
   if (['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext)) {
-    return <Image size={16} className="mr-1.5 flex-shrink-0 text-[#9fb0c7]" />;
+    return <Image size={16} className="mr-2 flex-shrink-0 text-[#7d8da1]" />;
   }
   if (['ts', 'tsx', 'js', 'jsx', 'py', 'java', 'c', 'cpp', 'html', 'css', 'json', 'yaml', 'yml', 'xml'].includes(ext)) {
-    return <Code size={16} className="mr-1.5 flex-shrink-0 text-[#5aa6ff]" />;
+    return <Code size={16} className="mr-2 flex-shrink-0 text-[#1683ff]" />;
   }
-  return <FileText size={16} className="mr-1.5 flex-shrink-0 text-[#8d9aae]" />;
+  return <FileText size={16} className="mr-2 flex-shrink-0 text-[#8f9398]" />;
 };
 
 export const FileTreeNode: React.FC<FileTreeNodeProps> = ({ 
@@ -104,18 +104,20 @@ export const FileTreeNode: React.FC<FileTreeNodeProps> = ({
 
   const isFolder = node.data.nodeType === 'folder';
   const isSynthetic = Boolean((node.data as FileSystemObject & { syntheticKind?: string }).syntheticKind);
+  const guideLines = Array.from({ length: Math.max(0, node.level) });
+  const contentOffset = node.level * 14 + 10;
 
   return (
     <div
       ref={dragHandle}
       style={style}
       className={`
-        group flex items-center py-1 text-sm select-none transition-colors
+        group relative flex items-center rounded-lg py-1 text-sm select-none transition-colors
         cursor-pointer
         ${node.isDragging ? 'opacity-50' : ''}
-        ${node.willReceiveDrop ? 'bg-[rgba(90,166,255,0.18)] text-[var(--wb-text)] ring-1 ring-inset ring-[#79b6ff]' : ''}
-        ${node.isSelected && !node.willReceiveDrop ? 'bg-[rgba(90,166,255,0.14)] text-[var(--wb-text)]' : ''}
-        ${!node.isSelected && !node.willReceiveDrop ? 'text-[var(--wb-text-muted)] hover:bg-white/5 hover:text-[var(--wb-text)]' : ''}
+        ${node.willReceiveDrop ? 'bg-[#e8f2ff] text-[#202124] ring-1 ring-inset ring-[#acd3ff]' : ''}
+        ${node.isSelected && !node.willReceiveDrop ? 'bg-[#f1f1ef] text-[#202124]' : ''}
+        ${!node.isSelected && !node.willReceiveDrop ? 'text-[#2f3337] hover:bg-[#f6f6f4] hover:text-[#202124]' : ''}
       `}
       onClick={() => {
         node.select();
@@ -136,13 +138,20 @@ export const FileTreeNode: React.FC<FileTreeNodeProps> = ({
         onContextMenu(e, node);
       }}
     >
+      {guideLines.map((_, index) => (
+        <span
+          key={index}
+          className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e4e4e0]"
+          style={{ left: `${index * 14 + 18}px` }}
+        />
+      ))}
       <div 
         className="flex items-center flex-1 pr-2"
-        style={{ paddingLeft: `${node.level * 16 + 8}px` }}
+        style={{ paddingLeft: `${contentOffset}px` }}
       >
         {isFolder ? (
           <div 
-            className="mr-1 flex h-4 w-4 items-center justify-center text-[var(--wb-text-dim)] hover:text-[var(--wb-text)]"
+            className="mr-1 flex h-4 w-4 items-center justify-center text-[#7f8388] hover:text-[#202124]"
             onClick={(e) => {
               e.stopPropagation();
               node.toggle();
@@ -171,7 +180,7 @@ export const FileTreeNode: React.FC<FileTreeNodeProps> = ({
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <span className="min-w-0 truncate">{node.data.name}</span>
             {!isSynthetic && node.data.tags && node.data.tags.length > 0 && (
-              <span className="truncate rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-[var(--wb-text-dim)]">
+              <span className="truncate rounded bg-[#eef4fb] px-1.5 py-0.5 text-[10px] text-[#64748b]">
                 {node.data.tags.slice(0, 2).join(', ')}
                 {node.data.tags.length > 2 ? ` +${node.data.tags.length - 2}` : ''}
               </span>

@@ -386,7 +386,13 @@ export const streamFilePreview = async (req: Request, res: Response) => {
       `inline; filename="${encodeURIComponent(preview.downloadName)}"`
     );
     res.setHeader('Content-Type', 'application/pdf');
-    res.sendFile(preview.filePath);
+    res.sendFile(preview.filePath, { dotfiles: 'allow' }, (error) => {
+      if (!error) return;
+      console.error('Preview stream error:', error);
+      if (!res.headersSent) {
+        handleError(res, new FileSystemError(404, 'Preview file is unavailable'));
+      }
+    });
   } catch (error: any) {
     handleError(res, error);
   }
