@@ -5,6 +5,29 @@ import { workbenchService } from '../services/workbenchService';
 const getSingleValue = (value: any): string | undefined =>
   Array.isArray(value) ? value[0] : value;
 
+const fileObjectSummarySelect = {
+  id: true,
+  name: true,
+  nodeType: true,
+  fileCategory: true,
+  resourceType: true,
+  scope: true,
+  origin: true,
+  metadataJson: true,
+  tags: true,
+  extension: true,
+  size: true,
+  isBinary: true,
+  path: true,
+  mimeType: true,
+  storageKey: true,
+  createdAt: true,
+  updatedAt: true,
+  workspaceId: true,
+  ownerWorkbenchId: true,
+  parentId: true,
+} as const;
+
 export const createWorkspace = async (req: Request, res: Response) => {
   const { name, description, major, userId } = req.body;
 
@@ -135,6 +158,7 @@ export const getWorkspaces = async (req: Request, res: Response) => {
     where: { userId: parsedUserId },
     include: {
       fileObjects: {
+        select: fileObjectSummarySelect,
         orderBy: { updatedAt: 'desc' },
         take: 1,
       },
@@ -174,7 +198,10 @@ export const getWorkspace = async (req: Request, res: Response) => {
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
     include: {
-      fileObjects: true,
+      fileObjects: {
+        select: fileObjectSummarySelect,
+        orderBy: { updatedAt: 'desc' },
+      },
     },
   });
 

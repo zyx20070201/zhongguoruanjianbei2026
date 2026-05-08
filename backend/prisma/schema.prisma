@@ -19,8 +19,12 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspaces Workspace[]
-  profiles   Profile[]
+  workspaces     Workspace[]
+  profiles       Profile[]
+  learnerStates  LearnerState[]
+  conversationSessions ConversationSession[]
+  conversationMessages ConversationMessage[]
+  savedMemories SavedMemory[]
 }
 
 model Workspace {
@@ -38,11 +42,23 @@ model Workspace {
   fileObjects        FileSystemObject[]
   profiles           Profile[]
   learningGoals      LearningGoal[]
+  learningPlans      LearningPlan[]
   learningEvents     LearningEvent[]
   learningTraces     LearningTrace[]
   knowledgeChunks    KnowledgeChunk[]
   knowledgeIndexJobs KnowledgeIndexJob[]
   learningRuns       LearningRun[]
+  learnerStates      LearnerState[]
+  learnerStateVersions LearnerStateVersion[]
+  learnerEvidences   LearnerEvidence[]
+  learnerStatePatches LearnerStatePatch[]
+  learnerMemoryControls LearnerMemoryControl[]
+  flashcardDecks     FlashcardDeck[]
+  flashcards         Flashcard[]
+  flashcardReviews   FlashcardReviewLog[]
+  conversationSessions ConversationSession[]
+  conversationMessages ConversationMessage[]
+  savedMemories SavedMemory[]
 
   // Extension point for AI Terminal
   aiTerminalConfig String? // JSON string or relation to a config model
@@ -54,6 +70,10 @@ model FileSystemObject {
   name         String
   nodeType     String // "file" | "folder"
   fileCategory String? // "note", "code", "document", "media", "generated", "other"
+  resourceType String   @default("file") // "source" | "note" | "generated" | "artifact" | "file" | "folder"
+  scope        String   @default("workspace") // "workspace" | "workbench"
+  origin       String   @default("user") // "user" | "upload" | "web" | "ai" | "system" | "legacy"
+  metadataJson String   @default("{}")
   tags         String   @default("[]")
   extension    String?
   size         Int?
@@ -68,16 +88,24 @@ model FileSystemObject {
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id])
 
+  ownerWorkbenchId String?
+  ownerWorkbench   Workbench? @relation("OwnedResources", fields: [ownerWorkbenchId], references: [id])
+
   parentId String?
   parent   FileSystemObject?  @relation("FolderChildren", fields: [parentId], references: [id])
   children FileSystemObject[] @relation("FolderChildren")
 
   panels             Panel[]
   resources          GeneratedResource[]
+  workbenchBindings  WorkbenchResource[]
   knowledgeChunks    KnowledgeChunk[]
   knowledgeIndexJobs KnowledgeIndexJob[]
+  flashcardDecks     FlashcardDeck[]
 
   @@unique([workspaceId, path])
+  @@index([workspaceId, resourceType, updatedAt])
+  @@index([workspaceId, scope, updatedAt])
+  @@index([ownerWorkbenchId, resourceType, updatedAt])
 }
 
 // Workbench: Task-oriented container
@@ -101,9 +129,43 @@ model Workbench {
   learningGoal   LearningGoal?   @relation(fields: [learningGoalId], references: [id])
   learningEvents LearningEvent[]
   learningTraces LearningTrace[]
+  learningPlans  LearningPlan[]
+  flashcardDecks FlashcardDeck[]
+  flashcards     Flashcard[]
+  ownedResources FileSystemObject[] @relation("OwnedResources")
+  resourceBindings WorkbenchResource[]
+  learnerEvidences LearnerEvidence[]
+  learnerStatePatches LearnerStatePatch[]
+  learnerMemoryControls LearnerMemoryControl[]
+  conversationSessions ConversationSession[]
+  conversationMessages ConversationMessage[]
+  savedMemories SavedMemory[]
 
   // Extension point for local AI Assistant
   aiAssistantContext String? // JSON string capturing task context
+}
+
+// Resource-level membership for workbench context. FileSystemObject remains the
+// storage/preview/indexing carrier during the migration away from folder trees.
+model WorkbenchResource {
+  id          String   @id @default(uuid())
+  role        String   @default("resource") // "source" | "note" | "generated" | "artifact" | "resource"
+  source      String   @default("local") // "local" | "shared" | "copied" | "generated" | "uploaded"
+  pinned      Boolean  @default(false)
+  orderIndex  Int      @default(0)
+  metadataJson String  @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workbenchId String
+  workbench   Workbench @relation(fields: [workbenchId], references: [id])
+
+  fileObjectId String
+  fileObject   FileSystemObject @relation(fields: [fileObjectId], references: [id])
+
+  @@unique([workbenchId, fileObjectId, role])
+  @@index([workbenchId, role, updatedAt])
+  @@index([fileObjectId])
 }
 
 // Panel: Interactive unit referencing file objects
@@ -168,8 +230,52 @@ model LearningGoal {
   workspace   Workspace @relation(fields: [workspaceId], references: [id])
 
   workbenches Workbench[]
+  plans       LearningPlan[]
   events      LearningEvent[]
   traces      LearningTrace[]
+}
+
+model LearningPlan {
+  id                   String   @id @default(uuid())
+  scope                String   @default("goal")
+  status               String   @default("active")
+  version              Int      @default(1)
+  objective            String
+  rationale            String   @default("")
+  assumptionsJson      String   @default("[]")
+  constraintsJson      String   @default("[]")
+  targetSkillsJson     String   @default("[]")
+  weakSkillsJson       String   @default("[]")
+  milestonesJson       String   @default("[]")
+  stepsJson            String   @default("[]")
+  adaptationPolicyJson String   @default("{}")
+  evidenceJson         String   @default("{}")
+  diagnosticReportJson String   @default("{}")
+  candidateResourcesJson String @default("[]")
+  knowledgeGraphSnapshotJson String @default("{}")
+  reflectionHistoryJson String  @default("[]")
+  constraintScoresJson String   @default("{}")
+  revisionCount        Int      @default(0)
+  nextStepId           String?
+  previousPlanId       String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  workbenchId String?
+  workbench   Workbench? @relation(fields: [workbenchId], references: [id])
+
+  goalId String?
+  goal   LearningGoal? @relation(fields: [goalId], references: [id])
+
+  previousPlan LearningPlan?  @relation("LearningPlanVersions", fields: [previousPlanId], references: [id])
+  nextVersions LearningPlan[] @relation("LearningPlanVersions")
+
+  @@index([workspaceId, status, updatedAt])
+  @@index([goalId, status, version])
+  @@index([workbenchId, status, updatedAt])
 }
 
 // Append-only-ish event stream for learner actions, agent actions and generated artifacts.
@@ -207,6 +313,72 @@ model LearningTrace {
 
   goalId String?
   goal   LearningGoal? @relation(fields: [goalId], references: [id])
+}
+
+model ConversationSession {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  workbenchId  String?
+  userId       String
+  title        String   @default("")
+  source       String   @default("terminal")
+  metadataJson String   @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workbench Workbench? @relation(fields: [workbenchId], references: [id], onDelete: SetNull)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  ConversationMessage[]
+
+  @@index([workspaceId, updatedAt])
+  @@index([userId, updatedAt])
+}
+
+model ConversationMessage {
+  id           String   @id @default(uuid())
+  sessionId    String
+  workspaceId  String
+  workbenchId  String?
+  userId       String
+  role         String
+  content      String
+  contentHash  String
+  metadataJson String   @default("{}")
+  createdAt    DateTime @default(now())
+
+  session   ConversationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  workspace Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workbench Workbench?           @relation(fields: [workbenchId], references: [id], onDelete: SetNull)
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, contentHash])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, workbenchId, createdAt])
+  @@index([userId, createdAt])
+}
+
+model SavedMemory {
+  id                  String   @id @default(uuid())
+  workspaceId          String
+  workbenchId          String?
+  userId               String
+  memoryKey            String
+  text                 String
+  category             String   @default("preference")
+  source               String   @default("explicit_user_request")
+  confidence           Float    @default(0.9)
+  status               String   @default("active")
+  createdFromMessageId String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workbench Workbench? @relation(fields: [workbenchId], references: [id], onDelete: SetNull)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, memoryKey])
+  @@index([workspaceId, status, updatedAt])
 }
 
 // Searchable grounding units derived from workspace files and generated resources.
@@ -271,6 +443,144 @@ model LearningRun {
   @@index([workspaceId, status])
 }
 
+// Centralized learner profile snapshot. Agents read this directly, but write
+// through LearnerStatePatch + LearnerStateUpdateManager.
+model LearnerState {
+  id                     String   @id @default(uuid())
+  scope                  String   @default("workspace")
+  version                Int      @default(1)
+  stateJson              String   @default("{}")
+  summary                String   @default("")
+  profileBaseJson        String   @default("{}")
+  knowledgeStateJson     String   @default("{}")
+  misconceptionStateJson String   @default("{}")
+  preferenceStyleJson    String   @default("{}")
+  behaviorEngagementJson String   @default("{}")
+  cognitiveStateJson     String   @default("{}")
+  reviewPlanningJson     String   @default("{}")
+  confidenceJson         String   @default("{}")
+  lastEvidenceAt         DateTime?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  userId String
+  user   User @relation(fields: [userId], references: [id])
+
+  versions LearnerStateVersion[]
+  patches  LearnerStatePatch[]
+
+  @@unique([workspaceId, scope])
+  @@index([userId, updatedAt])
+  @@index([workspaceId, updatedAt])
+}
+
+model LearnerStateVersion {
+  id              String   @id @default(uuid())
+  version         Int
+  stateJson       String   @default("{}")
+  summary         String   @default("")
+  changedBy       String   @default("system")
+  changeReason    String   @default("")
+  patchIdsJson    String   @default("[]")
+  evidenceIdsJson String   @default("[]")
+  confidenceJson  String   @default("{}")
+  createdAt       DateTime @default(now())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  learnerStateId String
+  learnerState   LearnerState @relation(fields: [learnerStateId], references: [id], onDelete: Cascade)
+
+  @@unique([learnerStateId, version])
+  @@index([workspaceId, createdAt])
+}
+
+model LearnerEvidence {
+  id           String   @id @default(uuid())
+  evidenceType String
+  sourceType   String
+  sourceId     String?
+  actor        String   @default("system")
+  title        String   @default("")
+  summary      String   @default("")
+  payloadJson  String   @default("{}")
+  confidence   Float    @default(0.6)
+  observedAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  workbenchId String?
+  workbench   Workbench? @relation(fields: [workbenchId], references: [id])
+
+  goalId String?
+
+  patches LearnerStatePatch[]
+
+  @@index([workspaceId, observedAt])
+  @@index([workspaceId, evidenceType, observedAt])
+  @@index([sourceType, sourceId])
+}
+
+model LearnerStatePatch {
+  id              String   @id @default(uuid())
+  status          String   @default("pending")
+  proposedBy      String   @default("system")
+  targetDimension String
+  operation       String
+  confidence      Float    @default(0.6)
+  payloadJson     String   @default("{}")
+  rationale       String   @default("")
+  appliedVersion  Int?
+  createdAt       DateTime @default(now())
+  appliedAt       DateTime?
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  workbenchId String?
+  workbench   Workbench? @relation(fields: [workbenchId], references: [id])
+
+  learnerStateId String?
+  learnerState   LearnerState? @relation(fields: [learnerStateId], references: [id], onDelete: SetNull)
+
+  evidenceId String?
+  evidence   LearnerEvidence? @relation(fields: [evidenceId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status, createdAt])
+  @@index([learnerStateId, status])
+  @@index([evidenceId])
+}
+
+model LearnerMemoryControl {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  workbenchId     String?
+  memoryKey       String
+  dimension       String
+  action          String
+  status          String   @default("active")
+  originalText    String   @default("")
+  correctedText   String   @default("")
+  reason          String   @default("")
+  weightMultiplier Float   @default(1)
+  createdBy       String   @default("user")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  workbench Workbench? @relation(fields: [workbenchId], references: [id])
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, memoryKey])
+  @@index([workspaceId, dimension])
+}
+
 model LearningRunStep {
   id           String    @id @default(uuid())
   capability   String
@@ -287,4 +597,98 @@ model LearningRunStep {
   run   LearningRun @relation(fields: [runId], references: [id])
 
   @@index([runId, status])
+}
+
+// Source-grounded flashcard decks generated or curated inside a workbench.
+model FlashcardDeck {
+  id              String   @id @default(uuid())
+  title           String
+  description     String   @default("")
+  source          String   @default("ai_studio")
+  sourceFileIds   String   @default("[]")
+  sourceRefsJson  String   @default("[]")
+  settingsJson    String   @default("{}")
+  generationRunId String?
+  fileObjectId    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  workbenchId String?
+  workbench   Workbench? @relation(fields: [workbenchId], references: [id])
+
+  fileObject FileSystemObject? @relation(fields: [fileObjectId], references: [id])
+  cards      Flashcard[]
+
+  @@index([workspaceId, updatedAt])
+  @@index([workbenchId])
+}
+
+model Flashcard {
+  id                String   @id @default(uuid())
+  front             String
+  back              String
+  cardType          String   @default("basic")
+  difficulty        String   @default("medium")
+  concept           String   @default("")
+  explanation       String   @default("")
+  tagsJson          String   @default("[]")
+  sourceRefsJson    String   @default("[]")
+  metadataJson      String   @default("{}")
+  orderIndex        Int      @default(0)
+  reviewCount       Int      @default(0)
+  lapseCount        Int      @default(0)
+  dueAt             DateTime @default(now())
+  lastReviewedAt    DateTime?
+  stability         Float    @default(0)
+  retrievability    Float    @default(1)
+  fsrsDifficulty    Float    @default(5)
+  state             String   @default("new")
+  suspended         Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  workbenchId String?
+  workbench   Workbench? @relation(fields: [workbenchId], references: [id])
+
+  deckId String
+  deck   FlashcardDeck @relation(fields: [deckId], references: [id], onDelete: Cascade)
+
+  reviews FlashcardReviewLog[]
+
+  @@index([workspaceId, dueAt])
+  @@index([deckId, orderIndex])
+  @@index([workbenchId])
+}
+
+model FlashcardReviewLog {
+  id                     String   @id @default(uuid())
+  rating                 String
+  elapsedMs              Int      @default(0)
+  previousState          String
+  nextState              String
+  previousDueAt          DateTime?
+  nextDueAt              DateTime
+  previousStability      Float    @default(0)
+  nextStability          Float    @default(0)
+  previousDifficulty     Float    @default(5)
+  nextDifficulty         Float    @default(5)
+  previousRetrievability Float    @default(1)
+  nextRetrievability     Float    @default(1)
+  reviewedAt             DateTime @default(now())
+  metadataJson           String   @default("{}")
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  cardId String
+  card   Flashcard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, reviewedAt])
+  @@index([cardId, reviewedAt])
 }

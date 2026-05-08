@@ -57,3 +57,25 @@ This is a Phase 1 implementation of the AI Learning Workspace, a project meant f
 
 4. **Profiles & Generated Resources**:
    - Schema placeholders are defined to allow user context passing (prompt templates, user history).
+
+### 5. Context Retrieval Stack
+
+The Workbench context engine uses a concrete retrieval pipeline:
+
+```text
+query -> BM25/keyword topK -> Qdrant vector topK -> merge -> MMR -> bge reranker -> Context Capsule
+```
+
+Local services:
+
+```bash
+docker compose -f docker-compose.context.yml up -d
+```
+
+Backend defaults:
+
+- `QDRANT_BASE_URL=http://localhost:6333`
+- `EMBEDDING_BASE_URL=http://localhost:8081` using `BAAI/bge-m3`
+- `RERANKER_BASE_URL=http://localhost:8082` using `BAAI/bge-reranker-v2-m3`
+
+After starting these services, re-index workspace files so existing SQLite chunks are embedded and upserted into Qdrant.

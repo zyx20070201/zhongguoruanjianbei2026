@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   ArrowRight,
+  Brain,
   CheckCircle2,
   FolderUp,
   Loader2,
@@ -14,6 +15,8 @@ import { learningApi } from '../../services/learningApi';
 
 interface LearningTerminalProps {
   workspaceId: string;
+  sessionId?: string;
+  workbenchId?: string;
   workspaceName: string;
   major?: string;
   workbenches: WorkbenchItem[];
@@ -25,6 +28,7 @@ interface LearningTerminalProps {
   onCreateWorkbench: () => void;
   onWorkbenchCreated: (workbenchId: string) => void;
   onRefresh: () => Promise<void> | void;
+  variant?: 'full' | 'dashboard';
 }
 
 const starterPrompts = [
@@ -36,6 +40,8 @@ const starterPrompts = [
 
 export default function LearningTerminal({
   workspaceId,
+  sessionId,
+  workbenchId,
   workspaceName,
   workbenches,
   messages,
@@ -44,10 +50,12 @@ export default function LearningTerminal({
   onUploadMaterials,
   onCreateWorkbench,
   onWorkbenchCreated,
-  onRefresh
+  onRefresh,
+  variant = 'full'
 }: LearningTerminalProps) {
   const [input, setInput] = useState('');
   const [goalDraft, setGoalDraft] = useState<LearningGoalDraft | null>(null);
+  const [savedInlineMemory, setSavedInlineMemory] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,20 +84,37 @@ export default function LearningTerminal({
     setLoading(true);
 
     try {
-      const response = await learningApi.chatTerminal(workspaceId, nextMessages);
+      const response = await learningApi.chatTerminal(workspaceId, nextMessages, { sessionId, workbenchId });
       setGoalDraft(response.goalDraft ?? null);
       onMessagesChange([
         ...nextMessages,
         {
           role: 'assistant',
           content: response.reply,
-          goalDraft: response.goalDraft
+          goalDraft: response.goalDraft,
+          askUserToSave: response.memoryContext?.askUserToSave || null
         }
       ]);
     } catch (chatError: any) {
       setError(chatError?.response?.data?.error || chatError?.message || 'AI Terminal request failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const saveInlineMemory = async (candidate: NonNullable<LearningTerminalMessage['askUserToSave']>) => {
+    const text = candidate.candidate?.text || candidate.text;
+    if (!text) return;
+    try {
+      await learningApi.createSavedMemory({
+        workspaceId,
+        workbenchId,
+        text,
+        category: candidate.candidate?.category
+      });
+      setSavedInlineMemory(text);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || '保存长期偏好失败');
     }
   };
 
@@ -116,24 +141,32 @@ export default function LearningTerminal({
     }
   };
 
+  const isDashboard = variant === 'dashboard';
+
   return (
-    <section className="workspace-terminal mx-auto flex min-h-full w-full max-w-5xl flex-col px-6 pb-8 pt-28">
-      <div className="workspace-hero mx-auto mb-8 w-full max-w-3xl text-center">
+    <section className={`workspace-terminal mx-auto flex w-full flex-col ${
+      isDashboard ? 'min-h-[520px] max-w-none px-0 pb-0 pt-0' : 'min-h-full max-w-5xl px-6 pb-8 pt-28'
+    }`}>
+      <div className={`workspace-hero mx-auto w-full max-w-3xl ${
+        isDashboard ? 'mb-5 text-left' : 'mb-8 text-center'
+      }`}>
         {messages.length === 0 ? (
           <>
-            <h1 className="text-4xl font-semibold tracking-normal text-[#202124]">
-              What should we build in {workspaceName}?
+            <h1 className={`${isDashboard ? 'text-xl' : 'text-4xl'} font-semibold tracking-normal text-[#202124]`}>
+              {isDashboard ? 'AI Terminal' : `What should we build in ${workspaceName}?`}
             </h1>
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-6 text-[#777b80]">
-              {overviewText} 描述一个目标，或从下面的建议开始。
+              {isDashboard
+                ? `${overviewText} 你可以直接让 AI 汇总进度、整理材料或创建新的学习现场。`
+                : `${overviewText} 描述一个目标，或从下面的建议开始。`}
             </p>
           </>
         ) : (
-          <h1 className="text-3xl font-semibold tracking-normal text-[#202124]">AI Terminal</h1>
+          <h1 className={`${isDashboard ? 'text-xl' : 'text-3xl'} font-semibold tracking-normal text-[#202124]`}>AI Terminal</h1>
         )}
       </div>
 
-      <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col">
+      <div className={`mx-auto flex w-full flex-1 flex-col ${isDashboard ? 'max-w-none' : 'max-w-4xl'}`}>
         {messages.length > 0 && (
         <div className="flex-1 space-y-5">
           {messages.map((message, index) => (
@@ -150,6 +183,31 @@ export default function LearningTerminal({
                 }`}
               >
                 {message.content}
+                {message.role === 'assistant' && message.askUserToSave && savedInlineMemory !== (message.askUserToSave.candidate?.text || message.askUserToSave.text) ? (
+                  <div className="mt-3 rounded-xl border border-[#dbe7ff] bg-[#f8fbff] p-3 text-[#34373c]">
+                    <p className="flex items-center gap-2 text-xs font-semibold">
+                      <Brain className="h-3.5 w-3.5 text-[#315fba]" />
+                      是否保存为长期偏好？
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-[#55585d]">{message.askUserToSave.text}</p>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={() => void saveInlineMemory(message.askUserToSave!)}
+                        className="inline-flex h-7 items-center rounded-lg bg-[#202124] px-2.5 text-xs font-medium text-white"
+                      >
+                        保存
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSavedInlineMemory(message.askUserToSave?.candidate?.text || message.askUserToSave?.text || '');
+                        }}
+                        className="inline-flex h-7 items-center rounded-lg px-2.5 text-xs font-medium text-[#666a70] hover:bg-[#f1f1ef]"
+                      >
+                        不用
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           ))}
@@ -206,7 +264,7 @@ export default function LearningTerminal({
         </div>
         )}
 
-        <div className={`${messages.length > 0 ? 'sticky bottom-0 mt-8 bg-gradient-to-t from-[#fbfbfa] via-[#fbfbfa] to-transparent pt-10' : 'mt-2'} pb-6`}>
+        <div className={`${messages.length > 0 && !isDashboard ? 'sticky bottom-0 mt-8 bg-gradient-to-t from-[#fbfbfa] via-[#fbfbfa] to-transparent pt-10' : messages.length > 0 ? 'mt-6' : 'mt-2'} ${isDashboard ? 'pb-0' : 'pb-6'}`}>
           <div className="mx-auto w-full max-w-3xl">
             {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
 

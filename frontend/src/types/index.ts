@@ -18,6 +18,12 @@ export interface FileSystemObject {
   name: string;
   nodeType: 'file' | 'folder';
   fileCategory?: 'note' | 'code' | 'document' | 'media' | 'generated' | 'other' | string;
+  resourceType?: 'source' | 'note' | 'generated' | 'artifact' | 'resource' | 'file' | 'folder' | string;
+  scope?: 'workspace' | 'workbench' | string;
+  origin?: string;
+  ownerWorkbenchId?: string;
+  metadata?: Record<string, unknown>;
+  metadataJson?: string;
   tags?: string[];
   extension?: string;
   size?: number;
@@ -52,7 +58,7 @@ export interface Workbench {
   panels?: Panel[];
 }
 
-export type WorkbenchEditorType = 'resource' | 'notes' | 'code' | 'video' | 'external' | 'ai';
+export type WorkbenchEditorType = 'resource' | 'notes' | 'code' | 'video' | 'external' | 'ai' | 'studio';
 export type WorkbenchPanelType = WorkbenchEditorType;
 
 export interface ResourceReference {
@@ -60,6 +66,11 @@ export interface ResourceReference {
   name: string;
   path: string;
   type: string;
+  resourceType?: string;
+  scope?: string;
+  origin?: string;
+  ownerWorkbenchId?: string;
+  metadata?: Record<string, unknown>;
   tags?: string[];
   extension?: string;
   mimeType?: string;
@@ -113,6 +124,22 @@ export interface WorkbenchState {
   panels?: PanelState[];
   activePanelId?: string | null;
   activePaneId?: string | null;
+  aiAssistant?: {
+    id: string;
+    title: string;
+    mode: 'floating' | 'sidebar' | 'fullscreen';
+    isOpen: boolean;
+    activeSessionId?: string;
+    sidebarWidth?: number;
+    sessions?: Array<{
+      id: string;
+      title: string;
+      createdAt: string;
+      updatedAt: string;
+      viewState: Record<string, any>;
+    }>;
+    viewState: Record<string, any>;
+  };
   version: number;
 }
 
@@ -200,6 +227,15 @@ export interface LearningTerminalMessage {
   role: 'user' | 'assistant';
   content: string;
   goalDraft?: LearningGoalDraft;
+  askUserToSave?: {
+    text: string;
+    candidate?: {
+      text: string;
+      category: string;
+      confidence: number;
+      reason: string;
+    } | null;
+  } | null;
 }
 
 export interface LearningTerminalAction {
@@ -212,6 +248,18 @@ export interface LearningTerminalResponse {
   reply: string;
   goalDraft?: LearningGoalDraft;
   suggestedActions?: LearningTerminalAction[];
+  sessionId?: string;
+  memoryContext?: {
+    askUserToSave?: {
+      text: string;
+      candidate?: {
+        text: string;
+        category: string;
+        confidence: number;
+        reason: string;
+      } | null;
+    } | null;
+  };
 }
 
 export interface ContinueLearningItem {

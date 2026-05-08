@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .codex-logs/
+.DS_Store
+*.db
 
 backend/node_modules/
 backend/uploads/

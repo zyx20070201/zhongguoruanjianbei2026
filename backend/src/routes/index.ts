@@ -5,6 +5,9 @@ import workbenchRoutes from './workbenches';
 import fileRoutes from './file';
 import aiRoutes from './ai';
 import learningRoutes from './learning';
+import studioRoutes from './studio';
+import flashcardRoutes from './flashcards';
+import mclRoutes from './mcl';
 
 const router = Router();
 
@@ -14,5 +17,8 @@ router.use('/workbenches', workbenchRoutes);
 router.use('/files', fileRoutes);
 router.use('/ai', aiRoutes);
 router.use('/learning', learningRoutes);
+router.use('/mcl', mclRoutes);
+router.use('/studio', studioRoutes);
+router.use('/flashcards', flashcardRoutes);
 
 export default router;

@@ -45,6 +45,7 @@ const CONVERTIBLE_DOCUMENT_EXTENSIONS = new Set([
 
 export type EditorResourceKind =
   | 'html'
+  | 'web'
   | 'markdown'
   | 'note'
   | 'code'
@@ -105,6 +106,10 @@ export const getResourceKind = (
   const fileCategory = resource.fileCategory?.toLowerCase() || '';
 
   if (extension === 'html') return 'html';
+
+  if (fileCategory.includes('web') || extension === 'source' || fileCategory.includes('text-source')) {
+    return 'web';
+  }
 
   if (fileCategory.includes('note') || NOTE_EXTENSIONS.has(extension)) {
     return extension === 'md' || extension === 'markdown' ? 'markdown' : 'note';

@@ -1,26 +1,45 @@
-import { FolderOpen, PanelLeftOpen, Search, Sparkles } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  ChevronsRight,
+  FolderOpen,
+  Layers3,
+  Maximize2,
+  MessageCirclePlus,
+  Minimize2,
+  PanelLeftOpen,
+  PanelRight,
+  PanelRightOpen,
+  Search,
+  Sparkles,
+} from 'lucide-react';
+import { aiApi, AiChatMessage } from '../services/aiApi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DndProvider, useDragDropManager } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   EditorLayoutNode,
+  EditorState,
   FileSystemObject,
   ResourceReference,
   Workbench,
   WorkbenchEditorType
 } from '../types';
-import { fileSystemApi } from '../services/fileSystemApi';
+import { DiscoveredResource, fileSystemApi } from '../services/fileSystemApi';
 import { useWorkbenchStore } from '../store/useWorkbenchStore';
+import { useAuthStore } from '../store/authStore';
 import { workbenchApi } from '../services/workbenchApi';
+import { learningApi } from '../services/learningApi';
 import { CodeOpenMode, useAppPreferences } from '../appPreferences';
 import { useTheme } from '../theme';
-import WorkbenchTopBar from '../components/workbench/WorkbenchTopBar';
 import ResourcePickerDialog from '../components/workbench/ResourcePickerDialog';
 import WorkbenchSidebar from '../components/workbench/WorkbenchSidebar';
 import WorkbenchEditor from '../components/workbench/WorkbenchEditor';
+import { AiEditorView } from '../components/workbench/WorkbenchEditorContent';
 import CodeOpenModeDialog from '../components/workbench/CodeOpenModeDialog';
 import WorkbenchSettingsDialog from '../components/workbench/WorkbenchSettingsDialog';
+import { AddSourcesDialog } from '../components/workspace/AddSourcesDialog';
 import { useFileTreeStore } from '../store/fileTreeStore';
 import {
   canEditResource,
@@ -57,7 +76,12 @@ const flattenResources = (nodes: FileSystemObject[]): ResourceReference[] => {
       id: node.id,
       name: node.name,
       path: node.path,
-      type: node.nodeType === 'folder' ? 'folder' : node.fileCategory || node.extension || 'file',
+      type: node.nodeType === 'folder' ? 'folder' : node.resourceType || node.fileCategory || node.extension || 'file',
+      resourceType: node.resourceType,
+      scope: node.scope,
+      origin: node.origin,
+      ownerWorkbenchId: node.ownerWorkbenchId,
+      metadata: node.metadata,
       tags: node.tags,
       extension: node.extension,
       mimeType: node.mimeType,
@@ -90,6 +114,12 @@ interface PendingCodeOpenRequest {
   options: OpenResourceOptions;
 }
 
+interface ResourcePickerState {
+  mode: 'replace' | 'add-tab';
+  editorId?: string | null;
+  paneId?: string | null;
+}
+
 interface CommandPaletteItem {
   id: string;
   title: string;
@@ -98,12 +128,291 @@ interface CommandPaletteItem {
   run: () => void;
 }
 
+type AIAssistantMode = 'floating' | 'sidebar' | 'fullscreen';
+type AIAssistantState = NonNullable<NonNullable<Workbench['state']>['aiAssistant']>;
+type AIAssistantSession = NonNullable<AIAssistantState['sessions']>[number];
+
+const makeAiSessionId = () => `ai-session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const makeAiSession = (title = 'AI 对话'): AIAssistantSession => ({
+  id: makeAiSessionId(),
+  title,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  viewState: { messages: [], contextHint: 'workbench' }
+});
+
+const getAiSessions = (assistant: AIAssistantState | undefined, fallbackTitle = 'AI 对话') => {
+  if (assistant?.sessions?.length) return assistant.sessions;
+  return [
+    {
+      id: assistant?.activeSessionId || assistant?.id || makeAiSessionId(),
+      title: assistant?.title && assistant.title !== '新建 AI 对话' ? assistant.title : fallbackTitle,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      viewState: assistant?.viewState || { messages: [], contextHint: 'workbench' }
+    }
+  ];
+};
+
+const makeLocalAiChatTitle = (messages: AiChatMessage[]) => {
+  const firstUserMessage = messages.find((message) => message.role === 'user')?.content || '';
+  const cleaned = firstUserMessage
+    .split('\n\n【本轮临时附件】')[0]
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return 'AI 对话';
+  return cleaned.length > 18 ? `${cleaned.slice(0, 18)}...` : cleaned;
+};
+
+const makeSourceFilename = (title: string, fallback: string) => {
+  const safeBase = (title || fallback)
+    .trim()
+    .replace(/\.[^./]+$/, '')
+    .replace(/[\\/:*?"<>|#{}[\]`]/g, '-')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80)
+    .trim() || fallback;
+
+  return `${safeBase}.source`;
+};
+
+const makeTitleFromUrl = (value: string) => {
+  try {
+    const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+    return url.hostname.replace(/^www\./, '') || 'web-source';
+  } catch {
+    return 'web-source';
+  }
+};
+
+const isAiSessionBlank = (session: AIAssistantSession) => {
+  const messages = Array.isArray(session.viewState?.messages)
+    ? (session.viewState.messages as AiChatMessage[])
+    : [];
+  return messages.length === 0;
+};
+
+const sessionHasMessages = (session: AIAssistantSession) => {
+  const messages = Array.isArray(session.viewState?.messages)
+    ? (session.viewState.messages as AiChatMessage[])
+    : [];
+  return messages.some((message) => message.role === 'user' || message.content.trim());
+};
+
+interface AIAssistantShellProps {
+  editor: EditorState;
+  workspaceId: string;
+  mode: AIAssistantMode;
+  sessions: AIAssistantState['sessions'];
+  activeSessionId: string;
+  sidebarWidth: number;
+  aiContext: React.ComponentProps<typeof AiEditorView>['aiContext'];
+  onModeChange: (mode: AIAssistantMode) => void;
+  onClose: () => void;
+  onResizeSidebar: (width: number) => void;
+  onSelectSession: (sessionId: string) => void;
+  onCreateSession: () => void;
+  onUpdateViewState: (editorId: string, patch: Record<string, any>) => void;
+}
+
+function AIAssistantShell({
+  editor,
+  workspaceId,
+  mode,
+  sessions = [],
+  activeSessionId,
+  sidebarWidth,
+  aiContext,
+  onModeChange,
+  onClose,
+  onResizeSidebar,
+  onSelectSession,
+  onCreateSession,
+  onUpdateViewState
+}: AIAssistantShellProps) {
+  const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
+  const [isSessionMenuOpen, setIsSessionMenuOpen] = useState(false);
+  const sessionMenuRef = useRef<HTMLDivElement | null>(null);
+  const modeMenuRef = useRef<HTMLDivElement | null>(null);
+  const modeOptions: Array<{ mode: AIAssistantMode; label: string; icon: typeof PanelRight }> = [
+    { mode: 'sidebar', label: '侧边栏', icon: PanelRight },
+    { mode: 'floating', label: '浮动', icon: PanelRightOpen },
+    { mode: 'fullscreen', label: '全屏', icon: Maximize2 }
+  ];
+  const isSidebar = mode === 'sidebar';
+  const isFullscreen = mode === 'fullscreen';
+  const activeSession = sessions.find((session) => session.id === activeSessionId) || sessions[0];
+  const title = activeSession?.title || editor.title || 'AI 对话';
+
+  const handleResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isSidebar) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const nextWidth = Math.min(760, Math.max(360, startWidth - (moveEvent.clientX - startX)));
+      onResizeSidebar(nextWidth);
+    };
+    const handlePointerUp = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  };
+
+  const handleShellPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const target = event.target as Node;
+    if (isSessionMenuOpen && !sessionMenuRef.current?.contains(target)) {
+      setIsSessionMenuOpen(false);
+    }
+    if (isModeMenuOpen && !modeMenuRef.current?.contains(target)) {
+      setIsModeMenuOpen(false);
+    }
+  };
+
+  return (
+    <div
+      onPointerDown={handleShellPointerDown}
+      className={`ai-panel-surface z-40 ${
+        isSidebar
+          ? 'ai-sidebar-drift relative flex h-full shrink-0 border-l border-[#e6e5df] bg-white'
+          : isFullscreen
+            ? 'ai-fullscreen-rise absolute inset-3 flex rounded-[24px] border border-[#e6e5df] bg-white shadow-[0_28px_90px_rgba(15,23,42,0.22)]'
+            : 'ai-panel-pop absolute bottom-5 right-5 flex h-[min(620px,calc(100vh-56px))] w-[min(520px,calc(100vw-40px))] rounded-[24px] border border-[#e6e5df] bg-white shadow-[0_24px_70px_rgba(15,23,42,0.2)]'
+      }`}
+      style={isSidebar ? { width: sidebarWidth } : undefined}
+    >
+      {isSidebar && (
+        <div
+          className="group/ai-resize absolute left-0 top-0 z-30 h-full w-2 -translate-x-1 cursor-col-resize"
+          onPointerDown={handleResizeStart}
+          title="调整 AI 侧边栏宽度"
+        >
+          <div className="absolute left-1 top-0 h-full w-px bg-[#e6e5df] transition-colors group-hover/ai-resize:bg-[#b8babf]" />
+        </div>
+      )}
+      <div className={`flex min-h-0 w-full flex-col overflow-hidden bg-white ${isSidebar ? '' : 'rounded-[inherit]'}`}>
+        <div className="relative z-20 flex h-14 shrink-0 items-center justify-between px-4">
+          <div ref={sessionMenuRef} className="relative min-w-0">
+            <button
+              type="button"
+              onClick={() => setIsSessionMenuOpen((value) => !value)}
+              className="ai-soft-button inline-flex max-w-[260px] min-w-0 items-center gap-2 rounded-full px-2.5 py-1.5 text-left text-[15px] font-semibold text-[#25272b] hover:bg-[#f1f1ef]"
+              title="切换 AI 对话"
+            >
+              <span className="truncate">{title}</span>
+              <ChevronDown className={`h-4 w-4 shrink-0 text-[#8f9399] transition-transform duration-200 ${isSessionMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {isSessionMenuOpen && (
+              <div className="ai-menu-pop ai-session-menu-pop absolute left-0 top-11 z-50 w-72 overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white p-1.5 text-sm text-[#25272b] shadow-[0_24px_70px_rgba(15,23,42,0.18)]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCreateSession();
+                    setIsSessionMenuOpen(false);
+                  }}
+                  className="ai-soft-button mb-1 flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left font-medium hover:bg-[#f6f6f4]"
+                >
+                  <MessageCirclePlus className="h-4 w-4 text-[#4b4f55]" />
+                  新建 AI 对话
+                </button>
+                <div className="max-h-72 overflow-y-auto border-t border-[#eeeeeb] pt-1">
+                  {sessions.map((session) => (
+                    <button
+                      key={session.id}
+                      type="button"
+                      onClick={() => {
+                        onSelectSession(session.id);
+                        setIsSessionMenuOpen(false);
+                      }}
+                      className="ai-soft-button flex w-full min-w-0 items-center gap-2 rounded-xl px-3 py-2.5 text-left hover:bg-[#f6f6f4]"
+                    >
+                      <span className="min-w-0 flex-1 truncate">{session.title || 'AI 对话'}</span>
+                      {session.id === activeSessionId && <Check className="h-4 w-4 shrink-0 text-[#25272b]" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onCreateSession}
+              className="ai-soft-button inline-flex h-9 w-9 items-center justify-center rounded-full text-[#3f4247] hover:bg-[#f1f1ef]"
+              title="新建对话"
+            >
+              <MessageCirclePlus className="h-5 w-5" />
+            </button>
+            <div ref={modeMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setIsModeMenuOpen((value) => !value)}
+                className={`ai-soft-button inline-flex h-9 w-9 items-center justify-center rounded-full text-[#3f4247] ${
+                  isModeMenuOpen ? 'bg-[#f1f1ef]' : 'hover:bg-[#f1f1ef]'
+                }`}
+                title="切换显示方式"
+              >
+                {isSidebar ? <PanelRight className="h-5 w-5" /> : isFullscreen ? <Maximize2 className="h-5 w-5" /> : <PanelRightOpen className="h-5 w-5" />}
+              </button>
+              {isModeMenuOpen && (
+                <div className="ai-menu-pop absolute right-0 top-11 z-50 w-56 overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white p-1.5 text-sm text-[#25272b] shadow-[0_24px_70px_rgba(15,23,42,0.2)]">
+                  {modeOptions.map((option, index) => {
+                    const Icon = option.icon;
+                    return (
+                      <button
+                        key={option.mode}
+                        type="button"
+                        onClick={() => {
+                          onModeChange(option.mode);
+                          setIsModeMenuOpen(false);
+                        }}
+                        className={`ai-soft-button flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-[#f6f6f4] ${
+                          index === 2 ? 'mt-1 border-t border-[#eeeeeb]' : ''
+                        }`}
+                      >
+                        <Icon className="h-4.5 w-4.5 text-[#4b4f55]" />
+                        <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                        {mode === option.mode && <Check className="h-4 w-4 text-[#25272b]" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="ai-soft-button inline-flex h-9 w-9 items-center justify-center rounded-full text-[#3f4247] hover:bg-[#f1f1ef]"
+              title={isSidebar ? '隐藏对话' : '最小化'}
+            >
+              {isSidebar ? <ChevronsRight className="h-5 w-5" /> : <Minimize2 className="h-5 w-5" />}
+            </button>
+          </div>
+        </div>
+
+        <AiEditorView
+          editor={editor}
+          workspaceId={workspaceId}
+          aiContext={aiContext}
+          onUpdateViewState={onUpdateViewState}
+          hideHeader
+          compactWelcome={isSidebar}
+        />
+      </div>
+    </div>
+  );
+}
+
 function WorkbenchPageContent() {
   const { id } = useParams();
   const navigate = useNavigate();
   const dndManager = useDragDropManager();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [resourcePickerEditorId, setResourcePickerEditorId] = useState<string | null>(null);
+  const [resourcePickerState, setResourcePickerState] = useState<ResourcePickerState | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [pendingCodeOpenRequest, setPendingCodeOpenRequest] = useState<PendingCodeOpenRequest | null>(
@@ -113,12 +422,16 @@ function WorkbenchPageContent() {
   const [sidebarWidth, setSidebarWidth] = useState(320);
   const [isSidebarPinned, setIsSidebarPinned] = useState(false);
   const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
+  const [isAddSourcesOpen, setIsAddSourcesOpen] = useState(false);
+  const [liveContextVersion, setLiveContextVersion] = useState(0);
+  const [liveContextUpdatedAt, setLiveContextUpdatedAt] = useState<string | null>(null);
   const sidebarPreviewCloseTimer = useRef<number | null>(null);
   const [workspaceWorkbenches, setWorkspaceWorkbenches] = useState<Workbench[]>([]);
   const [documentStateByResourceId, setDocumentStateByResourceId] = useState<
     Record<string, { content: string; savedContent: string; loading?: boolean }>
   >({});
   const { files } = useFileTreeStore();
+  const user = useAuthStore((authState) => authState.user);
   const { theme, setTheme } = useTheme();
   const {
     codeOpenMode,
@@ -145,6 +458,90 @@ function WorkbenchPageContent() {
     saveNow,
     reset
   } = useWorkbenchStore();
+
+  const isLiveContextPatch = (patch: Record<string, any>) => {
+    const liveKeys = new Set([
+      'visibleLineRange',
+      'visiblePages',
+      'primaryPage',
+      'visibleBlockIds',
+      'scrollRatio',
+      'selectedText',
+      'selectedRange',
+      'approxChunkIndex'
+    ]);
+    const keys = Object.keys(patch);
+    return keys.length > 0 && keys.some((key) => liveKeys.has(key));
+  };
+
+  const mergeAiSessionsFromHistory = (historySessions: any[]) => {
+    if (!historySessions.length || !workbench) return;
+    const latestState = useWorkbenchStore.getState().state;
+    if (!latestState) return;
+    const localSessions = getAiSessions(latestState.aiAssistant, 'AI 对话');
+    const localById = new Map(localSessions.map((session) => [session.id, session]));
+    const hydratedSessions: AIAssistantSession[] = historySessions.map((session) => {
+      const local = localById.get(String(session.id));
+      const messages = Array.isArray(session.messages)
+        ? session.messages.map((message: any) => ({
+            role: message.role === 'user' ? 'user' : 'assistant',
+            content: String(message.content || '')
+          }))
+        : [];
+      return {
+        id: String(session.id),
+        title: String(session.title || local?.title || 'AI 对话'),
+        createdAt: String(session.createdAt || local?.createdAt || new Date().toISOString()),
+        updatedAt: String(session.updatedAt || local?.updatedAt || new Date().toISOString()),
+        viewState: local?.viewState && sessionHasMessages(local)
+          ? local.viewState
+          : { ...(local?.viewState || { contextHint: 'workbench' }), messages }
+      };
+    });
+    const hydratedIds = new Set(hydratedSessions.map((session) => session.id));
+    const mergedSessions = [
+      ...hydratedSessions,
+      ...localSessions.filter((session) => !hydratedIds.has(session.id) && (sessionHasMessages(session) || isAiSessionBlank(session)))
+    ].slice(0, 30);
+    if (!mergedSessions.length) return;
+    const activeSessionId =
+      latestState.aiAssistant?.activeSessionId && mergedSessions.some((session) => session.id === latestState.aiAssistant?.activeSessionId)
+        ? latestState.aiAssistant.activeSessionId
+        : mergedSessions[0].id;
+    const activeSession = mergedSessions.find((session) => session.id === activeSessionId) || mergedSessions[0];
+    updateWorkbenchState({
+      aiAssistant: {
+        ...(latestState.aiAssistant || {
+          id: `ai-assistant-${workbench.id}`,
+          title: 'AI 对话',
+          mode: 'floating' as const,
+          isOpen: false,
+          sidebarWidth: 460,
+          viewState: { messages: [], contextHint: 'workbench' }
+        }),
+        activeSessionId,
+        sessions: mergedSessions,
+        title: activeSession.title,
+        viewState: activeSession.viewState
+      }
+    });
+  };
+
+  const handleUpdateEditorViewState = (editorId: string, patch: Record<string, any>) => {
+    const isLivePatch = isLiveContextPatch(patch);
+    const nextPatch = isLivePatch
+      ? {
+          ...patch,
+          contextUpdatedAt: new Date().toISOString(),
+          contextVersion: liveContextVersion + 1
+        }
+      : patch;
+    updateEditorViewState(editorId, nextPatch);
+    if (isLivePatch) {
+      setLiveContextVersion((value) => value + 1);
+      setLiveContextUpdatedAt((nextPatch.contextUpdatedAt as string) || new Date().toISOString());
+    }
+  };
 
   const openSidebarPreview = () => {
     if (sidebarPreviewCloseTimer.current) {
@@ -173,6 +570,14 @@ function WorkbenchPageContent() {
   }, []);
 
   useEffect(() => {
+    const saveBeforeUnload = () => {
+      void useWorkbenchStore.getState().saveNow();
+    };
+    window.addEventListener('beforeunload', saveBeforeUnload);
+    return () => window.removeEventListener('beforeunload', saveBeforeUnload);
+  }, []);
+
+  useEffect(() => {
     if (!id) return;
 
     void loadWorkbench(id);
@@ -186,12 +591,12 @@ function WorkbenchPageContent() {
     if (!workbench?.workspaceId) return;
 
     void fileSystemApi
-      .getTree(workbench.workspaceId)
+      .getResources(workbench.workspaceId, { workbenchId: workbench.id, scope: 'all' })
       .then((tree) => setResources(flattenResources(tree)))
       .catch((loadError) => {
         console.error('Failed to load workspace resources:', loadError);
       });
-  }, [workbench?.workspaceId, setResources]);
+  }, [workbench?.id, workbench?.workspaceId, setResources]);
 
   useEffect(() => {
     if (!workbench?.workspaceId) return;
@@ -260,6 +665,92 @@ function WorkbenchPageContent() {
     if (!preferredFileEditor?.resourceId) return null;
     return documentStateByResourceId[preferredFileEditor.resourceId]?.content ?? null;
   }, [documentStateByResourceId, preferredFileEditor]);
+  const openPanelContexts = useMemo(
+    () =>
+      (state?.editors ?? []).map((editor) => {
+        const resource = editor.resourceId ? resourceMap.get(editor.resourceId) : null;
+        const content = editor.resourceId ? documentStateByResourceId[editor.resourceId]?.content ?? '' : '';
+        const lineRange = editor.viewState.visibleLineRange as { start: number; end: number } | undefined;
+        const lines = content.split('\n');
+        const visibleContent = lineRange
+          ? lines.slice(Math.max(0, lineRange.start - 1), Math.min(lines.length, lineRange.end)).join('\n')
+          : content.slice(0, 2400);
+
+        return {
+          panelId: editor.id,
+          panelType: editor.type,
+          title: editor.title,
+          fileId: resource?.id ?? null,
+          fileName: resource?.name,
+          filePath: resource?.path,
+          visiblePages: Array.isArray(editor.viewState.visiblePages)
+            ? (editor.viewState.visiblePages as number[])
+            : undefined,
+          primaryPage:
+            typeof editor.viewState.primaryPage === 'number'
+              ? (editor.viewState.primaryPage as number)
+              : Array.isArray(editor.viewState.visiblePages)
+                ? (editor.viewState.visiblePages as number[])[0]
+                : undefined,
+          visibleLineRange: lineRange ?? null,
+          visibleBlockIds: Array.isArray(editor.viewState.visibleBlockIds)
+            ? (editor.viewState.visibleBlockIds as string[])
+            : undefined,
+          approxChunkIndex:
+            typeof editor.viewState.approxChunkIndex === 'number'
+              ? (editor.viewState.approxChunkIndex as number)
+              : null,
+          scrollRatio:
+            typeof editor.viewState.scrollRatio === 'number'
+              ? (editor.viewState.scrollRatio as number)
+              : null,
+          selectedText:
+            typeof editor.viewState.selectedText === 'string'
+              ? (editor.viewState.selectedText as string)
+              : undefined,
+          selectedRange:
+            editor.viewState.selectedRange && typeof editor.viewState.selectedRange === 'object'
+              ? (editor.viewState.selectedRange as any)
+              : null,
+          visibleContent
+        };
+      }),
+    [documentStateByResourceId, resourceMap, state?.editors]
+  );
+  const aiAssistantContext = useMemo(
+    () => ({
+      userId: user?.id,
+      workbenchTitle: workbench?.title,
+      workbenchDescription: workbench?.description,
+      workbenchId: workbench?.id,
+      liveContextVersion,
+      liveContextUpdatedAt: liveContextUpdatedAt || undefined,
+      activePanelId:
+        activeEditor?.type === 'ai'
+          ? preferredFileEditor?.id ?? state?.activeEditorId ?? null
+          : state?.activeEditorId ?? null,
+      activeFileId: activeFileContext?.id ?? null,
+      activeFile: activeFileContext,
+      activeFileContent,
+      activeExternal: activeExternalContext,
+      openPanels: openPanelContexts
+    }),
+    [
+      activeEditor?.type,
+      activeExternalContext,
+      activeFileContent,
+      activeFileContext,
+      liveContextUpdatedAt,
+      liveContextVersion,
+      openPanelContexts,
+      preferredFileEditor?.id,
+      state?.activeEditorId,
+      user?.id,
+      workbench?.description,
+      workbench?.id,
+      workbench?.title
+    ]
+  );
   const commandPaletteItems = useMemo<CommandPaletteItem[]>(
     () => [
       {
@@ -271,11 +762,20 @@ function WorkbenchPageContent() {
       },
       {
         id: 'workbench.new-ai',
-        title: 'Workbench: New AI Conversation',
-        subtitle: 'Create a new AI editor in the current workbench',
+        title: 'Workbench: Open AI Conversation',
+        subtitle: 'Open the workbench AI assistant',
         icon: Sparkles,
         run: () => {
           handleCreateAiPanel();
+        }
+      },
+      {
+        id: 'workbench.ai-studio',
+        title: 'Workbench: Open AI Studio',
+        subtitle: 'Generate reports, slides, mind maps, flashcards, quizzes and tables',
+        icon: Layers3,
+        run: () => {
+          handleCreateStudioPanel();
         }
       },
       {
@@ -391,6 +891,46 @@ function WorkbenchPageContent() {
   }, [state, updateWorkbenchState]);
 
   useEffect(() => {
+    if (!workbench?.workspaceId || !workbench.id || !state) return;
+    let cancelled = false;
+    void learningApi
+      .listConversationSessions(workbench.workspaceId, {
+        workbenchId: workbench.id,
+        source: 'workbench_ai',
+        includeMessages: true,
+        limit: 30
+      })
+      .then((result) => {
+        if (cancelled) return;
+        const sessions = Array.isArray(result.sessions) ? result.sessions : [];
+        mergeAiSessionsFromHistory(sessions);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [workbench?.id, workbench?.workspaceId, Boolean(state)]);
+
+  useEffect(() => {
+    const flush = () => {
+      const store = useWorkbenchStore.getState();
+      if (store.dirty) {
+        void store.saveNow();
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      flush();
+      window.removeEventListener('beforeunload', flush);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!state) return;
 
     const editorsNeedingMetadata = state.editors.filter(
@@ -501,7 +1041,7 @@ function WorkbenchPageContent() {
       bindResourceToEditor(options.bindEditorId, resource);
       updateEditorViewState(options.bindEditorId, createEditorInitialViewState(resource, mode));
       activateEditor(options.bindEditorId);
-      setResourcePickerEditorId(null);
+      setResourcePickerState(null);
       return;
     }
 
@@ -606,8 +1146,13 @@ function WorkbenchPageContent() {
       return;
     }
 
-    if (resourcePickerEditorId) {
-      requestOpenResource(resource, { kind: 'tab', bindEditorId: resourcePickerEditorId });
+    if (resourcePickerState?.mode === 'replace' && resourcePickerState.editorId) {
+      requestOpenResource(resource, { kind: 'tab', bindEditorId: resourcePickerState.editorId });
+      return;
+    }
+
+    if (resourcePickerState?.mode === 'add-tab') {
+      requestOpenResource(resource, { kind: 'tab', paneId: resourcePickerState.paneId ?? undefined });
       return;
     }
 
@@ -618,9 +1163,15 @@ function WorkbenchPageContent() {
     const selectedNodeId = useFileTreeStore.getState().selectedNodeId;
     const selectedNode = flattenedFiles.find((file) => file.id === selectedNodeId);
     if (!selectedNode) {
+      const workbenchRoot = workbench?.rootPath
+        ? flattenedFiles.find(
+            (file) => file.nodeType === 'folder' && file.path === workbench.rootPath
+          )
+        : undefined;
+
       return {
-        parentId: undefined as string | undefined,
-        parentPath: undefined as string | undefined
+        parentId: workbenchRoot?.id,
+        parentPath: workbenchRoot?.path
       };
     }
 
@@ -649,7 +1200,13 @@ function WorkbenchPageContent() {
       const created = await fileSystemApi.createFile(workbench.workspaceId, {
         name: finalName,
         parentId,
-        parentPath
+        parentPath,
+        fileCategory: 'note',
+        workbenchId: workbench.id,
+        resourceRole: 'note',
+        resourceType: 'note',
+        scope: 'workbench',
+        origin: 'user'
       });
       const latestTree = await fileSystemApi.getTree(workbench.workspaceId);
       useFileTreeStore.getState().setFiles(latestTree);
@@ -659,35 +1216,355 @@ function WorkbenchPageContent() {
     }
   };
 
-  const handleUploadResources = () => {
+  const refreshFileTree = async () => {
+    if (!workbench?.workspaceId) return;
+    const latestTree = await fileSystemApi.getTree(workbench.workspaceId);
+    useFileTreeStore.getState().setFiles(latestTree);
+  };
+
+  const uploadResourcesToTarget = async (selectedFiles: File[]) => {
+    if (!workbench?.workspaceId || selectedFiles.length === 0) return;
+
+    const { parentId, parentPath } = getCreationTarget();
+    await fileSystemApi.upload(workbench.workspaceId, selectedFiles, parentId, parentPath, {
+      workbenchId: workbench.id,
+      resourceRole: 'source',
+      scope: 'workbench',
+      origin: 'upload'
+    });
+    await refreshFileTree();
+  };
+
+  const addWebsiteSource = async ({ title, url }: { title: string; url: string }) => {
     if (!workbench?.workspaceId) return;
 
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.multiple = true;
-    input.onchange = async (event) => {
-      const selectedFiles = Array.from((event.target as HTMLInputElement).files || []);
-      if (selectedFiles.length === 0) return;
+    const { parentId, parentPath } = getCreationTarget();
+    const normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    const sourceTitle = title.trim() || makeTitleFromUrl(normalizedUrl);
 
-      const { parentId, parentPath } = getCreationTarget();
+    await fileSystemApi.importUrl(workbench.workspaceId, {
+      url: normalizedUrl,
+      title: sourceTitle,
+      parentId,
+      parentPath,
+      workbenchId: workbench.id,
+      resourceRole: 'source',
+      resourceType: 'source',
+      scope: 'workbench',
+      origin: 'web'
+    });
+    await refreshFileTree();
+  };
 
-      try {
-        await fileSystemApi.upload(workbench.workspaceId, selectedFiles, parentId, parentPath);
-        const latestTree = await fileSystemApi.getTree(workbench.workspaceId);
-        useFileTreeStore.getState().setFiles(latestTree);
-      } catch (uploadError) {
-        console.error('Failed to upload resources:', uploadError);
-      }
-    };
-    input.click();
+  const discoverSources = async ({ query, maxResults }: { query: string; maxResults?: number }) => {
+    if (!workbench?.workspaceId) return [];
+    const response = await fileSystemApi.discoverSources(workbench.workspaceId, {
+      query,
+      maxResults,
+      provider: 'auto'
+    });
+    return response.results;
+  };
+
+  const importDiscoveredSources = async (sources: DiscoveredResource[]) => {
+    if (!workbench?.workspaceId || sources.length === 0) return;
+
+    const { parentId, parentPath } = getCreationTarget();
+    for (const source of sources) {
+      await fileSystemApi.importUrl(workbench.workspaceId, {
+        url: source.url,
+        title: source.title,
+        parentId,
+        parentPath,
+        workbenchId: workbench.id,
+        resourceRole: 'source',
+        resourceType: 'source',
+        scope: 'workbench',
+        origin: 'web'
+      });
+    }
+    await refreshFileTree();
+  };
+
+  const addCopiedTextSource = async ({ title, content }: { title: string; content: string }) => {
+    if (!workbench?.workspaceId) return;
+
+    const { parentId, parentPath } = getCreationTarget();
+    const sourceTitle = title.trim() || 'pasted-source';
+
+    await fileSystemApi.createFile(workbench.workspaceId, {
+      name: makeSourceFilename(sourceTitle, 'pasted-source'),
+      parentId,
+      parentPath,
+      fileCategory: 'text-source',
+      workbenchId: workbench.id,
+      resourceRole: 'source',
+      resourceType: 'source',
+      scope: 'workbench',
+      origin: 'user',
+      content: `# ${sourceTitle}\n\nSource type: copied text\n\n${content.trim()}\n`
+    });
+    await refreshFileTree();
+  };
+
+  const handleUploadResources = () => {
+    if (!workbench?.workspaceId) return;
+    setIsAddSourcesOpen(true);
   };
 
   const handleCreateAiPanel = () => {
-    addEditor('ai', undefined, {
-      messages: [],
-      contextHint: 'workbench'
+    const latestState = useWorkbenchStore.getState().state;
+    const sessions = getAiSessions(latestState?.aiAssistant, 'AI 对话');
+    const activeSessionId =
+      latestState?.aiAssistant?.activeSessionId && sessions.some((session) => session.id === latestState.aiAssistant?.activeSessionId)
+        ? latestState.aiAssistant.activeSessionId
+        : sessions[0].id;
+    updateWorkbenchState({
+      aiAssistant: {
+        id: latestState?.aiAssistant?.id || `ai-assistant-${workbench?.id || Date.now()}`,
+        title: sessions.find((session) => session.id === activeSessionId)?.title || 'AI 对话',
+        mode: latestState?.aiAssistant?.mode || 'floating',
+        isOpen: true,
+        activeSessionId,
+        sidebarWidth: latestState?.aiAssistant?.sidebarWidth || 460,
+        sessions,
+        viewState: sessions.find((session) => session.id === activeSessionId)?.viewState || { messages: [], contextHint: 'workbench' }
+      }
     });
   };
+
+  const handleCreateStudioPanel = () => {
+    addEditor('studio', undefined, {
+      selectedType: 'report',
+      contextMode: 'workbench',
+      studioResults: []
+    });
+  };
+
+  const updateAiAssistantState = (patch: Partial<NonNullable<Workbench['state']>['aiAssistant']> = {}) => {
+    const latestState = useWorkbenchStore.getState().state;
+    if (!latestState) return;
+    const currentSessions = getAiSessions(latestState.aiAssistant, 'AI 对话');
+    const nextSessions = patch.sessions || currentSessions;
+    const nextActiveSessionId =
+      patch.activeSessionId && nextSessions.some((session) => session.id === patch.activeSessionId)
+        ? patch.activeSessionId
+        : latestState.aiAssistant?.activeSessionId && nextSessions.some((session) => session.id === latestState.aiAssistant?.activeSessionId)
+          ? latestState.aiAssistant.activeSessionId
+          : nextSessions[0]?.id;
+    const nextActiveSession = nextSessions.find((session) => session.id === nextActiveSessionId) || nextSessions[0];
+    const nextViewState =
+      patch.viewState ||
+      nextActiveSession?.viewState ||
+      latestState.aiAssistant?.viewState || { messages: [], contextHint: 'workbench' };
+    const baseAssistant = {
+      id: latestState.aiAssistant?.id || `ai-assistant-${workbench?.id || Date.now()}`,
+      title: patch.title || nextActiveSession?.title || latestState.aiAssistant?.title || 'AI 对话',
+      mode: latestState.aiAssistant?.mode || 'floating',
+      isOpen: Boolean(latestState.aiAssistant?.isOpen),
+      activeSessionId: nextActiveSessionId,
+      sidebarWidth: latestState.aiAssistant?.sidebarWidth || 460,
+      sessions: nextSessions,
+      viewState: nextViewState
+    };
+    updateWorkbenchState({
+      aiAssistant: {
+        ...baseAssistant,
+        ...patch,
+        activeSessionId: nextActiveSessionId,
+        sessions: nextSessions,
+        viewState: nextViewState
+      }
+    });
+  };
+
+  const handleUpdateAiAssistantViewState = (_editorId: string, patch: Record<string, any>) => {
+    const latestState = useWorkbenchStore.getState().state;
+    if (!latestState) return;
+    const sessions = getAiSessions(latestState.aiAssistant, 'AI 对话');
+    const activeSessionId =
+      latestState.aiAssistant?.activeSessionId && sessions.some((session) => session.id === latestState.aiAssistant?.activeSessionId)
+        ? latestState.aiAssistant.activeSessionId
+        : sessions[0].id;
+    const previousSession = sessions.find((session) => session.id === activeSessionId) || sessions[0];
+    const nextViewState = {
+      ...(previousSession.viewState || {}),
+      ...patch
+    };
+    const nextMessages = Array.isArray(nextViewState.messages) ? (nextViewState.messages as AiChatMessage[]) : [];
+    const nextTitle =
+      previousSession.title === 'AI 对话' || previousSession.title === '新建 AI 对话'
+        ? makeLocalAiChatTitle(nextMessages)
+        : previousSession.title;
+    const nextSessions = sessions.map((session) =>
+      session.id === activeSessionId
+        ? {
+            ...session,
+            title: nextTitle,
+            updatedAt: new Date().toISOString(),
+            viewState: nextViewState
+          }
+        : session
+    );
+    const currentAssistant = latestState.aiAssistant || {
+      id: `ai-assistant-${workbench?.id || Date.now()}`,
+      title: 'AI 对话',
+      mode: 'floating' as const,
+      isOpen: true,
+      activeSessionId,
+      sidebarWidth: 460,
+      sessions,
+      viewState: { messages: [], contextHint: 'workbench' }
+    };
+    const nextAssistant = {
+      ...currentAssistant,
+      title: nextTitle,
+      activeSessionId,
+      sessions: nextSessions,
+      viewState: nextViewState
+    };
+
+    useWorkbenchStore.setState((current) => {
+      if (!current.state) return current;
+      return {
+        state: {
+          ...current.state,
+          aiAssistant: nextAssistant
+        },
+        dirty: true,
+        saveStatus: 'idle'
+      };
+    });
+    useWorkbenchStore.getState().scheduleSave();
+    if ('lastModel' in patch || 'lastContextDebug' in patch) {
+      void useWorkbenchStore.getState().saveNow();
+    }
+  };
+
+  const handleCreateAiSession = () => {
+    const latestState = useWorkbenchStore.getState().state;
+    if (!latestState) return;
+    const sessions = getAiSessions(latestState.aiAssistant, 'AI 对话');
+    const blankSession = sessions.find(isAiSessionBlank);
+    if (blankSession) {
+      updateAiAssistantState({
+        isOpen: true,
+        activeSessionId: blankSession.id,
+        title: blankSession.title,
+        viewState: blankSession.viewState
+      });
+      return;
+    }
+    const session = makeAiSession();
+    updateAiAssistantState({
+      isOpen: true,
+      activeSessionId: session.id,
+      sessions: [session, ...sessions],
+      title: session.title,
+      viewState: session.viewState
+    });
+  };
+
+  const handleSelectAiSession = (sessionId: string) => {
+    const latestState = useWorkbenchStore.getState().state;
+    if (!latestState) return;
+    const sessions = getAiSessions(latestState.aiAssistant, 'AI 对话');
+    const session = sessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    updateAiAssistantState({
+      isOpen: true,
+      activeSessionId: session.id,
+      title: session.title,
+      viewState: session.viewState
+    });
+  };
+
+  useEffect(() => {
+    const assistant = state?.aiAssistant;
+    const sessions = getAiSessions(assistant, 'AI 对话');
+    const candidates = sessions.filter((session) => {
+      const messages = Array.isArray(session.viewState?.messages)
+        ? (session.viewState.messages as AiChatMessage[])
+        : [];
+      return (
+        messages.some((message) => message.role === 'user') &&
+        !session.viewState?.titleSummarized &&
+        session.title !== 'AI 对话' &&
+        session.title !== '新建 AI 对话'
+      );
+    });
+    const target = candidates[0];
+    if (!target) return;
+
+    let cancelled = false;
+    const messages = (target.viewState.messages as AiChatMessage[]).slice(0, 4);
+    void aiApi
+      .chat({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              '请为下面这段 AI 对话生成一个简短中文标题。',
+              '要求：只输出标题，不要解释；不超过 14 个中文字符；不要加引号。',
+              '',
+              messages.map((message) => `${message.role}: ${message.content}`).join('\n')
+            ].join('\n')
+          }
+        ],
+        context: {
+          workbenchId: workbench?.id,
+          workbenchTitle: workbench?.title,
+          contextMode: 'auto'
+        }
+      })
+      .then((response) => {
+        if (cancelled) return;
+        const title = response.reply.replace(/["“”]/g, '').replace(/\s+/g, ' ').trim().slice(0, 18);
+        if (!title) return;
+        const latestState = useWorkbenchStore.getState().state;
+        if (!latestState?.aiAssistant) return;
+        const latestSessions = getAiSessions(latestState.aiAssistant, 'AI 对话').map((session) =>
+          session.id === target.id
+            ? {
+                ...session,
+                title,
+                viewState: {
+                  ...session.viewState,
+                  titleSummarized: true
+                }
+              }
+            : session
+        );
+        const activeSession =
+          latestSessions.find((session) => session.id === latestState.aiAssistant?.activeSessionId) ||
+          latestSessions[0];
+        updateAiAssistantState({
+          sessions: latestSessions,
+          title: activeSession?.title || title,
+          viewState: activeSession?.viewState || latestState.aiAssistant.viewState
+        });
+      })
+      .catch(() => {
+        const latestState = useWorkbenchStore.getState().state;
+        if (!latestState?.aiAssistant) return;
+        const latestSessions = getAiSessions(latestState.aiAssistant, 'AI 对话').map((session) =>
+          session.id === target.id
+            ? {
+                ...session,
+                viewState: {
+                  ...session.viewState,
+                  titleSummarized: true
+                }
+              }
+            : session
+        );
+        updateAiAssistantState({ sessions: latestSessions });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state?.aiAssistant?.sessions, workbench?.id, workbench?.title]);
 
   const handleCreateExternalPanel = (draft?: {
     title?: string;
@@ -922,24 +1799,30 @@ function WorkbenchPageContent() {
     );
   }
 
-  return (
-    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#fbfbfa] text-[#202124]">
-      <WorkbenchTopBar
-        workspaceId={workbench.workspaceId}
-        title={workbench.title}
-        onRename={handleRename}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onToggleSidebar={() => setIsSidebarPinned((value) => !value)}
-        onSidebarPreviewStart={() => {
-          if (!isSidebarPinned) openSidebarPreview();
-        }}
-        onSidebarPreviewEnd={() => {
-          if (!isSidebarPinned) scheduleCloseSidebarPreview();
-        }}
-        isSidebarPinned={isSidebarPinned}
-        workbenches={workspaceWorkbenches}
-      />
+  const aiSessions = getAiSessions(state.aiAssistant, 'AI 对话');
+  const activeAiSessionId =
+    state.aiAssistant?.activeSessionId && aiSessions.some((session) => session.id === state.aiAssistant?.activeSessionId)
+      ? state.aiAssistant.activeSessionId
+      : aiSessions[0].id;
+  const activeAiSession = aiSessions.find((session) => session.id === activeAiSessionId) || aiSessions[0];
+  const aiAssistantEditor: EditorState = {
+    id: state.aiAssistant?.id || `ai-assistant-${workbench.id}`,
+    type: 'ai',
+    title: activeAiSession?.title || state.aiAssistant?.title || 'AI 对话',
+    x: 0,
+    y: 0,
+    w: 0,
+    h: 0,
+    zIndex: 0,
+    minimized: false,
+    viewState: activeAiSession?.viewState || state.aiAssistant?.viewState || { messages: [], contextHint: 'workbench' }
+  };
+  const aiAssistantMode = state.aiAssistant?.mode || 'floating';
+  const isAiAssistantOpen = Boolean(state.aiAssistant?.isOpen);
+  const aiAssistantSidebarWidth = state.aiAssistant?.sidebarWidth || 460;
 
+  return (
+    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#f7f7f5] text-[#202124]">
       {isCommandPaletteOpen && (
         <div className="absolute inset-0 z-50 flex items-start justify-center bg-black/20 pt-20 backdrop-blur-[3px]">
           <div className="workspace-soft-scale w-full max-w-2xl overflow-hidden rounded-3xl border border-[#e5e5e1] bg-white shadow-[0_24px_80px_rgba(0,0,0,0.16)]">
@@ -990,17 +1873,19 @@ function WorkbenchPageContent() {
         </div>
       )}
 
-      <div className="workspace-main relative flex min-h-0 flex-1 overflow-hidden bg-[#fbfbfa] p-3 pt-16">
+      <div className="workspace-main relative flex min-h-0 flex-1 overflow-hidden bg-white">
         {isSidebarPinned ? (
-          <div className="mr-3 min-h-0 shrink-0">
+          <div className="min-h-0 shrink-0">
             <WorkbenchSidebar
               workspaceId={workbench.workspaceId}
+              workbenchId={workbench.id}
               workbenchRootPath={workbench.rootPath}
               dndManager={dndManager}
               editors={state.editors}
               workbenches={workspaceWorkbenches}
               currentWorkbenchId={workbench.id}
               activeEditorId={state.activeEditorId}
+              currentWorkbenchTitle={workbench.title}
               onActivateEditor={activateEditor}
               onFileOpen={handleOpenResourceInWorkbench}
               onNewChat={handleCreateAiPanel}
@@ -1013,31 +1898,34 @@ function WorkbenchPageContent() {
               onOpenWorkbench={(workbenchId) => navigate(`/workbenches/${workbenchId}`)}
               width={sidebarWidth}
               onResizeStart={handleSidebarResizeStart}
+              variant="pinned"
             />
           </div>
         ) : (
           <div
-            className="group/sidebar absolute bottom-12 left-0 top-14 z-20 w-4"
+            className="group/sidebar absolute bottom-0 left-0 top-0 z-20 w-4"
             onMouseEnter={openSidebarPreview}
             onMouseLeave={scheduleCloseSidebarPreview}
           >
             <div
-              className={`absolute left-0 top-0 h-full w-[min(420px,calc(100vw-40px))] transition-all duration-300 ease-out ${
+              className={`absolute left-2 top-1/2 h-[calc(100%-32px)] -translate-y-1/2 w-[min(400px,calc(100vw-32px))] transition-all duration-300 ease-out ${
                 isSidebarPreviewOpen
-                  ? 'pointer-events-auto translate-x-3 opacity-100'
-                  : 'pointer-events-none -translate-x-[calc(100%-12px)] opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:translate-x-3 group-hover/sidebar:opacity-100 group-focus-within/sidebar:pointer-events-auto group-focus-within/sidebar:translate-x-3 group-focus-within/sidebar:opacity-100'
+                  ? 'pointer-events-auto translate-x-0 opacity-100'
+                  : 'pointer-events-none -translate-x-[calc(100%-12px)] opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:translate-x-0 group-hover/sidebar:opacity-100 group-focus-within/sidebar:pointer-events-auto group-focus-within/sidebar:translate-x-0 group-focus-within/sidebar:opacity-100'
               }`}
               onMouseEnter={openSidebarPreview}
               onMouseLeave={scheduleCloseSidebarPreview}
             >
               <WorkbenchSidebar
                 workspaceId={workbench.workspaceId}
+                workbenchId={workbench.id}
                 workbenchRootPath={workbench.rootPath}
                 dndManager={dndManager}
                 editors={state.editors}
                 workbenches={workspaceWorkbenches}
                 currentWorkbenchId={workbench.id}
                 activeEditorId={state.activeEditorId}
+                currentWorkbenchTitle={workbench.title}
                 onActivateEditor={activateEditor}
                 onFileOpen={handleOpenResourceInWorkbench}
                 onNewChat={handleCreateAiPanel}
@@ -1050,6 +1938,7 @@ function WorkbenchPageContent() {
                 onOpenWorkbench={(workbenchId) => navigate(`/workbenches/${workbenchId}`)}
                 width={sidebarWidth}
                 onResizeStart={handleSidebarResizeStart}
+                variant="preview"
               />
             </div>
           </div>
@@ -1066,9 +1955,9 @@ function WorkbenchPageContent() {
             documentStateByResourceId={documentStateByResourceId}
             onActivateEditor={(editorId, paneId) => activateEditor(editorId, paneId)}
             onCloseEditor={closeEditor}
-            onBindResource={(editorId) => setResourcePickerEditorId(editorId)}
+            onBindResource={(editorId) => setResourcePickerState({ mode: 'replace', editorId })}
             onChangeDocumentContent={handleChangeDocumentContent}
-            onUpdateEditorViewState={updateEditorViewState}
+            onUpdateEditorViewState={handleUpdateEditorViewState}
             onActivatePane={(paneId) => updateWorkbenchState({ activeEditorPaneId: paneId })}
             onInitializeLayout={(layout, paneId) =>
               updateWorkbenchState({
@@ -1078,7 +1967,12 @@ function WorkbenchPageContent() {
             }
             onDropResourceToPane={handleDropResourceToEditor}
             onDropEditorTab={handleDropEditorTab}
-            onAddEditor={() => addEditor('notes')}
+            onAddEditor={(paneId) => setResourcePickerState({ mode: 'add-tab', paneId: paneId ?? state.activeEditorPaneId ?? null })}
+            onClosePane={(paneId) => {
+              const targetLeaf = findLeafById(state.editorLayout, paneId);
+              if (!targetLeaf) return;
+              targetLeaf.editorIds.forEach((editorId) => closeEditor(editorId));
+            }}
             onUpdateSplitRatio={(splitId, ratio) => {
               if (!state?.editorLayout) return;
 
@@ -1095,17 +1989,47 @@ function WorkbenchPageContent() {
                 editorLayout: updateRatio(state.editorLayout)
               });
             }}
-            aiContext={{
-              workbenchTitle: workbench.title,
-              workbenchDescription: workbench.description,
-              workbenchId: workbench.id,
-              activeFile: activeFileContext,
-              activeFileContent,
-              activeExternal: activeExternalContext
-            }}
+            onToggleSidebar={() => setIsSidebarPinned((value) => !value)}
+            isSidebarPinned={isSidebarPinned}
+            aiContext={aiAssistantContext}
           />
         </div>
+        {isAiAssistantOpen && aiAssistantMode === 'sidebar' && (
+          <AIAssistantShell
+            editor={aiAssistantEditor}
+            workspaceId={workbench.workspaceId}
+            mode={aiAssistantMode}
+            sessions={aiSessions}
+            activeSessionId={activeAiSessionId}
+            sidebarWidth={aiAssistantSidebarWidth}
+            aiContext={aiAssistantContext}
+            onModeChange={(mode) => updateAiAssistantState({ mode, isOpen: true })}
+            onClose={() => updateAiAssistantState({ isOpen: false })}
+            onResizeSidebar={(width) => updateAiAssistantState({ sidebarWidth: width })}
+            onSelectSession={handleSelectAiSession}
+            onCreateSession={handleCreateAiSession}
+            onUpdateViewState={handleUpdateAiAssistantViewState}
+          />
+        )}
       </div>
+
+      {isAiAssistantOpen && aiAssistantMode !== 'sidebar' && (
+        <AIAssistantShell
+          editor={aiAssistantEditor}
+          workspaceId={workbench.workspaceId}
+          mode={aiAssistantMode}
+          sessions={aiSessions}
+          activeSessionId={activeAiSessionId}
+          sidebarWidth={aiAssistantSidebarWidth}
+          aiContext={aiAssistantContext}
+          onModeChange={(mode) => updateAiAssistantState({ mode, isOpen: true })}
+          onClose={() => updateAiAssistantState({ isOpen: false })}
+          onResizeSidebar={(width) => updateAiAssistantState({ sidebarWidth: width })}
+          onSelectSession={handleSelectAiSession}
+          onCreateSession={handleCreateAiSession}
+          onUpdateViewState={handleUpdateAiAssistantViewState}
+        />
+      )}
 
       <button
         onClick={handleCreateAiPanel}
@@ -1114,16 +2038,38 @@ function WorkbenchPageContent() {
       >
         <Sparkles className="h-5 w-5" />
       </button>
+      <button
+        onClick={handleCreateStudioPanel}
+        className="workspace-soft-scale absolute bottom-28 right-5 z-30 inline-flex h-12 w-12 items-center justify-center rounded-full border border-[#e5e5e1] bg-white text-[#202124] shadow-[0_18px_50px_rgba(0,0,0,0.14)] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#f6f6f4] active:scale-95"
+        title="Open AI Studio"
+      >
+        <Layers3 className="h-5 w-5" />
+      </button>
 
       <ResourcePickerDialog
-        open={Boolean(resourcePickerEditorId)}
+        open={Boolean(resourcePickerState)}
         resources={resourceOptions}
-        onClose={() => setResourcePickerEditorId(null)}
+        onClose={() => setResourcePickerState(null)}
         onSelect={(resource) => {
-          if (resourcePickerEditorId) {
-            requestOpenResource(resource, { kind: 'tab', bindEditorId: resourcePickerEditorId });
+          if (resourcePickerState?.mode === 'replace' && resourcePickerState.editorId) {
+            requestOpenResource(resource, { kind: 'tab', bindEditorId: resourcePickerState.editorId });
+            return;
+          }
+
+          if (resourcePickerState?.mode === 'add-tab') {
+            requestOpenResource(resource, { kind: 'tab', paneId: resourcePickerState.paneId ?? undefined });
           }
         }}
+      />
+
+      <AddSourcesDialog
+        isOpen={isAddSourcesOpen}
+        onClose={() => setIsAddSourcesOpen(false)}
+        onUploadFiles={uploadResourcesToTarget}
+        onAddWebsite={addWebsiteSource}
+        onAddText={addCopiedTextSource}
+        onDiscoverSources={discoverSources}
+        onImportDiscoveredSources={importDiscoveredSources}
       />
 
       <CodeOpenModeDialog
@@ -1154,18 +2100,6 @@ function WorkbenchPageContent() {
         onCodeOpenModeChange={setCodeOpenMode}
         onPromptPreferenceChange={setShouldPromptForCodeOpenMode}
       />
-
-      <footer className="flex h-8 shrink-0 items-center justify-between border-t border-[#eeeeeb] bg-[#fbfbfa] px-5 text-[11px] text-[#96999d]">
-        <div className="flex items-center gap-3">
-          <span>{workbench.title}</span>
-          <span>{state.editors.length} open</span>
-          <span>{resourceOptions.length} files indexed</span>
-        </div>
-        <div className="flex items-center gap-3">
-          <span>{saveStatus === 'saving' ? 'Saving...' : saveStatus === 'error' ? 'Save error' : 'Ready'}</span>
-          <span>{activeFileContext?.path || activeExternalContext?.title || 'Workbench'}</span>
-        </div>
-      </footer>
     </div>
   );
 }

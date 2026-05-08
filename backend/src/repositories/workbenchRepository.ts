@@ -101,21 +101,40 @@ export class WorkbenchRepository {
 
     if (!Array.isArray(parsed?.workbenches)) return;
 
+    const workspaceIds = [
+      ...new Set(
+        parsed.workbenches
+          .map((record) => record?.workspaceId)
+          .filter((workspaceId): workspaceId is string => Boolean(workspaceId))
+      )
+    ];
+    const existingWorkspaces = await prisma.workspace.findMany({
+      where: { id: { in: workspaceIds } },
+      select: { id: true }
+    });
+    const existingWorkspaceIds = new Set(existingWorkspaces.map((workspace) => workspace.id));
+
     for (const record of parsed.workbenches) {
       if (!record?.id || !record.workspaceId) continue;
+      if (!existingWorkspaceIds.has(record.workspaceId)) continue;
+
       const existing = await prisma.workbench.findUnique({ where: { id: record.id }, select: { id: true } });
       if (existing) continue;
 
-      await this.persistRecord({
-        ...record,
-        title: record.title || 'Untitled Workbench',
-        description: record.description || '',
-        rootPath: record.rootPath || buildFallbackRootPath(record.title || 'Untitled Workbench'),
-        createdAt: record.createdAt || new Date().toISOString(),
-        updatedAt: record.updatedAt || new Date().toISOString(),
-        lastOpenedAt: record.lastOpenedAt || record.updatedAt || record.createdAt || new Date().toISOString(),
-        state: record.state || EMPTY_STATE(record.id)
-      });
+      try {
+        await this.persistRecord({
+          ...record,
+          title: record.title || 'Untitled Workbench',
+          description: record.description || '',
+          rootPath: record.rootPath || buildFallbackRootPath(record.title || 'Untitled Workbench'),
+          createdAt: record.createdAt || new Date().toISOString(),
+          updatedAt: record.updatedAt || new Date().toISOString(),
+          lastOpenedAt: record.lastOpenedAt || record.updatedAt || record.createdAt || new Date().toISOString(),
+          state: record.state || EMPTY_STATE(record.id)
+        });
+      } catch (error) {
+        console.warn(`Skipped legacy workbench migration for ${record.id}:`, error);
+      }
     }
   }
 

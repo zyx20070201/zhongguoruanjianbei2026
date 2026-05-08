@@ -3,6 +3,9 @@ export interface CreateFolderDTO {
   name: string;
   parentId?: string;
   parentPath?: string;
+  workbenchId?: string;
+  resourceRole?: string;
+  scope?: 'workspace' | 'workbench' | string;
 }
 
 export interface CreateFileDTO {
@@ -12,7 +15,15 @@ export interface CreateFileDTO {
   parentId?: string;
   parentPath?: string;
   fileCategory?: string;
+  mimeType?: string;
   tags?: string[];
+  workbenchId?: string;
+  resourceRole?: string;
+  resourceType?: string;
+  scope?: 'workspace' | 'workbench' | string;
+  origin?: string;
+  metadata?: Record<string, unknown>;
+  indexInBackground?: boolean;
 }
 
 export interface RenameNodeDTO {
@@ -39,6 +50,12 @@ export interface SaveGeneratedContentDTO {
   filename: string;
   content: string;
   category?: string;
+  workbenchId?: string;
+  resourceRole?: string;
+  resourceType?: string;
+  scope?: 'workspace' | 'workbench' | string;
+  origin?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface UpdateNodeTagsDTO {

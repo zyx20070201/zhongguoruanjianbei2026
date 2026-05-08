@@ -1,9 +1,5 @@
 import React from 'react';
 import { 
-  File, 
-  Folder, 
-  FolderOpen, 
-  MoreVertical, 
   Edit2, 
   Trash2, 
   Copy, 
@@ -24,7 +20,6 @@ interface FileContextMenuProps {
   onDelete: (id: string) => void;
   onCopy: (id: string, targetParentId?: string | null) => void;
   onMove: (id: string) => void;
-  onEditTags?: (id: string) => void;
   onDownload: (id: string) => void;
   onCreateFile?: (parentId: string, parentPath: string) => void;
   onCreateNote?: (parentId: string, parentPath: string) => void;
@@ -41,7 +36,6 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
   onDelete,
   onCopy,
   onMove,
-  onEditTags,
   onDownload,
   onCreateFile,
   onCreateNote,
@@ -107,12 +101,6 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
           onClick={() => { onMove(node.id); onClose(); }}
         >
           <Move size={14} /> Move to...
-        </button>
-        <button
-          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
-          onClick={() => { onEditTags?.(node.id); onClose(); }}
-        >
-          <MoreVertical size={14} /> Edit Tags
         </button>
         {!isFolder && (
           <button 

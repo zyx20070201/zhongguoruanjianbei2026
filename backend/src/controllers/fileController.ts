@@ -1,6 +1,9 @@
 import { Request, Response } from 'express';
 import { FileSystemService } from '../services/fileSystemService';
 import { DocumentPreviewService } from '../services/documentPreviewService';
+import { documentTextExtractionService } from '../services/documentTextExtractionService';
+import { webSourceExtractionService } from '../services/webSourceExtractionService';
+import { resourceDiscoveryService } from '../services/resourceDiscoveryService';
 import prisma from '../config/db';
 import { 
   validateWorkspaceId, 
@@ -35,12 +38,113 @@ const normalizePossiblyMojibakeName = (value: string) => {
   }
 };
 
+const sourceFilename = (title: string, fallback: string) => {
+  const safeBase = (title || fallback)
+    .trim()
+    .replace(/\.[^./]+$/, '')
+    .replace(/[\\/:*?"<>|#{}[\]`]/g, '-')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80)
+    .trim() || fallback;
+  return `${safeBase}.md`;
+};
+
+const buildCrawledSourceMarkdown = (source: {
+  title: string;
+  url: string;
+  siteName?: string;
+  pages: Array<{ title: string; url: string; contentMarkdown: string; depth: number }>;
+}) => {
+  const tableOfContents = source.pages
+    .map((page, index) => {
+      const indent = '  '.repeat(Math.max(0, page.depth));
+      return `${indent}- ${index + 1}. [${page.title}](${page.url})`;
+    })
+    .join('\n');
+
+  const pages = source.pages
+    .map((page, index) => {
+      const content = page.contentMarkdown
+        .replace(/^#\s+.+$/m, '')
+        .replace(/^Source type:\s*.+$/gim, '')
+        .replace(/^URL:\s*.+$/gim, '')
+        .replace(/^Site:\s*.+$/gim, '')
+        .replace(/^Byline:\s*.+$/gim, '')
+        .replace(/^Excerpt:\s*.+$/gim, '')
+        .trim();
+      return [
+        `## ${index + 1}. ${page.title}`,
+        '',
+        `URL: ${page.url}`,
+        `Depth: ${page.depth}`,
+        '',
+        content
+      ].join('\n');
+    })
+    .join('\n\n---\n\n');
+
+  return [
+    `# ${source.title}`,
+    '',
+    'Source type: website',
+    `URL: ${source.url}`,
+    source.siteName ? `Site: ${source.siteName}` : '',
+    `Pages indexed: ${source.pages.length}`,
+    '',
+    '## Site map',
+    '',
+    tableOfContents,
+    '',
+    '---',
+    '',
+    pages
+  ].filter((line) => line !== '').join('\n');
+};
+
+const buildSourceManifest = (source: {
+  title: string;
+  url: string;
+  siteName?: string;
+  pages: Array<{ title: string; url: string; depth: number; excerpt?: string; links?: Array<{ href: string; text: string; internal: boolean }> }>;
+}) => ({
+  title: source.title,
+  url: source.url,
+  siteName: source.siteName,
+  pageCount: source.pages.length,
+  pages: source.pages.map((page, index) => ({
+    id: `P${index + 1}`,
+    title: page.title,
+    url: page.url,
+    depth: page.depth,
+    excerpt: page.excerpt || '',
+    linkCount: page.links?.length || 0
+  }))
+});
+
+const parsePositiveInteger = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+};
+
 const handleError = (res: Response, error: any) => {
   if (error instanceof FileSystemError) {
     return res.status(error.statusCode).json({ error: error.message });
   }
   console.error(error);
   return res.status(500).json({ error: error.message || 'Internal server error' });
+};
+
+const parseMetadataInput = (value: unknown): Record<string, unknown> | undefined => {
+  if (!value) return undefined;
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== 'string') return undefined;
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 // 1. Get File Tree
@@ -51,6 +155,26 @@ export const getFileTree = async (req: Request, res: Response) => {
     
     const tree = await FileSystemService.getFileTree(workspaceId);
     res.json(tree);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const getResources = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const workbenchId = getSingleParam(req.query.workbenchId);
+    const scope = getSingleParam(req.query.scope);
+    const role = getSingleParam(req.query.role);
+
+    validateWorkspaceId(workspaceId);
+
+    const resources = await FileSystemService.listResources(workspaceId, {
+      workbenchId: workbenchId || undefined,
+      scope: scope || 'all',
+      role: role || undefined
+    });
+    res.json(resources);
   } catch (error: any) {
     handleError(res, error);
   }
@@ -73,7 +197,7 @@ export const initFileSystem = async (req: Request, res: Response) => {
 export const createFolder = async (req: Request, res: Response) => {
   try {
     const workspaceId = getSingleParam(req.params.workspaceId);
-    const { name, parentId, parentPath } = req.body;
+    const { name, parentId, parentPath, workbenchId, resourceRole, scope } = req.body;
     
     validateWorkspaceId(workspaceId);
     validateName(name);
@@ -82,7 +206,10 @@ export const createFolder = async (req: Request, res: Response) => {
       workspaceId,
       name,
       parentId,
-      parentPath
+      parentPath,
+      workbenchId,
+      resourceRole,
+      scope
     });
     res.json(folder);
   } catch (error: any) {
@@ -94,7 +221,7 @@ export const createFolder = async (req: Request, res: Response) => {
 export const createFile = async (req: Request, res: Response) => {
   try {
     const workspaceId = getSingleParam(req.params.workspaceId);
-    const { name, content, parentId, parentPath, fileCategory } = req.body;
+    const { name, content, parentId, parentPath, fileCategory, workbenchId, resourceRole, resourceType, scope, origin, metadata } = req.body;
     
     validateWorkspaceId(workspaceId);
     validateName(name);
@@ -105,9 +232,108 @@ export const createFile = async (req: Request, res: Response) => {
       content,
       parentId,
       parentPath,
-      fileCategory
+      fileCategory,
+      workbenchId,
+      resourceRole,
+      resourceType,
+      scope,
+      origin,
+      metadata
     });
     res.json(file);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const importWebSource = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const { url, title, parentId, parentPath, workbenchId, scope, maxPages, maxDepth } = req.body;
+
+    validateWorkspaceId(workspaceId);
+    if (!url || typeof url !== 'string') throw new FileSystemError(400, 'URL is required');
+
+    const extracted = await webSourceExtractionService.crawl({
+      url,
+      title: typeof title === 'string' ? title : undefined,
+      maxPages: parsePositiveInteger(maxPages) || 1,
+      maxDepth: parsePositiveInteger(maxDepth) ?? 0
+    });
+    const name = sourceFilename(extracted.title, 'web-source');
+    validateName(name);
+    const manifest = buildSourceManifest(extracted);
+
+    const file = await FileSystemService.createFileOrReturnExisting({
+      workspaceId,
+      name,
+      content: buildCrawledSourceMarkdown(extracted),
+      parentId,
+      parentPath,
+      fileCategory: 'web',
+      mimeType: 'text/markdown; charset=utf-8',
+      tags: ['source', 'web', 'site'],
+      workbenchId,
+      resourceRole: 'source',
+      resourceType: 'source',
+      scope,
+      origin: 'web',
+      metadata: { sourceUrl: extracted.url, siteName: extracted.siteName, pageCount: extracted.pages.length },
+      indexInBackground: true
+    });
+
+    res.json({
+      file,
+      source: {
+        url: extracted.url,
+        title: extracted.title,
+        siteName: extracted.siteName,
+        pageCount: extracted.pages.length
+      },
+      manifest
+    });
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const extractWebSourcePreview = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const { url, title } = req.body;
+
+    validateWorkspaceId(workspaceId);
+    if (!url || typeof url !== 'string') throw new FileSystemError(400, 'URL is required');
+
+    const extracted = await webSourceExtractionService.extract({
+      url,
+      title: typeof title === 'string' ? title : undefined
+    });
+
+    res.json({
+      ...extracted,
+      manifest: buildSourceManifest({ ...extracted, pages: [{ ...extracted, depth: 0 }] })
+    });
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const discoverWebSources = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const { query, maxResults, provider } = req.body;
+
+    validateWorkspaceId(workspaceId);
+    if (!query || typeof query !== 'string') throw new FileSystemError(400, 'Search query is required');
+
+    const discovery = await resourceDiscoveryService.discover({
+      query,
+      maxResults: typeof maxResults === 'number' ? maxResults : undefined,
+      provider: provider === 'exa' || provider === 'tavily' || provider === 'auto' ? provider : 'auto'
+    });
+
+    res.json(discovery);
   } catch (error: any) {
     handleError(res, error);
   }
@@ -215,7 +441,7 @@ export const uploadFiles = async (req: Request, res: Response) => {
     const workspaceId = getSingleParam(req.params.workspaceId);
     // When using multer, files are in req.files
     const files = (req as any).files as any[];
-    const { parentId, parentPath } = req.body;
+    const { parentId, parentPath, workbenchId, resourceRole, scope, metadata } = req.body;
     
     validateWorkspaceId(workspaceId);
 
@@ -231,7 +457,13 @@ export const uploadFiles = async (req: Request, res: Response) => {
           workspaceId,
           { ...file, originalname: normalizedName },
           parentId,
-          parentPath
+          parentPath,
+          {
+            workbenchId,
+            resourceRole,
+            scope,
+            metadata: parseMetadataInput(metadata)
+          }
         );
         results.push({ success: true, file: created });
       } catch (err: any) {
@@ -338,7 +570,7 @@ export const saveFileContent = async (req: Request, res: Response) => {
 export const saveGeneratedContent = async (req: Request, res: Response) => {
   try {
     const workspaceId = getSingleParam(req.params.workspaceId);
-    const { targetDir, filename, content, category } = req.body;
+    const { targetDir, filename, content, category, workbenchId, resourceRole, resourceType, scope, origin, metadata } = req.body;
     
     validateWorkspaceId(workspaceId);
     if (!targetDir) throw new FileSystemError(400, 'Target directory is required');
@@ -349,7 +581,13 @@ export const saveGeneratedContent = async (req: Request, res: Response) => {
       targetDir,
       filename,
       content,
-      category
+      category,
+      workbenchId,
+      resourceRole,
+      resourceType,
+      scope,
+      origin,
+      metadata
     });
     res.json(file);
   } catch (error: any) {
@@ -393,6 +631,28 @@ export const streamFilePreview = async (req: Request, res: Response) => {
         handleError(res, new FileSystemError(404, 'Preview file is unavailable'));
       }
     });
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const getDocumentStructure = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const id = getSingleParam(req.query.id);
+
+    validateWorkspaceId(workspaceId);
+    validateNodeId(id);
+
+    const file = await prisma.fileSystemObject.findFirst({
+      where: { id, workspaceId }
+    });
+
+    if (!file) throw new FileSystemError(404, 'File not found');
+    if (file.nodeType !== 'file') throw new FileSystemError(400, 'Cannot render a folder');
+
+    const structure = await documentTextExtractionService.renderable(file);
+    res.json(structure);
   } catch (error: any) {
     handleError(res, error);
   }

@@ -9,6 +9,10 @@ import { learningResourceAllocatorService } from './learningResourceAllocatorSer
 import { learningRunService } from './learningRunService';
 import { capabilityRegistry } from './capabilityRegistry';
 import { registerLearningCapabilities } from './learningCapabilities';
+import { conversationHistoryService } from './conversationHistoryService';
+import { savedMemoryService } from './savedMemoryService';
+import { memoryExtractorService } from './memoryExtractorService';
+import { learnerStateContextAdapter } from './learnerStateContextAdapter';
 import { EditorLayoutNode, EditorState, WorkbenchState } from '../types/workbench';
 
 registerLearningCapabilities();
@@ -20,6 +24,8 @@ type TerminalMessage = {
 
 interface TerminalChatInput {
   workspaceId: string;
+  sessionId?: string | null;
+  workbenchId?: string | null;
   messages: TerminalMessage[];
 }
 
@@ -144,15 +150,31 @@ const buildTerminalPrompt = (params: {
   workbenchCount: number;
   messages: TerminalMessage[];
   goalText: string;
+  savedMemoryContext?: string;
+  referenceHistoryContext?: string;
+  learnerStateContext?: string;
 }) => `你是一个高权限的课程级 AI Terminal，类似 Codex，但服务于启发式学习和 goal-oriented 学习现场搭建。
 
-请基于用户最近的目标输入，生成一个可编辑的学习目标草案。你必须只输出 JSON，不要输出 Markdown。
+请基于用户最近输入、Saved memories、可检索历史对话和 Learner State，生成一个可编辑的学习目标草案。你必须只输出 JSON，不要输出 Markdown。
+
+Memory policy:
+- Saved memories 是用户明确要求记住或长期稳定的信息，优先遵守。
+- Reference chat history 只用于找回以前聊过的相关内容，不要把它当成长期用户偏好。
+- Learner State 是短期/中期学习状态，只用于个性化讲解和规划，不要给用户贴固定标签。
+- 单次“请用例子解释”只影响当前回复；只有用户明确说“请记住/以后都/我偏好”时，才视为长期记忆。
 
 Workspace:
 - 名称: ${params.workspaceName}
 - 专业方向: ${params.major || '未指定'}
 - 已有资源数: ${params.fileCount}
 - 已有学习现场 Workbench 数: ${params.workbenchCount}
+
+${params.savedMemoryContext || 'Saved memories: none.'}
+
+${params.referenceHistoryContext || 'Reference chat history: none.'}
+
+Learner State:
+${params.learnerStateContext || 'none'}
 
 最近对话:
 ${params.messages.slice(-8).map((message) => `${message.role}: ${message.content}`).join('\n')}
@@ -202,6 +224,9 @@ const generateTerminalDraftWithDeepSeek = async (params: {
   workbenchCount: number;
   messages: TerminalMessage[];
   goalText: string;
+  savedMemoryContext?: string;
+  referenceHistoryContext?: string;
+  learnerStateContext?: string;
 }): Promise<TerminalDraft | null> => {
   if (!deepseekService.isConfigured()) return null;
 
@@ -471,19 +496,59 @@ class LearningOrchestrationService {
     const workbenches = await workbenchService.listByWorkspace(input.workspaceId);
     const goalText = getLatestUserMessage(input.messages) || `学习 ${workspace.name}`;
     const fileCount = workspace.fileObjects.filter((file) => file.nodeType === 'file').length;
+    const [savedMemoryContext, learnerAgentContext, retrievedHistory] = await Promise.all([
+      savedMemoryService.promptContext({ workspaceId: input.workspaceId, limit: 8 }),
+      learnerStateContextAdapter.build({
+        workspaceId: input.workspaceId,
+        workbenchId: input.workbenchId || null,
+        audience: 'tutor',
+        tokenBudget: 900
+      }),
+      conversationHistoryService.retrieve({
+        workspaceId: input.workspaceId,
+        workbenchId: input.workbenchId || null,
+        userId: workspace.userId,
+        currentSessionId: input.sessionId || null,
+        query: goalText,
+        limit: 6
+      })
+    ]);
+    const referenceHistoryContext = conversationHistoryService.formatRetrieved(retrievedHistory);
     const deepSeekDraft = await generateTerminalDraftWithDeepSeek({
       workspaceName: workspace.name,
       major: workspace.major,
       fileCount,
       workbenchCount: workbenches.length,
       messages: input.messages,
-      goalText
+      goalText,
+      savedMemoryContext,
+      referenceHistoryContext,
+      learnerStateContext: learnerAgentContext.promptContext
     });
     const fallbackDraft = buildFallbackGoalDraft(goalText, workspace.major);
     const terminalDraft: TerminalDraft = deepSeekDraft || {
       reply: buildFallbackTerminalReply(fallbackDraft.title, workbenches.length, fileCount),
       goalDraft: fallbackDraft
     };
+
+    const savedTurn = await conversationHistoryService.saveTurn({
+      workspaceId: input.workspaceId,
+      workbenchId: input.workbenchId || null,
+      userId: workspace.userId,
+      sessionId: input.sessionId || null,
+      title: goalText,
+      source: 'terminal',
+      messages: input.messages,
+      assistantReply: terminalDraft.reply
+    });
+    const memoryExtraction = await memoryExtractorService.apply({
+      workspaceId: input.workspaceId,
+      workbenchId: input.workbenchId || null,
+      userId: workspace.userId,
+      messages: input.messages,
+      answer: terminalDraft.reply,
+      sourceId: savedTurn.sessionId
+    });
 
     await learningMemoryService.recordEvent({
       workspaceId: input.workspaceId,
@@ -492,13 +557,26 @@ class LearningOrchestrationService {
       payload: {
         goalText,
         goalDraft: terminalDraft.goalDraft,
-        source: deepSeekDraft ? 'deepseek' : 'fallback'
+        source: deepSeekDraft ? 'deepseek' : 'fallback',
+        sessionId: savedTurn.sessionId,
+        retrievedHistoryCount: retrievedHistory.length,
+        memoryExtraction: {
+          savedMemory: Boolean(memoryExtraction.savedMemory),
+          signals: memoryExtraction.extraction.learnerStateSignals.length,
+          shouldAskUserToSave: memoryExtraction.extraction.shouldAskUserToSave
+        }
       }
     });
 
     return {
+      sessionId: savedTurn.sessionId,
       reply: terminalDraft.reply,
       goalDraft: terminalDraft.goalDraft,
+      memoryContext: {
+        savedMemoryContext,
+        referenceHistory: retrievedHistory,
+        learnerStateSummary: learnerAgentContext.summary
+      },
       suggestedActions: [
         {
           id: 'create-guided-workbench',
@@ -579,6 +657,11 @@ class LearningOrchestrationService {
       targetDir,
       filename: '01-learning-brief.md',
       category: 'generated',
+      workbenchId: workbench.id,
+      resourceRole: 'generated',
+      resourceType: 'generated',
+      scope: 'workbench',
+      origin: 'ai',
       content: generatedContent.brief
     });
     const practice = await FileSystemService.saveGeneratedContent({
@@ -586,6 +669,11 @@ class LearningOrchestrationService {
       targetDir,
       filename: '02-diagnostic-practice.md',
       category: 'generated',
+      workbenchId: workbench.id,
+      resourceRole: 'generated',
+      resourceType: 'generated',
+      scope: 'workbench',
+      origin: 'ai',
       content: generatedContent.practice
     });
     const plan = await FileSystemService.saveGeneratedContent({
@@ -593,6 +681,11 @@ class LearningOrchestrationService {
       targetDir,
       filename: '03-resource-plan.md',
       category: 'generated',
+      workbenchId: workbench.id,
+      resourceRole: 'generated',
+      resourceType: 'generated',
+      scope: 'workbench',
+      origin: 'ai',
       content: generatedContent.plan
     });
     const notes = await FileSystemService.saveGeneratedContent({
@@ -600,6 +693,11 @@ class LearningOrchestrationService {
       targetDir: workbench.rootPath,
       filename: 'learning-notes.md',
       category: 'note',
+      workbenchId: workbench.id,
+      resourceRole: 'note',
+      resourceType: 'note',
+      scope: 'workbench',
+      origin: 'ai',
       content: generatedContent.notes
     });
 

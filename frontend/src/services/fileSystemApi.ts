@@ -9,6 +9,68 @@ export interface FilePreviewInfo {
   message?: string;
 }
 
+export interface RenderableDocumentPage {
+  fileId?: string;
+  page: number;
+  text: string;
+  charStart?: number;
+  charEnd?: number;
+}
+
+export interface RenderableDocumentChunk {
+  fileId?: string;
+  chunkIndex: number;
+  text: string;
+  html?: string;
+  headingPath?: string[];
+  paragraphIndex?: number;
+  blockId?: string;
+  lineStart?: number;
+  lineEnd?: number;
+  charStart?: number;
+  charEnd?: number;
+}
+
+export interface RenderableDocument {
+  kind: 'pdf' | 'docx' | 'markdown' | 'code' | 'text';
+  fileId?: string;
+  fileName?: string;
+  pageCount?: number;
+  pages?: RenderableDocumentPage[];
+  chunks?: RenderableDocumentChunk[];
+  extractor: string;
+  fallbackReason?: string;
+}
+
+export interface DiscoveredResource {
+  id: string;
+  title: string;
+  url: string;
+  snippet: string;
+  summary?: string;
+  score?: number;
+  source?: string;
+  provider: 'exa' | 'tavily';
+  publishedAt?: string;
+  author?: string;
+  contentPreview?: string;
+}
+
+export interface SourceDiscoveryResult {
+  provider: 'exa' | 'tavily';
+  query: string;
+  results: DiscoveredResource[];
+}
+
+export interface ResourceCreateOptions {
+  workbenchId?: string;
+  resourceRole?: 'source' | 'note' | 'generated' | 'artifact' | 'resource' | 'file' | string;
+  resourceType?: string;
+  scope?: 'workspace' | 'workbench' | string;
+  origin?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export const fileSystemApi = {
   getTree: async (workspaceId: string): Promise<FileSystemObject[]> => {
     const response = await client.get(`/files/workspace/${workspaceId}/tree`);
@@ -20,13 +82,55 @@ export const fileSystemApi = {
     return response.data;
   },
 
-  createFolder: async (workspaceId: string, data: { name: string; parentId?: string | null; parentPath?: string }): Promise<FileSystemObject> => {
+  getResources: async (
+    workspaceId: string,
+    params?: { workbenchId?: string; scope?: 'all' | 'workspace' | 'workbench' | string; role?: string }
+  ): Promise<FileSystemObject[]> => {
+    const response = await client.get(`/files/workspace/${workspaceId}/resources`, { params });
+    return response.data;
+  },
+
+  createFolder: async (workspaceId: string, data: { name: string; parentId?: string | null; parentPath?: string } & ResourceCreateOptions): Promise<FileSystemObject> => {
     const response = await client.post(`/files/workspace/${workspaceId}/folder`, data);
     return response.data;
   },
 
-  createFile: async (workspaceId: string, data: { name: string; content?: string; parentId?: string | null; parentPath?: string; fileCategory?: string }): Promise<FileSystemObject> => {
+  createFile: async (workspaceId: string, data: { name: string; content?: string; parentId?: string | null; parentPath?: string; fileCategory?: string; mimeType?: string; tags?: string[] } & ResourceCreateOptions): Promise<FileSystemObject> => {
     const response = await client.post(`/files/workspace/${workspaceId}/file`, data);
+    return response.data;
+  },
+
+  importUrl: async (
+    workspaceId: string,
+    data: { url: string; title?: string; parentId?: string | null; parentPath?: string } & ResourceCreateOptions
+  ): Promise<{ file: FileSystemObject; source: { url: string; title: string } }> => {
+    const response = await client.post(`/files/workspace/${workspaceId}/import-url`, data);
+    return response.data;
+  },
+
+  extractUrlPreview: async (
+    workspaceId: string,
+    data: { url: string; title?: string }
+  ): Promise<{
+    url: string;
+    title: string;
+    contentMarkdown: string;
+    contentHtml?: string;
+    excerpt?: string;
+    siteName?: string;
+    byline?: string;
+    links?: Array<{ href: string; text: string; internal: boolean }>;
+    images?: Array<{ src: string; alt?: string }>;
+  }> => {
+    const response = await client.post(`/files/workspace/${workspaceId}/extract-url-preview`, data);
+    return response.data;
+  },
+
+  discoverSources: async (
+    workspaceId: string,
+    data: { query: string; maxResults?: number; provider?: 'auto' | 'exa' | 'tavily' }
+  ): Promise<SourceDiscoveryResult> => {
+    const response = await client.post(`/files/workspace/${workspaceId}/discover-sources`, data);
     return response.data;
   },
 
@@ -55,11 +159,23 @@ export const fileSystemApi = {
     return response.data;
   },
 
-  upload: async (workspaceId: string, files: File[], parentId?: string | null, parentPath?: string): Promise<any> => {
+  upload: async (
+    workspaceId: string,
+    files: File[],
+    parentId?: string | null,
+    parentPath?: string,
+    options?: ResourceCreateOptions
+  ): Promise<any> => {
     const formData = new FormData();
     files.forEach(file => formData.append('files', file));
     if (parentId) formData.append('parentId', parentId);
     if (parentPath) formData.append('parentPath', parentPath);
+    if (options?.workbenchId) formData.append('workbenchId', options.workbenchId);
+    if (options?.resourceRole) formData.append('resourceRole', options.resourceRole);
+    if (options?.resourceType) formData.append('resourceType', options.resourceType);
+    if (options?.scope) formData.append('scope', options.scope);
+    if (options?.origin) formData.append('origin', options.origin);
+    if (options?.metadata) formData.append('metadata', JSON.stringify(options.metadata));
 
     const response = await client.post(`/files/workspace/${workspaceId}/upload`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
@@ -77,7 +193,7 @@ export const fileSystemApi = {
     return response.data;
   },
 
-  saveGenerated: async (workspaceId: string, data: { targetDir: string; filename: string; content: string; category?: string }): Promise<FileSystemObject> => {
+  saveGenerated: async (workspaceId: string, data: { targetDir: string; filename: string; content: string; category?: string } & ResourceCreateOptions): Promise<FileSystemObject> => {
     const response = await client.post(`/files/workspace/${workspaceId}/generated`, data);
     return response.data;
   },
@@ -98,6 +214,13 @@ export const fileSystemApi = {
       previewUrl: resolveUrl(data.previewUrl),
       sourceUrl: resolveUrl(data.sourceUrl)
     };
+  },
+
+  getDocumentStructure: async (workspaceId: string, id: string): Promise<RenderableDocument> => {
+    const response = await client.get(`/files/workspace/${workspaceId}/document-structure`, {
+      params: { id }
+    });
+    return response.data;
   },
 
   downloadUrl: (workspaceId: string, id: string): string => {

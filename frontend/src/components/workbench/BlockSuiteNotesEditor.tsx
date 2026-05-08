@@ -75,6 +75,15 @@ export default function BlockSuiteNotesEditor({
   const [docRevision, setDocRevision] = useState(0);
 
   const mode = (editor.viewState?.blocksuiteMode as BlocksuiteMode | undefined) || DEFAULT_MODE;
+  const reportVisibleState = (element: HTMLDivElement) => {
+    const totalScrollable = Math.max(1, element.scrollHeight - element.clientHeight);
+    onUpdateViewState?.(editor.id, {
+      scrollRatio: Math.min(1, Math.max(0, element.scrollTop / totalScrollable)),
+      approxChunkIndex: Math.max(0, Math.round(Math.min(1, Math.max(0, element.scrollTop / totalScrollable)) * 20)),
+      visibleBlockIds: [],
+      selectedText: window.getSelection()?.toString().trim() || ''
+    });
+  };
 
   useEffect(() => {
     ensureBlocksuiteRegistered();
@@ -260,7 +269,13 @@ export default function BlockSuiteNotesEditor({
         {error ? (
           <div className="flex h-full items-center justify-center px-6 text-sm text-rose-300">{error}</div>
         ) : (
-          <div ref={containerRef} className="h-full w-full overflow-hidden" />
+          <div
+            ref={containerRef}
+            className="h-full w-full overflow-auto"
+            onScroll={(event) => reportVisibleState(event.currentTarget)}
+            onMouseEnter={(event) => reportVisibleState(event.currentTarget)}
+            onMouseUp={(event) => reportVisibleState(event.currentTarget)}
+          />
         )}
       </div>
     </div>

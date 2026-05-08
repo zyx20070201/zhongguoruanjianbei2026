@@ -1,7 +1,11 @@
+import { useEffect, useRef, useState } from 'react';
+
 interface SyntaxHighlightedCodeProps {
   code: string;
   language?: string;
   emptyMessage?: string;
+  onViewportChange?: (patch: Record<string, any>) => void;
+  fileId?: string;
 }
 
 const escapeHtml = (value: string) =>
@@ -37,8 +41,30 @@ const highlight = (code: string) => {
 export default function SyntaxHighlightedCode({
   code,
   language,
-  emptyMessage = 'Nothing to preview yet.'
+  emptyMessage = 'Nothing to preview yet.',
+  onViewportChange,
+  fileId
 }: SyntaxHighlightedCodeProps) {
+  const preRef = useRef<HTMLPreElement | null>(null);
+  const [highlightedLines, setHighlightedLines] = useState<{ start: number; end: number } | null>(null);
+
+  useEffect(() => {
+    const handleJump = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { fileId?: string; locator?: Record<string, any> } | undefined;
+      if (!fileId || !detail?.fileId || detail.fileId !== fileId) return;
+      const start = Number(detail.locator?.lineStart || detail.locator?.startLine || 1);
+      const end = Number(detail.locator?.lineEnd || detail.locator?.endLine || start);
+      const element = preRef.current;
+      if (!element) return;
+      element.scrollTo({ top: Math.max(0, (start - 3) * 24), behavior: 'smooth' });
+      setHighlightedLines({ start, end });
+      window.setTimeout(() => setHighlightedLines(null), 2600);
+    };
+
+    window.addEventListener('workbench:jump-to-citation', handleJump);
+    return () => window.removeEventListener('workbench:jump-to-citation', handleJump);
+  }, [fileId]);
+
   if (!code.trim()) {
     return (
       <div className="flex h-full items-center justify-center px-6 text-sm text-[var(--wb-text-muted)]">
@@ -47,13 +73,47 @@ export default function SyntaxHighlightedCode({
     );
   }
 
+  const reportViewport = (element: HTMLPreElement) => {
+    if (!onViewportChange) return;
+    const lineHeight = 24;
+    const totalScrollable = Math.max(1, element.scrollHeight - element.clientHeight);
+    const start = Math.max(1, Math.floor(element.scrollTop / lineHeight) + 1);
+    const end = Math.max(start, Math.ceil((element.scrollTop + element.clientHeight) / lineHeight));
+    onViewportChange({
+      visibleLineRange: { start, end },
+      scrollRatio: Math.min(1, Math.max(0, element.scrollTop / totalScrollable)),
+      approxChunkIndex: Math.max(0, start - 1),
+      selectedText: window.getSelection()?.toString().trim() || ''
+    });
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--wb-editor)]">
       <div className="border-b border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-2 text-xs uppercase tracking-[0.16em] text-[var(--wb-text-dim)]">
         {language || 'Code Preview'}
       </div>
-      <pre className="min-h-0 flex-1 overflow-auto bg-[var(--wb-editor)] p-5 font-mono text-sm leading-6 text-[#d7e7ff]">
-        <code dangerouslySetInnerHTML={{ __html: highlight(code) }} />
+      <pre
+        ref={preRef}
+        className="min-h-0 flex-1 overflow-auto bg-[var(--wb-editor)] p-5 font-mono text-sm leading-6 text-[#d7e7ff]"
+        onScroll={(event) => reportViewport(event.currentTarget)}
+        onMouseEnter={(event) => reportViewport(event.currentTarget)}
+        onMouseUp={(event) => reportViewport(event.currentTarget)}
+      >
+        {highlightedLines ? (
+          code.split('\n').map((line, index) => {
+            const lineNumber = index + 1;
+            const highlighted = lineNumber >= highlightedLines.start && lineNumber <= highlightedLines.end;
+            return (
+              <code
+                key={index}
+                className={highlighted ? 'block rounded bg-[#f5d36b]/25 ring-1 ring-[#d3a900]/30' : 'block'}
+                dangerouslySetInnerHTML={{ __html: highlight(line || ' ') }}
+              />
+            );
+          })
+        ) : (
+          <code dangerouslySetInnerHTML={{ __html: highlight(code) }} />
+        )}
       </pre>
     </div>
   );

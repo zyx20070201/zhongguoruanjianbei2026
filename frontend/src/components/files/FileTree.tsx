@@ -26,11 +26,97 @@ interface FileTreeProps {
   dndManager?: ReturnType<typeof useDragDropManager>;
   initialPath?: string;
   currentPath?: string;
+  filesOverride?: FileSystemObject[];
+  loadingOverride?: boolean;
+  errorOverride?: string | null;
   filterQuery?: string;
   compactHeader?: boolean;
   transparentBackground?: boolean;
   onCurrentPathChange?: (path: string) => void;
+  fileFilterMode?: 'all' | 'source' | 'workspace' | 'generated';
+  autoHeight?: boolean;
 }
+
+const isSourceFile = (file: FileSystemObject) => {
+  const resourceType = (file.resourceType || '').toLowerCase();
+  if (resourceType === 'source' || resourceType === 'resource') return true;
+  const category = (file.fileCategory || '').toLowerCase();
+  const extension = (file.extension || '').toLowerCase().replace(/^\./, '');
+  return extension === 'source' || category.includes('web') || category.includes('text-source');
+};
+
+const isGeneratedFile = (file: FileSystemObject) => {
+  const resourceType = (file.resourceType || '').toLowerCase();
+  if (resourceType === 'generated') return true;
+  const category = (file.fileCategory || '').toLowerCase();
+  return category.includes('generated');
+};
+
+const isWorkspaceFile = (file: FileSystemObject) => {
+  if (file.nodeType !== 'file') return false;
+  const resourceType = (file.resourceType || '').toLowerCase();
+  if (resourceType === 'note' || resourceType === 'file') return true;
+  if (isSourceFile(file) || isGeneratedFile(file)) return false;
+  return true;
+};
+
+const applyFileFilter = (
+  files: FileSystemObject[],
+  fileFilterMode: FileTreeProps['fileFilterMode']
+) => {
+  if (fileFilterMode === 'all') return files;
+
+  const visibleIds = new Set<string>();
+  const includeNode = (file: FileSystemObject) => {
+    if (file.nodeType === 'folder') return false;
+    if (fileFilterMode === 'source') return isSourceFile(file);
+    if (fileFilterMode === 'generated') return isGeneratedFile(file);
+    return isWorkspaceFile(file);
+  };
+
+  files.forEach((file) => {
+    if (!includeNode(file)) return;
+    visibleIds.add(file.id);
+    let parentId = file.parentId;
+    while (parentId) {
+      visibleIds.add(parentId);
+      const parent = files.find((candidate) => candidate.id === parentId);
+      parentId = parent?.parentId;
+    }
+  });
+
+  return files.filter((file) => visibleIds.has(file.id));
+};
+
+const getEmptyStateCopy = (
+  fileFilterMode: FileTreeProps['fileFilterMode'],
+  explorerView: ExplorerView,
+  hasFilterQuery: boolean
+) => {
+  if (hasFilterQuery) {
+    return 'No resources match this filter.';
+  }
+
+  if (explorerView === 'tags') {
+    if (fileFilterMode === 'source') return 'No tagged sources in this scope yet.';
+    if (fileFilterMode === 'generated') return 'No tagged generated outputs yet.';
+    if (fileFilterMode === 'workspace') return 'No tagged workspace files in this scope yet.';
+    return 'No tagged files in this scope yet.';
+  }
+
+  if (fileFilterMode === 'source') return 'No sources yet. Add files, links, or pasted text.';
+  if (fileFilterMode === 'generated') return 'No generated outputs yet.';
+  if (fileFilterMode === 'workspace') return 'No workspace files yet. Create a note or file to begin.';
+  return 'No files in this folder yet.';
+};
+
+const getEmptyStateAction = (fileFilterMode: FileTreeProps['fileFilterMode']) => {
+  if (fileFilterMode === 'workspace') {
+    return 'Create a folder to start';
+  }
+
+  return null;
+};
 
 const normalizePath = (value?: string) => {
   if (!value || value === '/') return '/';
@@ -151,6 +237,9 @@ const filterTreeNodes = (nodes: FileTreeNodeData[], query: string): FileTreeNode
   }, []);
 };
 
+const countTreeNodes = (nodes: FileTreeNodeData[]): number =>
+  nodes.reduce((total, node) => total + 1 + countTreeNodes(node.children || []), 0);
+
 export const FileTreeComponent: React.FC<FileTreeProps> = ({
   workspaceId,
   onFileSelect,
@@ -160,13 +249,33 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
   dndManager,
   initialPath,
   currentPath: controlledCurrentPath,
+  filesOverride,
+  loadingOverride,
+  errorOverride,
   filterQuery = '',
   compactHeader = false,
   transparentBackground = false,
-  onCurrentPathChange
+  onCurrentPathChange,
+  fileFilterMode = 'all',
+  autoHeight = false
 }) => {
-  const { files, loading, error, setSelectedNodeId, toggleExpanded } = useFileTreeStore();
+  const {
+    files,
+    loading,
+    error,
+    selectedNodeId,
+    revealNodeId,
+    expandedNodeIds,
+    setSelectedNodeId,
+    setRevealNodeId,
+    toggleExpanded,
+    setExpanded,
+    clearExpanded
+  } = useFileTreeStore();
   const commands = useFileCommands(workspaceId);
+  const visibleFiles = filesOverride ?? files;
+  const visibleLoading = loadingOverride ?? loading;
+  const visibleError = errorOverride ?? error;
   const containerRef = useRef<HTMLDivElement>(null);
   const treeRef = useRef<TreeApi<FileTreeNodeData> | undefined>(undefined);
 
@@ -196,11 +305,11 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
 
   useEffect(() => {
     if (currentPath === '/') return;
-    const exists = files.some((file) => file.nodeType === 'folder' && file.path === currentPath);
+    const exists = visibleFiles.some((file) => file.nodeType === 'folder' && file.path === currentPath);
     if (!exists) {
       setCurrentPath('/');
     }
-  }, [currentPath, files]);
+  }, [currentPath, visibleFiles]);
 
   useEffect(() => {
     const observer = new ResizeObserver((entries) => {
@@ -222,13 +331,49 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
   useEffect(() => {
     if (collapseSignal !== undefined) {
       treeRef.current?.closeAll();
+      clearExpanded();
     }
-  }, [collapseSignal]);
+  }, [clearExpanded, collapseSignal]);
+
+  const scopedFiles = useMemo(
+    () => applyFileFilter(visibleFiles, fileFilterMode),
+    [fileFilterMode, visibleFiles]
+  );
+
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    const existsInScope = scopedFiles.some((file) => file.id === selectedNodeId);
+    if (!existsInScope) {
+      setSelectedNodeId(null);
+    }
+  }, [scopedFiles, selectedNodeId, setSelectedNodeId]);
+
+  useEffect(() => {
+    if (!revealNodeId) return;
+    const target = scopedFiles.find((file) => file.id === revealNodeId);
+    if (!target) return;
+
+    let parentId = target.parentId;
+    while (parentId) {
+      setExpanded(parentId, true);
+      const parent = scopedFiles.find((file) => file.id === parentId);
+      parentId = parent?.parentId;
+    }
+
+    setSelectedNodeId(revealNodeId);
+
+    const frame = window.requestAnimationFrame(() => {
+      treeRef.current?.select(revealNodeId, { align: 'smart', focus: false });
+      setRevealNodeId(null);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [revealNodeId, scopedFiles, setExpanded, setRevealNodeId, setSelectedNodeId]);
 
   const currentFolder =
     currentPath === '/'
       ? null
-      : files.find((file) => file.nodeType === 'folder' && file.path === currentPath) || null;
+      : scopedFiles.find((file) => file.nodeType === 'folder' && file.path === currentPath) || null;
 
   const breadcrumbPaths = useMemo(() => {
     const segments = currentPath === '/' ? [] : currentPath.replace(/^\/+/, '').split('/');
@@ -239,9 +384,28 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
   }, [currentPath]);
 
   const treeData = useMemo(() => {
-    const data = explorerView === 'path' ? buildPathTree(files, currentPath) : buildTagTree(files, currentPath);
+    const data = explorerView === 'path' ? buildPathTree(scopedFiles, currentPath) : buildTagTree(scopedFiles, currentPath);
     return filterTreeNodes(data, filterQuery);
-  }, [currentPath, explorerView, files, filterQuery]);
+  }, [currentPath, explorerView, scopedFiles, filterQuery]);
+  const treeHeight = autoHeight
+    ? Math.max(30, countTreeNodes(treeData) * 30)
+    : Math.max(0, dimensions.height - (compactHeader ? 0 : 62));
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      Object.entries(expandedNodeIds).forEach(([id, isExpanded]) => {
+        const node = treeRef.current?.get(id);
+        if (!node) return;
+        if (isExpanded) {
+          node.open();
+        } else {
+          node.close();
+        }
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [expandedNodeIds, treeData]);
 
   const canDropOnParent = (
     parentNode: NodeApi<FileTreeNodeData> | null,
@@ -355,7 +519,7 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
     const targetParent =
       normalizedTargetPath === '/'
         ? null
-        : files.find((file) => file.nodeType === 'folder' && file.path === normalizedTargetPath);
+        : visibleFiles.find((file) => file.nodeType === 'folder' && file.path === normalizedTargetPath);
 
     if (normalizedTargetPath !== '/' && !targetParent) {
       alert(`Folder not found: ${normalizedTargetPath}`);
@@ -369,34 +533,12 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
     }
   };
 
-  const handleEditTags = async (id: string) => {
-    const target = files.find((file) => file.id === id);
-    if (!target) return;
-
-    const nextValue = prompt(
-      'Edit tags, separated by commas:',
-      (target.tags || []).join(', ')
-    );
-    if (nextValue == null) return;
-
-    const nextTags = nextValue
-      .split(',')
-      .map((tag) => tag.trim())
-      .filter(Boolean);
-
-    try {
-      await commands.updateTags(id, nextTags);
-    } catch (tagError: any) {
-      alert(tagError?.response?.data?.error || tagError?.message || 'Failed to update tags');
-    }
-  };
-
-  if (loading && files.length === 0) {
+  if (visibleLoading && visibleFiles.length === 0) {
     return <div className="p-4 text-sm text-[var(--wb-text-muted)]">Loading files...</div>;
   }
 
-  if (error) {
-    return <div className="p-4 text-sm text-red-300">{error}</div>;
+  if (visibleError) {
+    return <div className="p-4 text-sm text-red-300">{visibleError}</div>;
   }
 
   return (
@@ -475,13 +617,15 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
 
       {treeData.length === 0 ? (
         <div className="flex flex-col gap-2 p-4 text-sm text-[var(--wb-text-muted)]">
-          <p>{filterQuery.trim() ? 'No files match this filter.' : explorerView === 'path' ? 'No files in this folder yet.' : 'No tagged files in this scope yet.'}</p>
-          {explorerView === 'path' && !filterQuery.trim() && (
+          <p>{getEmptyStateCopy(fileFilterMode, explorerView, Boolean(filterQuery.trim()))}</p>
+          {explorerView === 'path' &&
+            !filterQuery.trim() &&
+            getEmptyStateAction(fileFilterMode) && (
             <button
               onClick={() => void handleCreateFolder()}
               className="text-left text-[var(--wb-accent)] hover:underline"
             >
-              Create a folder to start
+              {getEmptyStateAction(fileFilterMode)}
             </button>
           )}
         </div>
@@ -490,9 +634,11 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
           ref={treeRef}
           data={treeData}
           width={dimensions.width}
-          height={Math.max(0, dimensions.height - (compactHeader ? 0 : 62))}
+          height={treeHeight}
           rowHeight={30}
           indent={compactHeader ? 12 : 18}
+          initialOpenState={expandedNodeIds}
+          openByDefault={false}
           onMove={handleMove}
           onRename={handleRename}
           disableDrag={(node: any) =>
@@ -555,7 +701,6 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
           }}
           onCopy={(id, targetParentId) => commands.copyNode(id, targetParentId)}
           onMove={handleMoveTo}
-          onEditTags={handleEditTags}
           onDownload={(id) => {
             window.open(fileSystemApi.downloadUrl(workspaceId, id), '_blank');
           }}

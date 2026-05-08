@@ -69,13 +69,21 @@ export default function WorkspaceListPage() {
 
       if (formData.resources.length > 0) {
         const uploadFolder = await fileSystemApi.createFolder(newWs.id, {
-          name: 'uploaded resources'
+          name: 'uploaded resources',
+          resourceRole: 'source',
+          scope: 'workspace'
         });
         await fileSystemApi.upload(
           newWs.id,
           formData.resources,
           uploadFolder.id,
-          uploadFolder.path
+          uploadFolder.path,
+          {
+            resourceRole: 'source',
+            resourceType: 'source',
+            scope: 'workspace',
+            origin: 'upload'
+          }
         );
       }
 

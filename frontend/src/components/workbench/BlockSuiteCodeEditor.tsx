@@ -83,6 +83,18 @@ export default function BlockSuiteCodeEditor({
 
   const mode = (editor.viewState?.blocksuiteMode as BlocksuiteMode | undefined) || DEFAULT_MODE;
   const normalizedContent = normalizeCodeContent(content);
+  const reportVisibleState = (element: HTMLDivElement) => {
+    const totalScrollable = Math.max(1, element.scrollHeight - element.clientHeight);
+    const lineHeight = 24;
+    const start = Math.max(1, Math.floor(element.scrollTop / lineHeight) + 1);
+    const end = Math.max(start, Math.ceil((element.scrollTop + element.clientHeight) / lineHeight));
+    onUpdateViewState?.(editor.id, {
+      visibleLineRange: { start, end },
+      scrollRatio: Math.min(1, Math.max(0, element.scrollTop / totalScrollable)),
+      approxChunkIndex: Math.max(0, start - 1),
+      selectedText: window.getSelection()?.toString().trim() || ''
+    });
+  };
 
   useEffect(() => {
     ensureBlocksuiteRegistered();
@@ -294,7 +306,13 @@ export default function BlockSuiteCodeEditor({
         {error ? (
           <div className="flex h-full items-center justify-center px-6 text-sm text-rose-300">{error}</div>
         ) : (
-          <div ref={containerRef} className="h-full w-full overflow-hidden" />
+          <div
+            ref={containerRef}
+            className="h-full w-full overflow-auto"
+            onScroll={(event) => reportVisibleState(event.currentTarget)}
+            onMouseEnter={(event) => reportVisibleState(event.currentTarget)}
+            onMouseUp={(event) => reportVisibleState(event.currentTarget)}
+          />
         )}
       </div>
     </div>

@@ -1,4 +1,4 @@
-export type WorkbenchEditorType = 'resource' | 'notes' | 'code' | 'video' | 'external' | 'ai';
+export type WorkbenchEditorType = 'resource' | 'notes' | 'code' | 'video' | 'external' | 'ai' | 'studio';
 export type WorkbenchPanelType = WorkbenchEditorType;
 
 export interface ResourceReference {
@@ -55,6 +55,22 @@ export interface WorkbenchState {
   panels?: PanelState[];
   activePanelId?: string | null;
   activePaneId?: string | null;
+  aiAssistant?: {
+    id: string;
+    title: string;
+    mode: 'floating' | 'sidebar' | 'fullscreen';
+    isOpen: boolean;
+    activeSessionId?: string;
+    sidebarWidth?: number;
+    sessions?: Array<{
+      id: string;
+      title: string;
+      createdAt: string;
+      updatedAt: string;
+      viewState: Record<string, any>;
+    }>;
+    viewState: Record<string, any>;
+  };
   version: number;
 }
 

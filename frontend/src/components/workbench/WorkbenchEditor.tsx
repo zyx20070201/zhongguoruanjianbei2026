@@ -1,4 +1,12 @@
-import { Bot, ChevronRight, Columns2, FileText, Globe, Plus, X } from 'lucide-react';
+import {
+  Columns2,
+  FileText,
+  Globe,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  X
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDrag, useDrop } from 'react-dnd';
 import {
@@ -9,6 +17,7 @@ import {
   ResourceReference
 } from '../../types';
 import { useFileTreeStore } from '../../store/fileTreeStore';
+import { AiChatContext } from '../../services/aiApi';
 import {
   collectLeafIds,
   createLeaf,
@@ -52,20 +61,26 @@ interface WorkbenchEditorProps {
     targetPaneId: string,
     placement: WorkbenchDropPlacement
   ) => void;
-  onAddEditor: () => void;
+  onAddEditor: (paneId?: string | null) => void;
+  onClosePane: (paneId: string) => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
-  aiContext?: {
-    workbenchTitle?: string;
-    workbenchDescription?: string;
-    workbenchId?: string;
-    activeFile?: { id?: string; name: string; path: string } | null;
-    activeFileContent?: string | null;
-    activeExternal?: { title: string; url: string; description?: string } | null;
-  };
+  onToggleSidebar: () => void;
+  isSidebarPinned: boolean;
+  aiContext?: AiChatContext & { activeFileContent?: string | null };
 }
 
 const getBoundResource = (editor: EditorState, resources: ResourceReference[]) =>
   resources.find((resource) => resource.id === editor.resourceId) ?? null;
+
+const getEditorLabel = (editor: EditorState, resources: ResourceReference[]) => {
+  const resource = getBoundResource(editor, resources);
+  return (
+    resource?.name ||
+    editor.viewState?.externalResource?.title ||
+    editor.title ||
+    getLanguageLabel(resource)
+  );
+};
 
 const getDropPlacement = (
   point: { x: number; y: number },
@@ -100,36 +115,42 @@ function DropHint({
   }[placement];
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-20 rounded-lg bg-blue-500/8">
-      <div className={`absolute rounded-md border border-blue-400 bg-blue-500/20 ${placementClass}`} />
+    <div className="pointer-events-none absolute inset-0 z-20 rounded-[20px] bg-[#202124]/[0.035] backdrop-blur-[1px]">
+      <div
+        className={`absolute rounded-[16px] border border-[#2f3337]/70 bg-white/70 shadow-[0_18px_48px_rgba(0,0,0,0.18),0_1px_0_rgba(255,255,255,0.95)_inset] ring-1 ring-white/80 ${placementClass}`}
+      />
     </div>
   );
 }
 
-function EditorTab({
-  editor,
+function PaneTab({
   paneId,
+  editor,
+  resources,
+  documentStateByResourceId,
   isActive,
-  resource,
-  isDirty,
-  onActivate,
-  onClose
+  onActivateEditor,
+  onActivatePane,
+  onCloseEditor
 }: {
-  editor: EditorState;
   paneId: string;
+  editor: EditorState;
+  resources: ResourceReference[];
+  documentStateByResourceId: Record<string, { content: string; savedContent: string; loading?: boolean }>;
   isActive: boolean;
-  resource: ResourceReference | null;
-  isDirty: boolean;
-  onActivate: () => void;
-  onClose: () => void;
+  onActivateEditor: (editorId: string, paneId?: string | null) => void;
+  onActivatePane: (paneId: string) => void;
+  onCloseEditor: (editorId: string) => void;
 }) {
-  const [{ isDragging }, drag] = useDrag(
+  const resource = getBoundResource(editor, resources);
+  const docState = resource?.id ? documentStateByResourceId[resource.id] : undefined;
+  const isDirty = Boolean(docState && docState.content !== docState.savedContent);
+  const label = getEditorLabel(editor, resources);
+  const [{ isDragging }, drag] = useDrag<WorkbenchEditorTabDragItem, void, { isDragging: boolean }>(
     () => ({
       type: EDITOR_TAB_ITEM_TYPE,
-      item: {
-        editorId: editor.id,
-        sourcePaneId: paneId
-      } satisfies WorkbenchEditorTabDragItem,
+      item: { editorId: editor.id, sourcePaneId: paneId },
+      canDrag: Boolean(editor.id),
       collect: (monitor) => ({
         isDragging: monitor.isDragging()
       })
@@ -142,29 +163,39 @@ function EditorTab({
       ref={(element) => {
         drag(element);
       }}
-      className={`group my-1 flex min-w-[150px] max-w-[280px] items-center rounded-xl border transition-all duration-200 ${
+      className={`group relative flex h-full min-w-0 max-w-[260px] shrink-0 items-center border-r px-3 transition ${
         isActive
-          ? 'border-[#e5e5e1] bg-white shadow-sm'
-          : 'border-transparent bg-transparent hover:bg-[#f1f1ef]'
-      } ${isDragging ? 'opacity-50' : ''}`}
+          ? 'z-10 -mb-px border-[#e6e5df] border-b-white bg-white text-[#25272b]'
+          : 'border-[#ecebe6] bg-[#fafaf8] text-[#7b7f85] hover:bg-[#f5f5f2] hover:text-[#25272b]'
+      } ${isDragging ? 'opacity-40' : 'opacity-100'}`}
     >
       <button
-        onClick={onActivate}
-        className="flex min-w-0 flex-1 cursor-grab items-center gap-2 px-3 py-2 text-left text-sm active:cursor-grabbing"
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-2"
+        onClick={() => {
+          onActivateEditor(editor.id, paneId);
+          onActivatePane(paneId);
+        }}
+        title="Drag this tab to move or split"
       >
-        <span className={`truncate ${isActive ? 'text-[#25272b]' : 'text-[#777a80]'}`}>
-          {editor.title}
-        </span>
-        {resource && <span className="truncate text-xs text-[#96999d]">{resource.name}</span>}
-        {isDirty && <span className="text-[10px] font-semibold text-[#16833a]">M</span>}
+        {editor.type === 'external' ? (
+          <Globe className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <FileText className="h-3.5 w-3.5 shrink-0" />
+        )}
+        <span className="truncate text-sm font-medium">{label}</span>
+        {isDirty ? <span className="shrink-0 text-[10px] text-[#16833a]">●</span> : null}
       </button>
       <button
+        type="button"
         onClick={(event) => {
           event.stopPropagation();
-          onClose();
+          onCloseEditor(editor.id);
         }}
-        className="mr-2 rounded-full p-1 text-[#96999d] opacity-0 transition-all duration-150 hover:bg-[#ececea] hover:text-[#202124] group-hover:opacity-100"
-        title="Close editor"
+        className={`ml-2 inline-flex h-5 w-5 shrink-0 items-center justify-center opacity-0 transition duration-150 group-hover:opacity-100 ${
+          isActive ? 'text-[#7c8086] hover:bg-[#f1f1ef] hover:text-[#25272b]' : 'text-[#a0a4aa] hover:bg-[#f1f1ef] hover:text-[#25272b]'
+        }`}
+        title="Close tab"
       >
         <X className="h-3.5 w-3.5" />
       </button>
@@ -172,69 +203,107 @@ function EditorTab({
   );
 }
 
-function EditorBreadcrumbs({
-  editor,
-  resource,
-  aiContext
+function PaneTitleBar({
+  paneId,
+  editors,
+  activeEditor,
+  isPrimaryPane,
+  resources,
+  workspaceId,
+  documentStateByResourceId,
+  onActivateEditor,
+  onActivatePane,
+  onCloseEditor,
+  onBindResource,
+  onAddEditor,
+  onClosePane,
+  onToggleSidebar,
+  isSidebarPinned
 }: {
-  editor: EditorState;
-  resource: ResourceReference | null;
-  aiContext?: {
-    workbenchTitle?: string;
-    workbenchDescription?: string;
-    workbenchId?: string;
-    activeFile?: { id?: string; name: string; path: string } | null;
-    activeFileContent?: string | null;
-    activeExternal?: { title: string; url: string; description?: string } | null;
-  };
+  paneId: string;
+  editors: EditorState[];
+  activeEditor: EditorState;
+  isPrimaryPane: boolean;
+  resources: ResourceReference[];
+  workspaceId: string;
+  documentStateByResourceId: Record<string, { content: string; savedContent: string; loading?: boolean }>;
+  onActivateEditor: (editorId: string, paneId?: string | null) => void;
+  onActivatePane: (paneId: string) => void;
+  onCloseEditor: (editorId: string) => void;
+  onBindResource: (editorId: string) => void;
+  onAddEditor: (paneId?: string | null) => void;
+  onClosePane: (paneId: string) => void;
+  onToggleSidebar: () => void;
+  isSidebarPinned: boolean;
 }) {
-  const resourceParts = resource?.path.split('/').filter(Boolean) ?? [];
-
-  let crumbs = resourceParts;
-  let leadingIcon = <FileText className="h-3.5 w-3.5 text-[#16833a]" />;
-  let trailingLabel = resource ? getLanguageLabel(resource) : editor.type;
-
-  if (editor.type === 'external') {
-    leadingIcon = <Globe className="h-3.5 w-3.5 text-[#16833a]" />;
-    crumbs = ['REFERENCES', editor.viewState?.externalResource?.title || editor.title];
-    trailingLabel = 'External';
-  } else if (editor.type === 'ai') {
-    leadingIcon = <Bot className="h-3.5 w-3.5 text-[#16833a]" />;
-    crumbs = [
-      'AI',
-      aiContext?.activeFile?.name || aiContext?.activeExternal?.title || editor.title || 'Conversation'
-    ];
-    trailingLabel = aiContext?.activeExternal ? 'Using reference' : 'Workbench';
-  } else if (resourceParts.length === 0) {
-    crumbs = [editor.title];
-  }
-
   return (
-    <div className="flex h-9 items-center gap-1 border-b border-[#eeeeeb] bg-white px-4 text-xs text-[#96999d]">
-      <span className="mr-1">{leadingIcon}</span>
-      {crumbs.map((crumb, index) => (
-        <div key={`${crumb}-${index}`} className="flex items-center gap-1">
-          {index > 0 && <ChevronRight className="h-3 w-3 text-[#c2c3c5]" />}
-          <span
-            className={
-              index === crumbs.length - 1
-                ? 'max-w-[240px] truncate text-[#34373c]'
-                : 'max-w-[160px] truncate'
-            }
-          >
-            {crumb}
-          </span>
-        </div>
-      ))}
-      <span className="ml-auto rounded-full bg-[#f1f1ef] px-2 py-0.5 text-[10px] font-medium text-[#777a80]">
-        {trailingLabel}
-      </span>
+    <div className="group/pane-header relative z-10 flex h-11 items-stretch gap-0 bg-[#fafaf8] text-sm text-[#25272b]">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[#e6e5df]" />
+      {isPrimaryPane ? (
+        <button
+          type="button"
+          onClick={() => {
+            onActivatePane(paneId);
+            onToggleSidebar();
+          }}
+          className={`inline-flex h-full w-11 shrink-0 items-center justify-center border-r transition ${
+            isSidebarPinned
+              ? 'border-[#e6e5df] bg-[#fafaf8] text-[#202124]'
+              : 'border-[#ecebe6] bg-[#fafaf8] text-[#868a90] hover:bg-[#f5f5f2] hover:text-[#202124]'
+          }`}
+          title={isSidebarPinned ? 'Hide sidebar' : 'Show sidebar'}
+        >
+          {isSidebarPinned ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+        </button>
+      ) : null}
+
+      <div className="flex min-w-0 flex-1 items-stretch gap-0 overflow-x-auto overflow-y-hidden bg-[#fafaf8]">
+        {editors.map((editor) => (
+          <PaneTab
+            key={editor.id}
+            paneId={paneId}
+            editor={editor}
+            resources={resources}
+            documentStateByResourceId={documentStateByResourceId}
+            isActive={editor.id === activeEditor.id}
+            onActivateEditor={onActivateEditor}
+            onActivatePane={onActivatePane}
+            onCloseEditor={onCloseEditor}
+          />
+        ))}
+        <button
+          type="button"
+          onClick={() => {
+            onActivatePane(paneId);
+            onAddEditor(paneId);
+          }}
+          className="inline-flex h-full w-8 shrink-0 items-center justify-center bg-[#fafaf8] pr-2 text-[#8a8e94] transition hover:text-[#25272b]"
+          title="Open another resource in this pane"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+      </div>
+
+      {!isPrimaryPane ? (
+        <button
+          type="button"
+          className="absolute right-2 top-1/2 z-20 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center bg-white text-[#a1a4a9] opacity-0 transition duration-150 group-hover/pane-header:opacity-100 hover:text-[#25272b]"
+          onClick={(event) => {
+            event.stopPropagation();
+            onClosePane(paneId);
+          }}
+          title="Close panel"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      ) : null}
     </div>
   );
 }
 
 function EditorLeafView({
   leaf,
+  primaryPaneId,
   workspaceId,
   editors,
   resources,
@@ -248,9 +317,14 @@ function EditorLeafView({
   onActivatePane,
   onDropResourceToPane,
   onDropEditorTab,
+  onAddEditor,
+  onClosePane,
+  onToggleSidebar,
+  isSidebarPinned,
   aiContext
 }: {
   leaf: EditorLeafNode;
+  primaryPaneId: string | null;
   workspaceId: string;
   editors: EditorState[];
   resources: ResourceReference[];
@@ -273,14 +347,11 @@ function EditorLeafView({
     targetPaneId: string,
     placement: WorkbenchDropPlacement
   ) => void;
-  aiContext?: {
-    workbenchTitle?: string;
-    workbenchDescription?: string;
-    workbenchId?: string;
-    activeFile?: { id?: string; name: string; path: string } | null;
-    activeFileContent?: string | null;
-    activeExternal?: { title: string; url: string; description?: string } | null;
-  };
+  onAddEditor: (paneId?: string | null) => void;
+  onClosePane: (paneId: string) => void;
+  onToggleSidebar: () => void;
+  isSidebarPinned: boolean;
+  aiContext?: AiChatContext & { activeFileContent?: string | null };
 }) {
   const normalizedLeaf = normalizeLeaf(leaf);
   const [dropPlacement, setDropPlacement] = useState<WorkbenchDropPlacement | null>(null);
@@ -296,12 +367,9 @@ function EditorLeafView({
     leafEditors.find((editor) => editor.id === activeEditorId) ??
     leafEditors[0] ??
     null;
+  const isPrimaryPane = normalizedLeaf.id === primaryPaneId;
 
-  const [{ isOverCurrent, canDrop }, drop] = useDrop<
-    WorkbenchDropItem,
-    void,
-    { isOverCurrent: boolean; canDrop: boolean }
-  >(
+  const [{ isOverCurrent, canDrop }, drop] = useDrop<WorkbenchDropItem, void, { isOverCurrent: boolean; canDrop: boolean }>(
     () => ({
       accept: [FILE_TREE_ITEM_TYPE, EDITOR_TAB_ITEM_TYPE],
       canDrop: (item, monitor) => {
@@ -376,43 +444,31 @@ function EditorLeafView({
         paneRef.current = element;
         drop(element);
       }}
-      className="workspace-card-in relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white shadow-sm"
+      className="workspace-card-in relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border border-[#e8e7e2] bg-white"
       onMouseDown={() => onActivatePane(normalizedLeaf.id)}
       data-workbench-pane-id={normalizedLeaf.id}
     >
       <DropHint placement={dropPlacement} />
 
-      <div className="flex items-stretch gap-1 overflow-x-auto border-b border-[#eeeeeb] bg-[#fbfbfa] px-2">
-        {leafEditors.map((editor) => {
-          const resource = getBoundResource(editor, resources);
-          const docState = resource?.id ? documentStateByResourceId[resource.id] : undefined;
-          const isDirty = Boolean(docState && docState.content !== docState.savedContent);
-
-          return (
-            <EditorTab
-              key={editor.id}
-              editor={editor}
-              paneId={normalizedLeaf.id}
-              isActive={editor.id === activeEditor?.id}
-              resource={resource}
-              isDirty={isDirty}
-              onActivate={() => {
-                onActivateEditor(editor.id, normalizedLeaf.id);
-                onActivatePane(normalizedLeaf.id);
-              }}
-              onClose={() => onCloseEditor(editor.id)}
-            />
-          );
-        })}
-      </div>
-
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeEditor ? (
           <div className="flex h-full min-h-0 flex-col">
-            <EditorBreadcrumbs
-              editor={activeEditor}
-              resource={getBoundResource(activeEditor, resources)}
-              aiContext={aiContext}
+            <PaneTitleBar
+              paneId={normalizedLeaf.id}
+              editors={leafEditors}
+              activeEditor={activeEditor}
+              isPrimaryPane={isPrimaryPane}
+              resources={resources}
+              workspaceId={workspaceId}
+              documentStateByResourceId={documentStateByResourceId}
+              onActivateEditor={onActivateEditor}
+              onActivatePane={onActivatePane}
+              onCloseEditor={onCloseEditor}
+              onBindResource={onBindResource}
+              onAddEditor={onAddEditor}
+              onClosePane={onClosePane}
+              onToggleSidebar={onToggleSidebar}
+              isSidebarPinned={isSidebarPinned}
             />
             <div className="min-h-0 flex-1">
               <WorkbenchEditorContent
@@ -443,7 +499,7 @@ function EditorLeafView({
           </div>
         ) : (
           <div className="flex h-full items-center justify-center bg-white text-sm text-[#777a80]">
-            Drop a file here to open it in this editor pane.
+            Drop a file here to open it in this pane.
           </div>
         )}
       </div>
@@ -453,6 +509,7 @@ function EditorLeafView({
 
 function LayoutNodeView(props: {
   node: EditorLayoutNode;
+  primaryPaneId: string | null;
   workspaceId: string;
   editors: EditorState[];
   resources: ResourceReference[];
@@ -475,19 +532,16 @@ function LayoutNodeView(props: {
     targetPaneId: string,
     placement: WorkbenchDropPlacement
   ) => void;
-  onAddEditor: () => void;
+  onAddEditor: (paneId?: string | null) => void;
+  onClosePane: (paneId: string) => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
-  aiContext?: {
-    workbenchTitle?: string;
-    workbenchDescription?: string;
-    workbenchId?: string;
-    activeFile?: { id?: string; name: string; path: string } | null;
-    activeFileContent?: string | null;
-    activeExternal?: { title: string; url: string; description?: string } | null;
-  };
+  onToggleSidebar: () => void;
+  isSidebarPinned: boolean;
+  aiContext?: AiChatContext & { activeFileContent?: string | null };
 }) {
   const {
     node,
+    primaryPaneId,
     workspaceId,
     editors,
     resources,
@@ -502,16 +556,20 @@ function LayoutNodeView(props: {
     onDropResourceToPane,
     onDropEditorTab,
     onAddEditor,
+    onClosePane,
     onUpdateSplitRatio,
+    onToggleSidebar,
+    isSidebarPinned,
     aiContext
   } = props;
 
   if (node.type === 'leaf') {
     return (
-      <EditorLeafView
-        leaf={node}
-        workspaceId={workspaceId}
-        editors={editors}
+        <EditorLeafView
+          leaf={node}
+          primaryPaneId={primaryPaneId}
+          workspaceId={workspaceId}
+          editors={editors}
         resources={resources}
         documentStateByResourceId={documentStateByResourceId}
         activeEditorId={activeEditorId}
@@ -523,6 +581,10 @@ function LayoutNodeView(props: {
         onActivatePane={onActivatePane}
         onDropResourceToPane={onDropResourceToPane}
         onDropEditorTab={onDropEditorTab}
+        onAddEditor={onAddEditor}
+        onClosePane={onClosePane}
+        onToggleSidebar={onToggleSidebar}
+        isSidebarPinned={isSidebarPinned}
         aiContext={aiContext}
       />
     );
@@ -545,7 +607,7 @@ function LayoutNodeView(props: {
       </div>
 
       <div
-        className={`${isRow ? 'h-full w-3 cursor-col-resize' : 'h-3 w-full cursor-row-resize'} shrink-0 bg-[#fbfbfa] transition-colors hover:bg-[#eeeeeb]`}
+        className={`${isRow ? 'h-full w-0 cursor-col-resize' : 'h-0 w-full cursor-row-resize'} relative z-20 shrink-0`}
         onMouseDown={(event) => {
           event.preventDefault();
           const element = containerRef.current;
@@ -567,7 +629,21 @@ function LayoutNodeView(props: {
           window.addEventListener('mousemove', onMove);
           window.addEventListener('mouseup', onUp);
         }}
-      />
+      >
+        <div
+          className={`absolute bg-transparent transition-colors hover:bg-[#d9d9d4]/10 ${
+            isRow ? '-left-[2px] top-0 h-full w-[4px]' : '-top-[2px] left-0 h-[4px] w-full'
+          }`}
+        >
+          <div
+            className={`absolute bg-[#e0dfda] ${
+              isRow
+                ? 'left-1/2 top-0 h-full w-px'
+                : 'left-0 top-1/2 h-px w-full'
+            }`}
+          />
+        </div>
+      </div>
 
       <div
         style={isRow ? { width: `${(1 - ratio) * 100}%` } : { height: `${(1 - ratio) * 100}%` }}
@@ -597,7 +673,10 @@ export default function WorkbenchEditor({
   onDropResourceToPane,
   onDropEditorTab,
   onAddEditor,
+  onClosePane,
   onUpdateSplitRatio,
+  onToggleSidebar,
+  isSidebarPinned,
   aiContext
 }: WorkbenchEditorProps) {
   const files = useFileTreeStore((state) => state.files);
@@ -614,6 +693,7 @@ export default function WorkbenchEditor({
   }, [editorLayout, editors, activeEditorId]);
 
   const leafIds = useMemo(() => collectLeafIds(normalizedLayout), [normalizedLayout]);
+  const primaryPaneId = leafIds[0] ?? null;
   const resolvedPaneId =
     activePaneId && leafIds.includes(activePaneId) ? activePaneId : leafIds[0] ?? null;
 
@@ -687,24 +767,24 @@ export default function WorkbenchEditor({
           rootRef.current = element;
           dropEmptyState(element);
         }}
-        className="relative flex h-full items-center justify-center overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white px-8 shadow-sm"
+        className="relative flex h-full items-center justify-center overflow-hidden border border-[#e8e7e2] bg-white px-8"
       >
-        {isOverEmptyState && canDropEmptyState && <DropHint placement="center" />}
+        {isOverEmptyState && canDropEmptyState ? <DropHint placement="center" /> : null}
         <div className="workspace-soft-scale max-w-xl rounded-3xl border border-[#e5e5e1] bg-white p-8 text-center shadow-sm">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#e5e5e1] bg-[#f6f6f4] text-[#777a80]">
             <Columns2 className="h-6 w-6" />
           </div>
-          <h2 className="text-xl font-semibold text-[#25272b]">No editors open</h2>
+          <h2 className="text-xl font-semibold text-[#25272b]">No tabs open</h2>
           <p className="mt-3 text-sm leading-6 text-[#777a80]">
             Open a resource from the explorer or drag a file here to start working.
           </p>
           <div className="mt-5 flex items-center justify-center">
             <button
-              onClick={onAddEditor}
+              onClick={() => onAddEditor('pane-1')}
               className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-4 py-2 text-sm font-medium text-white transition-all duration-200 hover:bg-[#34373c] active:scale-95"
             >
               <Plus className="h-4 w-4" />
-              New Notes Editor
+              Add first tab
             </button>
           </div>
         </div>
@@ -713,9 +793,10 @@ export default function WorkbenchEditor({
   }
 
   return (
-    <div ref={rootRef} className="flex h-full min-w-0 overflow-hidden bg-[#fbfbfa]">
+    <div ref={rootRef} className="flex h-full min-w-0 overflow-hidden bg-transparent">
       <LayoutNodeView
         node={normalizedLayout}
+        primaryPaneId={primaryPaneId}
         workspaceId={workspaceId}
         editors={editors}
         resources={resources}
@@ -730,7 +811,10 @@ export default function WorkbenchEditor({
         onDropResourceToPane={onDropResourceToPane}
         onDropEditorTab={onDropEditorTab}
         onAddEditor={onAddEditor}
+        onClosePane={onClosePane}
         onUpdateSplitRatio={onUpdateSplitRatio}
+        onToggleSidebar={onToggleSidebar}
+        isSidebarPinned={isSidebarPinned}
         aiContext={aiContext}
       />
     </div>

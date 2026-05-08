@@ -49,10 +49,23 @@ interface DeepSeekChatResponse {
   };
 }
 
+interface DeepSeekStreamChunk {
+  choices?: Array<{
+    delta?: {
+      content?: string;
+    };
+    finish_reason?: string | null;
+  }>;
+  error?: {
+    message?: string;
+  };
+}
+
 const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 const DEFAULT_MODEL = 'deepseek-chat';
 const MAX_MESSAGE_COUNT = 20;
 const MAX_FILE_CONTENT_LENGTH = 6000;
+const REQUEST_TIMEOUT_MS = Number(process.env.DEEPSEEK_TIMEOUT_MS || 60000);
 
 const clipText = (value: string | undefined, maxLength: number) => {
   if (!value) return '';
@@ -159,7 +172,33 @@ export class DeepSeekService {
     return Boolean(this.apiKey);
   }
 
-  async chat(messages: ChatMessage[], context?: AiChatContext) {
+  async health() {
+    if (!this.isConfigured()) {
+      return { ok: false, configured: false, model: this.model, baseUrl: this.baseUrl, error: 'DEEPSEEK_API_KEY is not configured' };
+    }
+    const startedAt = Date.now();
+    try {
+      const result = await this.chat([{ role: 'user', content: 'Reply with OK.' }], undefined, { timeoutMs: 10000 });
+      return {
+        ok: Boolean(result.reply),
+        configured: true,
+        model: this.model,
+        baseUrl: this.baseUrl,
+        latencyMs: Date.now() - startedAt
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        configured: true,
+        model: this.model,
+        baseUrl: this.baseUrl,
+        latencyMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  async chat(messages: ChatMessage[], context?: AiChatContext, options?: { timeoutMs?: number }) {
     if (!this.isConfigured()) {
       throw new Error('DEEPSEEK_API_KEY is not configured');
     }
@@ -188,6 +227,7 @@ export class DeepSeekService {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`
       },
+      signal: AbortSignal.timeout(options?.timeoutMs || REQUEST_TIMEOUT_MS),
       body: JSON.stringify({
         model: this.model,
         messages: [
@@ -221,11 +261,86 @@ export class DeepSeekService {
     };
   }
 
+  async *chatStream(messages: ChatMessage[], context?: AiChatContext, options?: { timeoutMs?: number }): AsyncGenerator<string> {
+    if (!this.isConfigured()) {
+      throw new Error('DEEPSEEK_API_KEY is not configured');
+    }
+
+    const normalizedMessages = messages
+      .filter(
+        (message): message is ChatMessage =>
+          Boolean(message) &&
+          (message.role === 'user' || message.role === 'assistant') &&
+          typeof message.content === 'string' &&
+          message.content.trim().length > 0
+      )
+      .slice(-MAX_MESSAGE_COUNT)
+      .map((message) => ({
+        role: message.role,
+        content: message.content.trim()
+      }));
+
+    if (normalizedMessages.length === 0) {
+      throw new Error('At least one message is required');
+    }
+
+    const response = await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`
+      },
+      signal: AbortSignal.timeout(options?.timeoutMs || REQUEST_TIMEOUT_MS),
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          {
+            role: 'system',
+            content: buildSystemPrompt(context)
+          },
+          ...normalizedMessages
+        ],
+        temperature: 0.4,
+        stream: true
+      })
+    });
+
+    if (!response.ok || !response.body) {
+      const data = (await response.json().catch(() => null)) as DeepSeekChatResponse | null;
+      const message = data?.error?.message || `DeepSeek request failed with status ${response.status}`;
+      throw new Error(message);
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    for await (const chunk of response.body as any as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line || !line.startsWith('data:')) continue;
+
+        const payload = line.replace(/^data:\s*/, '');
+        if (payload === '[DONE]') return;
+
+        const data = JSON.parse(payload) as DeepSeekStreamChunk;
+        if (data.error?.message) throw new Error(data.error.message);
+
+        const content = data.choices?.[0]?.delta?.content;
+        if (content) yield content;
+      }
+    }
+  }
+
   async json<T>(params: {
     instruction: string;
     schema: Record<string, unknown>;
     input: Record<string, unknown>;
     context?: AiChatContext;
+    timeoutMs?: number;
   }): Promise<{ data: T; model: string; usage: DeepSeekChatResponse['usage'] | null }> {
     const response = await this.chat(
       [
@@ -239,7 +354,8 @@ export class DeepSeekService {
           ].join('\n\n')
         }
       ],
-      params.context
+      params.context,
+      { timeoutMs: params.timeoutMs }
     );
 
     return {

@@ -17,9 +17,12 @@ import {
 } from 'lucide-react';
 import { useFileCommands } from '../../hooks/useFileCommands';
 import { useFileTreeStore } from '../../store/fileTreeStore';
+import { AddSourcesDialog } from './AddSourcesDialog';
+import { DiscoveredResource, fileSystemApi } from '../../services/fileSystemApi';
 
 interface FileSystemSidebarProps {
   workspaceId: string;
+  workbenchId?: string;
   onFileSelect?: (file: FileSystemObject) => void;
   onFileDoubleClick?: (file: FileSystemObject) => void;
   title?: string;
@@ -32,10 +35,14 @@ interface FileSystemSidebarProps {
   codexPanel?: boolean;
   hideFilter?: boolean;
   transparentPanel?: boolean;
+  fileFilterMode?: 'all' | 'source' | 'workspace' | 'generated';
+  resourceMode?: boolean;
+  autoHeight?: boolean;
 }
 
 export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
   workspaceId,
+  workbenchId,
   onFileSelect,
   onFileDoubleClick,
   title = 'Explorer',
@@ -47,30 +54,46 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
   initialPath,
   codexPanel = false,
   hideFilter = false,
-  transparentPanel = false
+  transparentPanel = false,
+  fileFilterMode = 'all',
+  resourceMode = false,
+  autoHeight = false
 }) => {
   const [isDraggingFiles, setIsDraggingFiles] = React.useState(false);
   const [sidebarWidth, setSidebarWidth] = React.useState(280);
   const [isCollapsed, setIsCollapsed] = React.useState(false);
   const [collapseSignal, setCollapseSignal] = React.useState(0);
   const [isCreateMenuOpen, setIsCreateMenuOpen] = React.useState(false);
+  const [isAddSourcesOpen, setIsAddSourcesOpen] = React.useState(false);
   const [currentPath, setCurrentPath] = React.useState(initialPath || '/');
   const [filterQuery, setFilterQuery] = React.useState('');
-  const { refresh, loading } = useFileTree(workspaceId);
-  const { createFolder, createFile, uploadFiles } = useFileCommands(workspaceId);
+  const role = fileFilterMode === 'workspace' ? 'file' : fileFilterMode === 'all' ? undefined : fileFilterMode;
+  const { files: sidebarFiles, refresh, loading, error } = useFileTree(workspaceId, {
+    resourceMode,
+    workbenchId,
+    role,
+    scope: workbenchId ? 'all' : 'workspace'
+  });
+  const { createFolder, createFile, uploadFiles, importUrl } = useFileCommands(workspaceId, {
+    resourceMode,
+    workbenchId,
+    resourceRole: role,
+    scope: workbenchId ? 'workbench' : 'workspace'
+  });
   const { files, selectedNodeId } = useFileTreeStore();
+  const activeFiles = resourceMode ? sidebarFiles : files;
 
   React.useEffect(() => {
     setCurrentPath(initialPath || '/');
   }, [initialPath]);
 
   const getTargetFolder = () => {
-    const selectedNode = files.find((file) => file.id === selectedNodeId);
+    const selectedNode = activeFiles.find((file) => file.id === selectedNodeId);
     if (!selectedNode) {
       const currentFolder =
         currentPath === '/'
           ? undefined
-          : files.find((file) => file.nodeType === 'folder' && file.path === currentPath);
+          : activeFiles.find((file) => file.nodeType === 'folder' && file.path === currentPath);
 
       return { parentId: currentFolder?.id, parentPath: currentFolder?.path };
     }
@@ -80,7 +103,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
     }
 
     const parent = selectedNode.parentId
-      ? files.find((file) => file.id === selectedNode.parentId)
+      ? activeFiles.find((file) => file.id === selectedNode.parentId)
       : undefined;
 
     return {
@@ -124,7 +147,12 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
     const finalName = /\.[^./]+$/.test(name) ? name : `${name}.md`;
     const { parentId, parentPath } = getTargetFolder();
     try {
-      await createFile(finalName, parentId, parentPath);
+      await createFile(finalName, parentId, parentPath, {
+        fileCategory: 'note',
+        resourceRole: 'note',
+        resourceType: 'note',
+        scope: workbenchId ? 'workbench' : 'workspace'
+      });
       setIsCreateMenuOpen(false);
     } catch (error: any) {
       alert(getErrorMessage(error, 'Failed to create note'));
@@ -132,16 +160,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
   };
 
   const handleUpload = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.multiple = true;
-    input.onchange = async (e: any) => {
-      const files = Array.from(e.target.files as FileList);
-      if (files.length > 0) {
-        await uploadFilesToTarget(files);
-      }
-    };
-    input.click();
+    setIsAddSourcesOpen(true);
   };
 
   const uploadFilesToTarget = async (files: File[]) => {
@@ -150,6 +169,50 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
       await uploadFiles(files, parentId, parentPath);
     } catch (error: any) {
       alert(getErrorMessage(error, 'Failed to upload files'));
+    }
+  };
+
+  const sourceFilename = (title: string, fallback: string) => {
+    const safeBase = (title || fallback)
+      .trim()
+      .replace(/\.[^./]+$/, '')
+      .replace(/[\\/:*?"<>|#{}[\]`]/g, '-')
+      .replace(/\s+/g, ' ')
+      .slice(0, 80)
+      .trim() || fallback;
+    return `${safeBase}.source`;
+  };
+
+  const addWebsiteSource = async ({ title, url }: { title: string; url: string }) => {
+    const { parentId, parentPath } = getTargetFolder();
+    await importUrl({ title, url }, parentId, parentPath);
+  };
+
+  const addTextSource = async ({ title, content }: { title: string; content: string }) => {
+    const { parentId, parentPath } = getTargetFolder();
+    await createFile(sourceFilename(title, 'pasted-source'), parentId, parentPath, {
+      content: `# ${title}\n\nSource type: copied text\n\n${content}\n`,
+      fileCategory: 'text-source',
+      resourceRole: 'source',
+      resourceType: 'source',
+      scope: workbenchId ? 'workbench' : 'workspace'
+    });
+  };
+
+  const discoverSources = async ({ query, maxResults }: { query: string; maxResults?: number }) => {
+    if (!workspaceId) return [];
+    const response = await fileSystemApi.discoverSources(workspaceId, {
+      query,
+      maxResults,
+      provider: 'auto'
+    });
+    return response.results;
+  };
+
+  const importDiscoveredSources = async (sources: DiscoveredResource[]) => {
+    const { parentId, parentPath } = getTargetFolder();
+    for (const source of sources) {
+      await importUrl({ title: source.title, url: source.url }, parentId, parentPath);
     }
   };
 
@@ -381,12 +444,15 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
       )}
       
       <div
-        className={`flex min-h-0 flex-1 overflow-hidden ${
+        className={`flex ${autoHeight ? 'min-h-0 shrink-0' : 'min-h-0 flex-1'} overflow-hidden ${
           codexPanel ? `${transparentPanel ? 'bg-transparent' : 'bg-white'} px-2 py-1` : ''
         } ${isCollapsed ? 'invisible pointer-events-none' : ''}`}
       >
-        <FileTreeComponent 
+        <FileTreeComponent
           workspaceId={workspaceId}
+          filesOverride={resourceMode ? sidebarFiles : undefined}
+          loadingOverride={resourceMode ? loading : undefined}
+          errorOverride={resourceMode ? error : undefined}
           onFileSelect={onFileSelect}
           onFileDoubleClick={onFileDoubleClick}
           collapseSignal={collapseSignal}
@@ -397,9 +463,20 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
           filterQuery={filterQuery}
           compactHeader={codexPanel}
           transparentBackground={transparentPanel}
+          fileFilterMode={fileFilterMode}
+          autoHeight={autoHeight}
           onCurrentPathChange={setCurrentPath}
         />
       </div>
+      <AddSourcesDialog
+        isOpen={isAddSourcesOpen}
+        onClose={() => setIsAddSourcesOpen(false)}
+        onUploadFiles={uploadFilesToTarget}
+        onAddWebsite={addWebsiteSource}
+        onAddText={addTextSource}
+        onDiscoverSources={discoverSources}
+        onImportDiscoveredSources={importDiscoveredSources}
+      />
       {!embedded && !isCollapsed && (
         <div
           className="absolute right-0 top-0 h-full w-px cursor-col-resize bg-transparent hover:bg-[var(--wb-accent)]"
