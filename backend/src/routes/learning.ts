@@ -15,6 +15,29 @@ import { savedMemoryService } from '../services/savedMemoryService';
 import { conversationHistoryService } from '../services/conversationHistoryService';
 import { memoryGovernanceService } from '../services/memoryGovernanceService';
 import { systemHealthService } from '../services/systemHealthService';
+import { learningMemoryService } from '../services/learningMemoryService';
+import { courseHomeService } from '../services/courseHomeService';
+import { learningEventCollectionService } from '../services/learningEventCollectionService';
+import { learningEventDiagnosticsService } from '../services/learningEventDiagnosticsService';
+import { learningEventSequenceService } from '../services/learningEventSequenceService';
+import { learningEventSchemaRegistryService } from '../services/learningEventSchemaRegistryService';
+import { courseKnowledgeGraphService } from '../services/courseKnowledgeGraphService';
+import { courseKnowledgeReasoningService } from '../services/courseKnowledgeReasoningService';
+import { courseKnowledgeEvolutionService } from '../services/courseKnowledgeEvolutionService';
+import { courseGraphBuildService } from '../services/courseGraphBuildService';
+import { courseGraphBuildJobService } from '../services/courseGraphBuildJobService';
+import { learningDiagnosisEngine } from '../services/learningDiagnosisEngine';
+import { learnerDiagnosisStateUpdateService } from '../services/learnerDiagnosisStateUpdateService';
+import { knowledgeTracingModelService } from '../services/knowledgeTracingModelService';
+import { graphConstrainedPlannerService } from '../services/graphConstrainedPlannerService';
+import { knowledgeGraphPlanningAgentService } from '../services/knowledgeGraphPlanningAgentService';
+import { learnerStateGovernanceService } from '../services/learnerStateGovernanceService';
+import { courseKnowledgeExtractionValidationService } from '../services/courseKnowledgeExtractionValidationService';
+import { courseKnowledgeQualityEnhancementService } from '../services/courseKnowledgeQualityEnhancementService';
+import { learningSystemEvaluationService } from '../services/learningSystemEvaluationService';
+import { personalizedWorkspaceIntegrationService } from '../services/personalizedWorkspaceIntegrationService';
+import { targetKnowledgeStructureService } from '../services/targetKnowledgeStructureService';
+import { knowledgeGapAnalysisService } from '../services/knowledgeGapAnalysisService';
 import prisma from '../config/db';
 
 const router = Router();
@@ -40,6 +63,21 @@ router.post('/terminal/chat', async (req: Request, res: Response) => {
       sessionId: typeof sessionId === 'string' ? sessionId : null,
       messages
     });
+    const latestUserMessage = [...messages].reverse().find((message: any) => message?.role === 'user' && message?.content)?.content || '';
+    await learningEventCollectionService.collect({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      eventType: 'ai.chat_turn',
+      actor: 'user',
+      interaction: {
+        sessionId: result.sessionId || (typeof sessionId === 'string' ? sessionId : null),
+        userText: String(latestUserMessage),
+        assistantText: result.reply,
+        repeatedQuestion: /还是|再说|没懂|不懂|换个说法|again|still/i.test(String(latestUserMessage))
+      },
+      source: { component: 'learning_terminal' },
+      confidence: 0.62
+    }).catch((error) => console.warn('Learning event collection chat_turn failed:', error));
     await learnerStateAnalyzer.analyzeChat({
       workspaceId,
       messages,
@@ -48,6 +86,90 @@ router.post('/terminal/chat', async (req: Request, res: Response) => {
       sourceId: 'learning_terminal'
     }).catch((error) => console.warn('LearnerStateAnalyzer terminal chat failed:', error));
     return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/events', async (req: Request, res: Response) => {
+  const { workspaceId, workbenchId, goalId, eventType, actor, payload, object, interaction, source, confidence } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!eventType || typeof eventType !== 'string') return res.status(400).json({ error: 'eventType is required' });
+  try {
+    const event = await learningEventCollectionService.collect({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      goalId: typeof goalId === 'string' ? goalId : null,
+      eventType,
+      actor: ['user', 'assistant', 'system', 'agent'].includes(actor) ? actor : 'user',
+      payload: payload && typeof payload === 'object' ? payload : {},
+      object: object && typeof object === 'object' ? object : undefined,
+      interaction: interaction && typeof interaction === 'object' ? interaction : undefined,
+      source: source && typeof source === 'object' ? source : undefined,
+      confidence: typeof confidence === 'number' ? confidence : undefined
+    });
+    return res.status(201).json({ event });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/events', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const workbenchId = typeof req.query.workbenchId === 'string' ? req.query.workbenchId : null;
+  const eventType = typeof req.query.eventType === 'string' ? req.query.eventType : undefined;
+  const actor = typeof req.query.actor === 'string' ? req.query.actor : undefined;
+  const objectType = typeof req.query.objectType === 'string' ? req.query.objectType : undefined;
+  const objectId = typeof req.query.objectId === 'string' ? req.query.objectId : undefined;
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 50;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const events = await learningEventCollectionService.list({ workspaceId, workbenchId, eventType, actor, objectType, objectId, limit });
+    return res.json({ events });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/events/diagnostics', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const workbenchId = typeof req.query.workbenchId === 'string' ? req.query.workbenchId : null;
+  const goalId = typeof req.query.goalId === 'string' ? req.query.goalId : null;
+  const days = typeof req.query.days === 'string' ? Number(req.query.days) : 30;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const diagnostics = await learningEventDiagnosticsService.summarize({
+      workspaceId,
+      workbenchId,
+      goalId,
+      days: Number.isFinite(days) ? days : 30
+    });
+    return res.json({ diagnostics });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/events/sequences', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const workbenchId = typeof req.query.workbenchId === 'string' ? req.query.workbenchId : null;
+  const patternType = typeof req.query.patternType === 'string' ? req.query.patternType : undefined;
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 20;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const patterns = await learningEventSequenceService.list({ workspaceId, workbenchId, patternType, limit });
+    return res.json({ patterns });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/events/schemas', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : null;
+  const status = typeof req.query.status === 'string' ? req.query.status : 'active';
+  try {
+    const schemas = await learningEventSchemaRegistryService.list({ workspaceId, status });
+    return res.json({ schemas });
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
   }
@@ -109,13 +231,107 @@ router.post('/knowledge/reindex-workspace', async (req: Request, res: Response) 
   }
 
   try {
-    const jobs = await knowledgeIndexingService.indexWorkspace(workspaceId);
-    return res.json({
-      indexed: jobs.length,
-      completed: jobs.filter((job) => job.status === 'completed').length,
-      failed: jobs.filter((job) => job.status === 'failed').length,
-      jobs
+    const report = await courseGraphBuildService.build({
+      workspaceId,
+      reindex: true,
+      includeWorkspaceResources: true,
+      validate: true
     });
+    return res.json({ report });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/build', async (req: Request, res: Response) => {
+  const {
+    workspaceId,
+    workbenchId,
+    resourceRole,
+    reindex,
+    validate,
+    includeWorkspaceResources,
+    maxFilesPerWorkbench,
+    maxWorkspaceFiles,
+    graphLimit
+  } = req.body ?? {};
+
+  if (!workspaceId || typeof workspaceId !== 'string') {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+
+  try {
+    const report = await courseGraphBuildService.build({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      resourceRole: typeof resourceRole === 'string' ? resourceRole : null,
+      reindex: Boolean(reindex),
+      validate: validate !== false,
+      includeWorkspaceResources: includeWorkspaceResources !== false,
+      maxFilesPerWorkbench: typeof maxFilesPerWorkbench === 'number' ? maxFilesPerWorkbench : undefined,
+      maxWorkspaceFiles: typeof maxWorkspaceFiles === 'number' ? maxWorkspaceFiles : undefined,
+      graphLimit: typeof graphLimit === 'number' ? graphLimit : undefined
+    });
+    return res.json({ report });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/build-job', async (req: Request, res: Response) => {
+  const {
+    workspaceId,
+    workbenchId,
+    resourceRole,
+    reindex,
+    validate,
+    includeWorkspaceResources,
+    maxFilesPerWorkbench,
+    maxWorkspaceFiles,
+    graphLimit
+  } = req.body ?? {};
+
+  if (!workspaceId || typeof workspaceId !== 'string') {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+
+  try {
+    const job = courseGraphBuildJobService.start({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      resourceRole: typeof resourceRole === 'string' ? resourceRole : null,
+      reindex: Boolean(reindex),
+      validate: validate !== false,
+      includeWorkspaceResources: includeWorkspaceResources !== false,
+      maxFilesPerWorkbench: typeof maxFilesPerWorkbench === 'number' ? maxFilesPerWorkbench : undefined,
+      maxWorkspaceFiles: typeof maxWorkspaceFiles === 'number' ? maxWorkspaceFiles : undefined,
+      graphLimit: typeof graphLimit === 'number' ? graphLimit : undefined
+    });
+    return res.status(202).json({ job });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/knowledge/graph/build-jobs', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 10;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const jobs = courseGraphBuildJobService.list(workspaceId, Number.isFinite(limit) ? limit : 10);
+    return res.json({ jobs });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/knowledge/graph/build-jobs/:jobId', async (req: Request, res: Response) => {
+  const jobId = typeof req.params.jobId === 'string' ? req.params.jobId : '';
+  if (!jobId) return res.status(400).json({ error: 'jobId is required' });
+  try {
+    const job = courseGraphBuildJobService.get(jobId);
+    if (!job) return res.status(404).json({ error: 'job not found' });
+    return res.json({ job });
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
   }
@@ -177,6 +393,594 @@ router.post('/knowledge/search', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/knowledge/graph', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 80;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const graph = await courseKnowledgeGraphService.getGraph({ workspaceId, limit: Number.isFinite(limit) ? limit : 80 });
+    return res.json({ graph });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/concepts', async (req: Request, res: Response) => {
+  const { workspaceId, title, description, aliases, category, difficulty, source, evidence } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!title || typeof title !== 'string') return res.status(400).json({ error: 'title is required' });
+  try {
+    const concept = await courseKnowledgeGraphService.upsertConcept({
+      workspaceId,
+      title,
+      description,
+      aliases: Array.isArray(aliases) ? aliases : [],
+      category,
+      difficulty,
+      source,
+      evidence
+    });
+    return res.status(201).json({ concept });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/relations', async (req: Request, res: Response) => {
+  const { workspaceId, fromConceptId, toConceptId, relationType, weight, confidence, source, evidence } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!fromConceptId || !toConceptId || !relationType) return res.status(400).json({ error: 'fromConceptId, toConceptId and relationType are required' });
+  try {
+    const relation = await courseKnowledgeGraphService.upsertRelation({
+      workspaceId,
+      fromConceptId,
+      toConceptId,
+      relationType,
+      weight,
+      confidence,
+      source,
+      evidence
+    });
+    return res.status(201).json({ relation });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/bind-resource', async (req: Request, res: Response) => {
+  const { workspaceId, fileObjectId } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!fileObjectId || typeof fileObjectId !== 'string') return res.status(400).json({ error: 'fileObjectId is required' });
+  try {
+    const result = await courseKnowledgeGraphService.ingestResourceFile({ workspaceId, fileObjectId, source: 'manual_kg_resource_binding' });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/rebuild-workspace', async (req: Request, res: Response) => {
+  const { workspaceId, reindex, validate, graphLimit } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const report = await courseGraphBuildService.build({
+      workspaceId,
+      reindex: Boolean(reindex),
+      includeWorkspaceResources: true,
+      validate: validate !== false,
+      graphLimit: typeof graphLimit === 'number' ? graphLimit : undefined
+    });
+    return res.json({ report });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/knowledge/graph/prerequisite-gaps', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const conceptIds = typeof req.query.conceptIds === 'string' ? req.query.conceptIds.split(',').filter(Boolean) : undefined;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const gaps = await courseKnowledgeReasoningService.getPrerequisiteGaps({ workspaceId, conceptIds });
+    return res.json({ gaps });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/knowledge/graph/weak-neighborhood', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const conceptIds = typeof req.query.conceptIds === 'string' ? req.query.conceptIds.split(',').filter(Boolean) : undefined;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const neighborhood = await courseKnowledgeReasoningService.expandWeakNeighborhood({ workspaceId, conceptIds });
+    return res.json({ neighborhood });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/knowledge/graph/remediation-path', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const targetConceptId = typeof req.query.targetConceptId === 'string' ? req.query.targetConceptId : '';
+  if (!workspaceId || !targetConceptId) return res.status(400).json({ error: 'workspaceId and targetConceptId are required' });
+  try {
+    const path = await courseKnowledgeReasoningService.recommendRemediationPath({ workspaceId, targetConceptId });
+    return res.json({ path });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/knowledge/graph/readiness', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const conceptId = typeof req.query.conceptId === 'string' ? req.query.conceptId : '';
+  if (!workspaceId || !conceptId) return res.status(400).json({ error: 'workspaceId and conceptId are required' });
+  try {
+    const readiness = await courseKnowledgeReasoningService.estimateConceptReadiness({ workspaceId, conceptId });
+    return res.json({ readiness });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/knowledge/graph/validate', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const validation = await courseKnowledgeExtractionValidationService.validate({ workspaceId });
+    return res.json({ validation });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/validate', async (req: Request, res: Response) => {
+  const { workspaceId } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const validation = await courseKnowledgeExtractionValidationService.validateAndLog({ workspaceId });
+    return res.json({ validation });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/govern', async (req: Request, res: Response) => {
+  const { workspaceId } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const result = await courseKnowledgeEvolutionService.govern({ workspaceId });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/cleanup-pollution', async (req: Request, res: Response) => {
+  const { workspaceId, dryRun, rebuildResourceGraph } = req.body ?? {};
+  if (workspaceId !== undefined && typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId must be a string' });
+  try {
+    const result = await courseKnowledgeGraphService.cleanupPollutedKnowledgeData({
+      workspaceId,
+      dryRun: dryRun !== undefined ? Boolean(dryRun) : true,
+      rebuildResourceGraph: Boolean(rebuildResourceGraph)
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/enhance-quality', async (req: Request, res: Response) => {
+  const { workspaceId, apply, minConfidence } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const result = await courseKnowledgeQualityEnhancementService.enhance({
+      workspaceId,
+      apply: Boolean(apply),
+      minConfidence: typeof minConfidence === 'number' ? minConfidence : undefined
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/target-structure', async (req: Request, res: Response) => {
+  const { workspaceId, workbenchId, goalId, objective, targetConcepts, persist } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const result = await targetKnowledgeStructureService.build({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      goalId: typeof goalId === 'string' ? goalId : null,
+      objective: typeof objective === 'string' ? objective : undefined,
+      targetConcepts: Array.isArray(targetConcepts) ? targetConcepts.map(String).filter(Boolean) : undefined,
+      persist: persist !== false
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/gap-analysis', async (req: Request, res: Response) => {
+  const { workspaceId, workbenchId, goalId, objective, targetStructure, persist } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const result = await knowledgeGapAnalysisService.analyze({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      goalId: typeof goalId === 'string' ? goalId : null,
+      objective: typeof objective === 'string' ? objective : undefined,
+      targetStructure: targetStructure && typeof targetStructure === 'object' ? targetStructure : undefined,
+      persist: persist !== false
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/diagnosis', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const conceptIds = typeof req.query.conceptIds === 'string' ? req.query.conceptIds.split(',').filter(Boolean) : undefined;
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 80;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const diagnosis = await learningDiagnosisEngine.diagnose({ workspaceId, conceptIds, limit: Number.isFinite(limit) ? limit : 80 });
+    return res.json({ diagnosis });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/diagnosis', async (req: Request, res: Response) => {
+  const { workspaceId, workbenchId, goalId, conceptIds, limit, applyStatePatches } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const result = await learningDiagnosisEngine.diagnoseAndPersist({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      goalId: typeof goalId === 'string' ? goalId : null,
+      conceptIds: Array.isArray(conceptIds) ? conceptIds.map(String).filter(Boolean) : undefined,
+      limit: typeof limit === 'number' ? limit : undefined,
+      applyStatePatches: Boolean(applyStatePatches)
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/diagnosis/state-update', async (req: Request, res: Response) => {
+  const { workspaceId, workbenchId, goalId, since, limit, minConfidence, apply } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const result = await learnerDiagnosisStateUpdateService.run({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      goalId: typeof goalId === 'string' ? goalId : null,
+      since: typeof since === 'string' ? new Date(since) : undefined,
+      limit: typeof limit === 'number' ? limit : undefined,
+      minConfidence: typeof minConfidence === 'number' ? minConfidence : undefined,
+      apply: apply !== false
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/diagnosis/knowledge-tracing', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const conceptId = typeof req.query.conceptId === 'string' ? req.query.conceptId : '';
+  const since = typeof req.query.since === 'string' ? new Date(req.query.since) : undefined;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  if (!conceptId) return res.status(400).json({ error: 'conceptId is required' });
+  try {
+    const report = await knowledgeTracingModelService.traceConcept({
+      workspaceId,
+      conceptId,
+      since: since && !Number.isNaN(since.getTime()) ? since : undefined,
+      apply: false
+    });
+    return res.json({ report });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/diagnosis/knowledge-tracing', async (req: Request, res: Response) => {
+  const { workspaceId, conceptId, conceptIds, since, apply, limit } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const sinceDate = typeof since === 'string' ? new Date(since) : undefined;
+    if (typeof conceptId === 'string' && conceptId) {
+      const report = await knowledgeTracingModelService.traceConcept({
+        workspaceId,
+        conceptId,
+        since: sinceDate && !Number.isNaN(sinceDate.getTime()) ? sinceDate : undefined,
+        apply: Boolean(apply)
+      });
+      return res.json({ report });
+    }
+    const result = await knowledgeTracingModelService.traceWorkspace({
+      workspaceId,
+      conceptIds: Array.isArray(conceptIds) ? conceptIds.map(String).filter(Boolean) : undefined,
+      since: sinceDate && !Number.isNaN(sinceDate.getTime()) ? sinceDate : undefined,
+      apply: Boolean(apply),
+      limit: typeof limit === 'number' ? limit : undefined
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/planning/graph-candidates', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const objective = typeof req.query.objective === 'string' ? req.query.objective : undefined;
+  const conceptIds = typeof req.query.conceptIds === 'string' ? req.query.conceptIds.split(',').filter(Boolean) : undefined;
+  const maxConcepts = typeof req.query.maxConcepts === 'string' ? Number(req.query.maxConcepts) : 6;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const candidates = await graphConstrainedPlannerService.buildCandidatePath({
+      workspaceId,
+      objective,
+      conceptIds,
+      maxConcepts: Number.isFinite(maxConcepts) ? maxConcepts : 6
+    });
+    return res.json({ candidates });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/planning/plans', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const workbenchId = typeof req.query.workbenchId === 'string' ? req.query.workbenchId : null;
+  const goalId = typeof req.query.goalId === 'string' ? req.query.goalId : null;
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 30;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const plans = await learningMemoryService.listLearningPlans({
+      workspaceId,
+      workbenchId,
+      goalId,
+      limit: Number.isFinite(limit) ? limit : 30
+    });
+    return res.json({ plans });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/planning/kg-plan', async (req: Request, res: Response) => {
+  const { workspaceId, workbenchId, goalId, objective, targetConcepts, maxConcepts, persist } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const plan = await knowledgeGraphPlanningAgentService.plan({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      goalId: typeof goalId === 'string' ? goalId : null,
+      objective: typeof objective === 'string' ? objective : undefined,
+      targetConcepts: Array.isArray(targetConcepts) ? targetConcepts.map(String).filter(Boolean) : undefined,
+      maxConcepts: typeof maxConcepts === 'number' ? maxConcepts : undefined
+    });
+    if (persist) {
+      const savedPlan = await learningMemoryService.saveLearningPlan({
+        workspaceId,
+        workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+        goalId: plan.goalId || (typeof goalId === 'string' ? goalId : null),
+        scope: plan.scope,
+        plan
+      });
+      return res.json({ plan, savedPlan });
+    }
+    return res.json({ plan });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/planning/plans/:planId/apply', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const { workspaceId, workbenchId, createWorkbench, workbenchTitle } = req.body ?? {};
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+
+  try {
+    const result = await learningMemoryService.applyLearningPlanToWorkbench({
+      workspaceId,
+      planId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      createWorkbench: Boolean(createWorkbench),
+      workbenchTitle: typeof workbenchTitle === 'string' ? workbenchTitle : undefined
+    });
+
+    if (!result) {
+      return res.status(404).json({ error: 'Learning plan not found' });
+    }
+
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/planning/plans/:planId/actions', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const { workspaceId, action, targetPlanId, title, note } = req.body ?? {};
+  const allowedActions = ['start', 'pause', 'resume', 'complete', 'archive', 'restore', 'supersede', 'set_primary', 'reopen', 'duplicate', 'replan'];
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!allowedActions.includes(action)) return res.status(400).json({ error: 'action is invalid' });
+
+  try {
+    const plan = await learningMemoryService.performLearningPlanAction({
+      workspaceId,
+      planId,
+      action,
+      targetPlanId: typeof targetPlanId === 'string' ? targetPlanId : null,
+      title: typeof title === 'string' ? title : undefined,
+      note: typeof note === 'string' ? note : undefined
+    });
+
+    if (!plan) return res.status(404).json({ error: 'Learning plan not found' });
+    return res.json({ plan });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.patch('/planning/plans/:planId/steps/:stepId', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const stepId = typeof req.params.stepId === 'string' ? req.params.stepId : '';
+  const { workspaceId, status } = req.body ?? {};
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!stepId) return res.status(400).json({ error: 'stepId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!['pending', 'active', 'done', 'skipped', 'blocked'].includes(status)) {
+    return res.status(400).json({ error: 'status is invalid' });
+  }
+
+  try {
+    const plan = await learningMemoryService.updateLearningPlanStepStatus({
+      workspaceId,
+      planId,
+      stepId,
+      status
+    });
+
+    if (!plan) {
+      return res.status(404).json({ error: 'Learning plan not found' });
+    }
+
+    return res.json({ plan });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.patch('/planning/plans/:planId/steps/:stepId/details', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const stepId = typeof req.params.stepId === 'string' ? req.params.stepId : '';
+  const { workspaceId, title, description, note, estimateMinutes, dueDate, tags, artifactBindings } = req.body ?? {};
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!stepId) return res.status(400).json({ error: 'stepId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+
+  try {
+    const plan = await learningMemoryService.updateLearningPlanStep({
+      workspaceId,
+      planId,
+      stepId,
+      title: typeof title === 'string' ? title : undefined,
+      description: typeof description === 'string' ? description : undefined,
+      note: typeof note === 'string' ? note : undefined,
+      estimateMinutes: typeof estimateMinutes === 'number' ? estimateMinutes : null,
+      dueDate: typeof dueDate === 'string' ? dueDate : null,
+      tags: Array.isArray(tags) ? tags.map(String) : undefined,
+      artifactBindings: Array.isArray(artifactBindings) ? artifactBindings : undefined
+    });
+
+    if (!plan) return res.status(404).json({ error: 'Learning plan not found' });
+    return res.json({ plan });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/planning/plans/:planId/feedback', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const { workspaceId, stepId, category, note, rating } = req.body ?? {};
+  const allowedCategories = ['too_hard', 'too_easy', 'blocked', 'resource_mismatch', 'replan', 'other'];
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!allowedCategories.includes(category)) return res.status(400).json({ error: 'category is invalid' });
+
+  try {
+    const plan = await learningMemoryService.recordLearningPlanFeedback({
+      workspaceId,
+      planId,
+      stepId: typeof stepId === 'string' ? stepId : null,
+      category,
+      note: typeof note === 'string' ? note : undefined,
+      rating: typeof rating === 'number' ? rating : null
+    });
+
+    if (!plan) return res.status(404).json({ error: 'Learning plan not found' });
+    return res.json({ plan });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/planning/plans/:planId/rollback', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const { workspaceId, targetPlanId } = req.body ?? {};
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!targetPlanId || typeof targetPlanId !== 'string') return res.status(400).json({ error: 'targetPlanId is required' });
+
+  try {
+    const plan = await learningMemoryService.rollbackLearningPlanToVersion({ workspaceId, planId, targetPlanId });
+    if (!plan) return res.status(404).json({ error: 'Target learning plan not found' });
+    return res.json({ plan });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/workspace-integration', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const workbenchId = typeof req.query.workbenchId === 'string' ? req.query.workbenchId : null;
+  const goalId = typeof req.query.goalId === 'string' ? req.query.goalId : null;
+  const query = typeof req.query.query === 'string' ? req.query.query : undefined;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const integration = await personalizedWorkspaceIntegrationService.build({
+      workspaceId,
+      workbenchId,
+      goalId,
+      query
+    });
+    return res.json({ integration });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/evaluation', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const evaluation = await learningSystemEvaluationService.evaluate({ workspaceId });
+    return res.json({ evaluation });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/evaluation', async (req: Request, res: Response) => {
+  const { workspaceId } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const evaluation = await learningSystemEvaluationService.evaluate({ workspaceId, persist: true });
+    return res.json({ evaluation });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
 router.post('/context', async (req: Request, res: Response) => {
   const { workspaceId, workbenchId, goalId, activeFileId, query } = req.body ?? {};
 
@@ -200,6 +1004,22 @@ router.post('/context', async (req: Request, res: Response) => {
 
 router.get('/capabilities', (_req: Request, res: Response) => {
   return res.json({ capabilities: capabilityRegistry.list() });
+});
+
+router.get('/course-home', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const workbenchId = typeof req.query.workbenchId === 'string' ? req.query.workbenchId : null;
+
+  if (!workspaceId) {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+
+  try {
+    const summary = await courseHomeService.build({ workspaceId, workbenchId });
+    return res.json({ summary });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
 });
 
 router.get('/readiness', async (req: Request, res: Response) => {
@@ -422,6 +1242,22 @@ router.post('/learner-state/govern', async (req: Request, res: Response) => {
     const result = await memoryGovernanceService.runLifecycle({
       workspaceId,
       workbenchId: typeof workbenchId === 'string' ? workbenchId : null
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/learner-state/govern-advanced', async (req: Request, res: Response) => {
+  const { workspaceId, workbenchId, minEvidenceCount, promotionConfidence } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const result = await learnerStateGovernanceService.govern({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      minEvidenceCount: typeof minEvidenceCount === 'number' ? minEvidenceCount : undefined,
+      promotionConfidence: typeof promotionConfidence === 'number' ? promotionConfidence : undefined
     });
     return res.json(result);
   } catch (error) {

@@ -4,6 +4,8 @@ import { DocumentPreviewService } from '../services/documentPreviewService';
 import { documentTextExtractionService } from '../services/documentTextExtractionService';
 import { webSourceExtractionService } from '../services/webSourceExtractionService';
 import { resourceDiscoveryService } from '../services/resourceDiscoveryService';
+import { videoAnalysisService } from '../services/videoAnalysisService';
+import { resourceIntelligenceService } from '../services/resourceIntelligenceService';
 import prisma from '../config/db';
 import { 
   validateWorkspaceId, 
@@ -278,7 +280,12 @@ export const importWebSource = async (req: Request, res: Response) => {
       resourceType: 'source',
       scope,
       origin: 'web',
-      metadata: { sourceUrl: extracted.url, siteName: extracted.siteName, pageCount: extracted.pages.length },
+      metadata: {
+        sourceUrl: extracted.url,
+        siteName: extracted.siteName,
+        pageCount: extracted.pages.length,
+        coverImageUrl: extracted.images?.[0]?.src
+      },
       indexInBackground: true
     });
 
@@ -334,6 +341,106 @@ export const discoverWebSources = async (req: Request, res: Response) => {
     });
 
     res.json(discovery);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const getVideoAnalysis = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const fileObjectId = getSingleParam(req.params.fileObjectId || req.query.id);
+
+    validateWorkspaceId(workspaceId);
+    validateNodeId(fileObjectId);
+
+    const analysis = await videoAnalysisService.getAnalysis(workspaceId, fileObjectId);
+    res.json(analysis);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const startVideoAnalysis = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const fileObjectId = getSingleParam(req.params.fileObjectId || req.body.id);
+
+    validateWorkspaceId(workspaceId);
+    validateNodeId(fileObjectId);
+
+    const analysis = await videoAnalysisService.enqueueAnalysis(workspaceId, fileObjectId, {
+      force: Boolean(req.body?.force),
+      preserveManualEdits: Boolean(req.body?.preserveManualEdits)
+    });
+    res.json(analysis);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const cancelVideoAnalysis = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const fileObjectId = getSingleParam(req.params.fileObjectId || req.body.id);
+
+    validateWorkspaceId(workspaceId);
+    validateNodeId(fileObjectId);
+
+    const analysis = await videoAnalysisService.cancelAnalysis(workspaceId, fileObjectId);
+    res.json(analysis);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const updateVideoAnalysis = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const fileObjectId = getSingleParam(req.params.fileObjectId || req.body.id);
+
+    validateWorkspaceId(workspaceId);
+    validateNodeId(fileObjectId);
+
+    const analysis = await videoAnalysisService.saveManualRevision(workspaceId, fileObjectId, {
+      summary: typeof req.body?.summary === 'string' ? req.body.summary : undefined,
+      chapters: Array.isArray(req.body?.chapters) ? req.body.chapters : undefined,
+      keyPoints: Array.isArray(req.body?.keyPoints) ? req.body.keyPoints : undefined,
+      review: req.body?.review && typeof req.body.review === 'object' ? req.body.review : undefined
+    });
+    res.json(analysis);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const getResourceIntelligence = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const fileObjectId = getSingleParam(req.params.fileObjectId || req.query.id);
+
+    validateWorkspaceId(workspaceId);
+    validateNodeId(fileObjectId);
+
+    const analysis = await resourceIntelligenceService.getAnalysis(workspaceId, fileObjectId);
+    res.json(analysis);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const startResourceIntelligence = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const fileObjectId = getSingleParam(req.params.fileObjectId || req.body.id);
+
+    validateWorkspaceId(workspaceId);
+    validateNodeId(fileObjectId);
+
+    const analysis = await resourceIntelligenceService.enqueueAnalysis(workspaceId, fileObjectId, {
+      force: Boolean(req.body?.force)
+    });
+    res.json(analysis);
   } catch (error: any) {
     handleError(res, error);
   }
@@ -462,7 +569,8 @@ export const uploadFiles = async (req: Request, res: Response) => {
             workbenchId,
             resourceRole,
             scope,
-            metadata: parseMetadataInput(metadata)
+            metadata: parseMetadataInput(metadata),
+            indexInBackground: Boolean(workbenchId)
           }
         );
         results.push({ success: true, file: created });
@@ -554,13 +662,65 @@ export const getFileContent = async (req: Request, res: Response) => {
 export const saveFileContent = async (req: Request, res: Response) => {
   try {
     const workspaceId = getSingleParam(req.params.workspaceId);
-    const { id, content } = req.body;
+    const { id, content, baseContentHash, createRevision, revisionSummary, actionType, actor } = req.body;
     
     validateWorkspaceId(workspaceId);
     validateNodeId(id);
 
+    if (createRevision) {
+      const result = await FileSystemService.applyWorkbenchNoteRevision({
+        workspaceId,
+        fileObjectId: id,
+        content,
+        baseContentHash,
+        summary: revisionSummary,
+        actionType,
+        actor
+      });
+      return res.json(result);
+    }
+
     const file = await FileSystemService.saveFileContent(workspaceId, id, content);
     res.json(file);
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const listWorkbenchNoteRevisions = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const fileObjectId = getSingleParam(req.params.fileObjectId);
+    validateWorkspaceId(workspaceId);
+    validateNodeId(fileObjectId);
+
+    const revisions = await FileSystemService.listWorkbenchNoteRevisions(
+      workspaceId,
+      fileObjectId,
+      Number(req.query.limit || 20)
+    );
+    res.json({ revisions });
+  } catch (error: any) {
+    handleError(res, error);
+  }
+};
+
+export const revertWorkbenchNoteRevision = async (req: Request, res: Response) => {
+  try {
+    const workspaceId = getSingleParam(req.params.workspaceId);
+    const fileObjectId = getSingleParam(req.params.fileObjectId);
+    const { revisionId, actor } = req.body ?? {};
+    validateWorkspaceId(workspaceId);
+    validateNodeId(fileObjectId);
+    if (revisionId) validateNodeId(revisionId);
+
+    const result = await FileSystemService.revertWorkbenchNoteRevision({
+      workspaceId,
+      fileObjectId,
+      revisionId,
+      actor
+    });
+    res.json(result);
   } catch (error: any) {
     handleError(res, error);
   }
@@ -573,7 +733,7 @@ export const saveGeneratedContent = async (req: Request, res: Response) => {
     const { targetDir, filename, content, category, workbenchId, resourceRole, resourceType, scope, origin, metadata } = req.body;
     
     validateWorkspaceId(workspaceId);
-    if (!targetDir) throw new FileSystemError(400, 'Target directory is required');
+    if (!targetDir && !workbenchId) throw new FileSystemError(400, 'Target directory or workbenchId is required');
     if (!filename) throw new FileSystemError(400, 'Filename is required');
 
     const file = await FileSystemService.saveGeneratedContent({

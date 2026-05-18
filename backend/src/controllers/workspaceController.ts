@@ -29,7 +29,12 @@ const fileObjectSummarySelect = {
 } as const;
 
 export const createWorkspace = async (req: Request, res: Response) => {
-  const { name, description, major, userId } = req.body;
+  const { name, description, major } = req.body;
+  const userId = req.authUser?.id;
+
+  if (!userId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
 
   const workspace = await prisma.workspace.create({
     data: {
@@ -45,7 +50,7 @@ export const createWorkspace = async (req: Request, res: Response) => {
 
 export const updateWorkspace = async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { name, description, major } = req.body;
+  const { name, description, major, aiTerminalConfig } = req.body;
 
   const workspaceId = getSingleValue(id);
   if (!workspaceId) {
@@ -58,6 +63,7 @@ export const updateWorkspace = async (req: Request, res: Response) => {
       name,
       description,
       major,
+      aiTerminalConfig,
     },
   });
 
@@ -80,6 +86,8 @@ export const deleteWorkspace = async (req: Request, res: Response) => {
   await prisma.learningTrace.deleteMany({ where: { workspaceId } });
   await prisma.knowledgeChunk.deleteMany({ where: { workspaceId } });
   await prisma.knowledgeIndexJob.deleteMany({ where: { workspaceId } });
+  await prisma.workbenchTablePropertyValue.deleteMany({ where: { workspaceId } });
+  await prisma.workbenchTableProperty.deleteMany({ where: { workspaceId } });
   const runs = await prisma.learningRun.findMany({ where: { workspaceId }, select: { id: true } });
   await prisma.learningRunStep.deleteMany({ where: { runId: { in: runs.map((run) => run.id) } } });
   await prisma.learningRun.deleteMany({ where: { workspaceId } });
@@ -147,11 +155,9 @@ export const duplicateWorkspace = async (req: Request, res: Response) => {
 };
 
 export const getWorkspaces = async (req: Request, res: Response) => {
-  const { userId } = req.query;
-
-  const parsedUserId = getSingleValue(userId);
+  const parsedUserId = req.authUser?.id;
   if (!parsedUserId) {
-    return res.status(400).json({ error: 'Invalid user id' });
+    return res.status(401).json({ error: 'Authentication required' });
   }
 
   const workspaces = await prisma.workspace.findMany({
@@ -207,6 +213,10 @@ export const getWorkspace = async (req: Request, res: Response) => {
 
   if (!workspace) {
     return res.status(404).json({ error: 'Workspace not found' });
+  }
+
+  if (req.authUser?.id !== workspace.userId) {
+    return res.status(403).json({ error: 'You do not have access to this workspace' });
   }
 
   const workbenches = await workbenchService.listByWorkspace(workspaceId);

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   Brain,
@@ -29,6 +29,7 @@ interface LearningTerminalProps {
   onWorkbenchCreated: (workbenchId: string) => void;
   onRefresh: () => Promise<void> | void;
   variant?: 'full' | 'dashboard';
+  initialPrompt?: string;
 }
 
 const starterPrompts = [
@@ -51,7 +52,8 @@ export default function LearningTerminal({
   onCreateWorkbench,
   onWorkbenchCreated,
   onRefresh,
-  variant = 'full'
+  variant = 'full',
+  initialPrompt
 }: LearningTerminalProps) {
   const [input, setInput] = useState('');
   const [goalDraft, setGoalDraft] = useState<LearningGoalDraft | null>(null);
@@ -59,6 +61,12 @@ export default function LearningTerminal({
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialPrompt) {
+      setInput(initialPrompt);
+    }
+  }, [initialPrompt]);
 
   const latestWorkbench = workbenches[0];
   const overviewText = useMemo(() => {

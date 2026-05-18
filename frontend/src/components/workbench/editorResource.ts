@@ -104,6 +104,19 @@ export const getResourceKind = (
   const mimeType = resource.mimeType?.toLowerCase() || '';
   const type = resource.type.toLowerCase();
   const fileCategory = resource.fileCategory?.toLowerCase() || '';
+  const sourceUrl = String(resource.metadata?.sourceUrl || resource.metadata?.url || '').toLowerCase();
+  const videoAnalysis = resource.metadata?.videoAnalysis;
+
+  if (
+    videoAnalysis ||
+    mimeType.startsWith('video/') ||
+    type.includes('video') ||
+    sourceUrl.includes('youtube.com') ||
+    sourceUrl.includes('youtu.be') ||
+    sourceUrl.includes('bilibili.com')
+  ) {
+    return 'video';
+  }
 
   if (extension === 'html') return 'html';
 
@@ -122,7 +135,6 @@ export const getResourceKind = (
     return 'document';
   }
   if (mimeType.startsWith('text/')) return 'note';
-  if (mimeType.startsWith('video/') || type.includes('video')) return 'video';
   if (resource.isBinary) return 'binary';
 
   return 'unknown';

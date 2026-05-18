@@ -1,5 +1,6 @@
 import prisma from '../config/db';
 import { buildLearnerMemoryKey } from './learnerMemoryKeys';
+import { isPollutedLearningSignal, isToolGeneratedLearningRequest, sanitizeLearnerSignalText } from './learnerSignalSanitizer';
 import { learnerStateService, LearnerStateDimension } from './learnerStateService';
 import type { FlashcardRating } from './flashcardService';
 import type { StudioQuizQuestion } from './aiStudioService';
@@ -88,12 +89,16 @@ const uncertaintySignals = (text: string) => {
 
 const conceptFromText = (text: string, fallback?: string) => {
   const bracketed = text.match(/[「“"]([^」”"]{2,60})[」”"]/);
-  if (bracketed?.[1]) return bracketed[1].trim();
+  if (bracketed?.[1] && !isPollutedLearningSignal(bracketed[1])) return bracketed[1].trim();
   const afterTalk = text.match(/(?:讲讲|解释|介绍|说说|梳理|总结|理解)\s*([^，。！？\n]{2,60})/);
-  if (afterTalk?.[1]) return afterTalk[1].trim().replace(/的?(三个|几个|一些|例子|案例)$/g, '');
+  if (afterTalk?.[1]) {
+    const candidate = afterTalk[1].trim().replace(/的?(三个|几个|一些|例子|案例)$/g, '');
+    if (!isPollutedLearningSignal(candidate)) return candidate;
+  }
   const afterAbout = text.match(/(?:关于|围绕|学习|解释|理解|掌握)\s*([^，。！？\n]{2,60})/);
-  if (afterAbout?.[1]) return afterAbout[1].trim();
-  return fallback ? clip(fallback, 80) : '';
+  if (afterAbout?.[1] && !isPollutedLearningSignal(afterAbout[1])) return afterAbout[1].trim();
+  const fallbackText = fallback ? clip(fallback, 80) : '';
+  return fallbackText && !isPollutedLearningSignal(fallbackText) ? fallbackText : '';
 };
 
 const ratingWeight: Record<FlashcardRating, number> = {
@@ -164,10 +169,12 @@ export class LearnerStateAnalyzer {
     const userMessage = latestUserMessage(input.messages);
     if (!userMessage) return { evidence: null, patches: [] };
 
-    const preferenceSignals = resourcePreferenceSignals(userMessage);
-    const uncertainty = uncertaintySignals(userMessage);
-    const possibleConcept = conceptFromText(userMessage);
-    const explicitGoalIntent = /目标|计划|希望掌握|需要掌握|准备|考试|项目|论文|复习|我想学|我要学/i.test(userMessage);
+    const signalText = sanitizeLearnerSignalText(userMessage, input.taskType);
+    const diagnosticSuppressed = !signalText || isToolGeneratedLearningRequest(userMessage, input.taskType);
+    const preferenceSignals = diagnosticSuppressed ? [] : resourcePreferenceSignals(signalText);
+    const uncertainty = diagnosticSuppressed ? [] : uncertaintySignals(signalText);
+    const possibleConcept = diagnosticSuppressed ? '' : conceptFromText(signalText);
+    const explicitGoalIntent = diagnosticSuppressed ? false : /目标|计划|希望掌握|需要掌握|准备|考试|项目|论文|复习|我想学|我要学/i.test(signalText);
     const shouldPropose =
       preferenceSignals.length > 0 ||
       uncertainty.length > 0 ||
@@ -187,6 +194,8 @@ export class LearnerStateAnalyzer {
         userMessage: clip(userMessage, 1200),
         answer: clip(input.answer, 1200),
         taskType: input.taskType || null,
+        diagnosticSuppressed,
+        signalText: signalText ? clip(signalText, 600) : null,
         preferenceSignals,
         uncertaintySignals: uncertainty,
         possibleConcept
@@ -210,7 +219,7 @@ export class LearnerStateAnalyzer {
           rationale: 'Single chat preference signal; keep as tentative until repeated.',
           payload: {
             tentativeResourcePreferences: [preference],
-            lastPreferenceSignal: clip(userMessage, 180)
+            lastPreferenceSignal: clip(signalText, 180)
           }
         });
       }
@@ -223,7 +232,7 @@ export class LearnerStateAnalyzer {
         rationale: 'Learner asked for help or clarification; this is engagement evidence, not a stable weakness yet.',
         payload: {
           questionPatterns: uncertainty,
-          recentHelpSeeking: [{ signal: uncertainty, text: clip(userMessage, 180), observedAt: new Date().toISOString() }]
+          recentHelpSeeking: [{ signal: uncertainty, text: clip(signalText, 180), observedAt: new Date().toISOString() }]
         }
       });
       if (possibleConcept) {
@@ -234,7 +243,7 @@ export class LearnerStateAnalyzer {
           rationale: 'Chat indicates possible uncertainty around a concept; keep as candidate, not confirmed misconception.',
           payload: {
             candidateWeakSkills: [possibleConcept],
-            weakSkillSignals: [{ concept: possibleConcept, source: 'chat', strength: 'weak', text: clip(userMessage, 160) }]
+            weakSkillSignals: [{ concept: possibleConcept, source: 'chat', strength: 'weak', text: clip(signalText, 160) }]
           }
         });
         }
@@ -248,19 +257,19 @@ export class LearnerStateAnalyzer {
         rationale: 'Recent chat topic; use for continuity and retrieval, not as a learning goal.',
         payload: {
           recentTopics: [possibleConcept],
-          transientTopicSignals: [{ topic: possibleConcept, text: clip(userMessage, 180), observedAt: new Date().toISOString() }]
+          transientTopicSignals: [{ topic: possibleConcept, text: clip(signalText, 180), observedAt: new Date().toISOString() }]
         }
       });
     }
 
     if (explicitGoalIntent) {
-      if (!(await blockedByControl(userMessage, 'profileBase'))) {
+      if (!(await blockedByControl(signalText, 'profileBase'))) {
       patches.push({
         dimension: 'profileBase',
         confidence: 0.4,
         rationale: 'User expressed a goal-like learning intent; treat as active goal signal until confirmed by goal creation or repeated activity.',
         payload: {
-          activeLearningGoalSignals: [clip(userMessage, 220)]
+          activeLearningGoalSignals: [clip(signalText, 220)]
         }
       });
       }

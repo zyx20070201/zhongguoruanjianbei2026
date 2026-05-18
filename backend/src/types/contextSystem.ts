@@ -96,6 +96,25 @@ export interface ResourceContext {
   isActiveFile?: boolean;
 }
 
+export type ChatSessionAttachmentKind = 'text' | 'image' | 'pdf' | 'document' | 'file';
+
+export interface ChatSessionAttachmentContext {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: ChatSessionAttachmentKind;
+  createdAt?: string;
+  textContent?: string;
+  summary?: string;
+  dataUrl?: string;
+  base64Data?: string;
+  fileObjectId?: string;
+  savedToWorkbench?: boolean;
+  status?: 'ready' | 'metadata_only' | 'error';
+  error?: string;
+}
+
 export interface RetrievedChunk {
   chunkId: string;
   sourceId?: string;
@@ -104,7 +123,7 @@ export interface RetrievedChunk {
   content: string;
   score: number;
   confidence?: 'high' | 'medium' | 'low';
-  source?: 'selection' | 'viewport' | 'active_file' | 'retrieval';
+  source?: 'selection' | 'viewport' | 'active_file' | 'retrieval' | 'chat_attachment';
   retrievalReason?: string;
   matchedTerms?: string[];
   scoreBreakdown?: Record<string, number>;
@@ -121,6 +140,22 @@ export interface RetrievedChunk {
   };
 }
 
+export interface VisualEvidenceItem {
+  id: string;
+  kind: 'pdf_page' | 'video_slide' | 'image_attachment';
+  fileId: string;
+  fileName: string;
+  title: string;
+  locator?: ContextLocator;
+  textDescription: string;
+  ocrText?: string;
+  nearbyText?: string;
+  imageFileId?: string;
+  imageUrl?: string;
+  dataUrl?: string;
+  mimeType?: string;
+}
+
 export interface Citation {
   sourceId?: string;
   fileId: string;
@@ -128,7 +163,7 @@ export interface Citation {
   locator?: ContextLocator;
   label: string;
   confidence?: 'high' | 'medium' | 'low';
-  sourceType?: 'selection' | 'viewport' | 'active_file' | 'retrieval' | 'pinned';
+  sourceType?: 'selection' | 'viewport' | 'active_file' | 'retrieval' | 'pinned' | 'chat_attachment';
   score?: number;
   retrievalReason?: string;
   matchedTerms?: string[];
@@ -148,7 +183,7 @@ export interface Citation {
 
 export interface SourceInspectorItem {
   sourceId: string;
-  sourceType: 'selection' | 'viewport' | 'active_file' | 'retrieval' | 'pinned';
+  sourceType: 'selection' | 'viewport' | 'active_file' | 'retrieval' | 'pinned' | 'chat_attachment';
   confidence: 'high' | 'medium' | 'low';
   fileId: string;
   fileName: string;
@@ -194,7 +229,9 @@ export interface ContextCapsule {
   viewport?: ViewportContext;
   activeFile?: ActiveFileContext;
   resources?: ResourceContext[];
+  chatSessionAttachments?: ChatSessionAttachmentContext[];
   retrievedChunks?: RetrievedChunk[];
+  visualEvidence?: VisualEvidenceItem[];
   profileSummary?: ProfileSummary;
   recentMessages?: ChatMessage[];
   tokenBudget: number;

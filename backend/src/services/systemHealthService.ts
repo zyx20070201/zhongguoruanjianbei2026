@@ -1,6 +1,6 @@
 import prisma from '../config/db';
 import { backgroundJobService } from './backgroundJobService';
-import { deepseekService } from './deepseekService';
+import { aiModelProviderService } from './aiModelProviderService';
 import { embeddingService } from './embeddingService';
 import { vectorStoreService } from './vectorStoreService';
 
@@ -17,7 +17,7 @@ export class SystemHealthService {
     }));
 
     const [llm, embeddingStack, qdrant] = await Promise.all([
-      deepseekService.health(),
+      aiModelProviderService.health(),
       embeddingService.health(),
       vectorStoreService.health()
     ]);

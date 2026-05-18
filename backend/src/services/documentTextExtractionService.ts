@@ -2,6 +2,9 @@ import fs from 'fs/promises';
 import path from 'path';
 import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
+import JSZip from 'jszip';
+import { DOMParser } from '@xmldom/xmldom';
+import { JSDOM } from 'jsdom';
 import { FileSystemError } from '../types/fileSystem';
 import { LocalStorageService } from './storage/localStorageService';
 
@@ -34,12 +37,17 @@ export interface PdfTextLine {
 export interface StructuredDocumentChunk {
   fileId?: string;
   chunkIndex: number;
-  chunkType?: 'parent' | 'text' | 'table' | 'list' | 'code' | 'summary';
+  chunkType?: 'parent' | 'text' | 'table' | 'list' | 'code' | 'summary' | 'video_transcript' | 'video_chapter' | 'video_key_point' | 'video_slide';
   text: string;
   headingPath?: string[];
   paragraphIndex?: number;
   blockId?: string;
   blockIndex?: number;
+  slideIndex?: number;
+  shapeIndex?: number;
+  tableIndex?: number;
+  rowIndex?: number;
+  columnIndex?: number;
   page?: number;
   pageStart?: number;
   pageEnd?: number;
@@ -53,7 +61,7 @@ export interface StructuredDocumentChunk {
 }
 
 export interface RenderableDocument {
-  kind: 'pdf' | 'docx' | 'markdown' | 'code' | 'text';
+  kind: 'pdf' | 'docx' | 'pptx' | 'markdown' | 'code' | 'text';
   fileId?: string;
   fileName?: string | null;
   pageCount?: number;
@@ -100,6 +108,33 @@ const decodeHtml = (value: string) =>
     .replace(/&#39;/g, "'")
     .replace(/[ \t]+/g, ' ')
     .trim();
+
+const escapeMarkdownCell = (value: string) =>
+  value
+    .replace(/\r?\n+/g, '<br>')
+    .replace(/\|/g, '\\|')
+    .trim();
+
+const htmlTableToMarkdown = (tableHtml: string) => {
+  const dom = new JSDOM(tableHtml);
+  const rows = Array.from(dom.window.document.querySelectorAll('tr'))
+    .map((row) =>
+      Array.from(row.querySelectorAll('th,td')).map((cell) => decodeHtml(cell.innerHTML))
+    )
+    .filter((row) => row.some((cell) => cell.trim()));
+
+  if (!rows.length) return '';
+
+  const columnCount = Math.max(...rows.map((row) => row.length), 1);
+  const normalizeRow = (row: string[]) =>
+    Array.from({ length: columnCount }, (_, index) => escapeMarkdownCell(row[index] || ''));
+  const header = normalizeRow(rows[0]);
+  const separator = Array.from({ length: columnCount }, () => '---');
+  const body = rows.slice(1).map(normalizeRow);
+  return [header, separator, ...body]
+    .map((row) => `| ${row.join(' | ')} |`)
+    .join('\n');
+};
 
 const splitParagraphs = (text: string) =>
   text
@@ -354,6 +389,45 @@ const mergeRects = (rects: Array<{ page?: number; left: number; top: number; wid
   };
 };
 
+const reorderPdfLinesForReading = (lines: PdfTextLine[], pageWidth: number, pageHeight: number) => {
+  if (lines.length < 10) {
+    return lines.map((line, index) => ({ ...line, lineIndex: index }));
+  }
+
+  const bodyLines = lines.filter((line) => {
+    const box = line.bbox;
+    if (!box) return false;
+    if (box.width > pageWidth * 0.72) return false;
+    if (box.top < pageHeight * 0.10 || box.top > pageHeight * 0.92) return false;
+    return true;
+  });
+  const leftLines = bodyLines.filter((line) => (line.bbox?.left || 0) < pageWidth * 0.45);
+  const rightLines = bodyLines.filter((line) => (line.bbox?.left || 0) > pageWidth * 0.48);
+  const hasTwoColumns = leftLines.length >= 4 && rightLines.length >= 4;
+
+  if (!hasTwoColumns) {
+    return lines.map((line, index) => ({ ...line, lineIndex: index }));
+  }
+
+  const topBand = lines
+    .filter((line) => (line.bbox?.top || 0) < pageHeight * 0.10 || (line.bbox?.width || 0) > pageWidth * 0.72)
+    .sort((a, b) => (a.bbox?.top || 0) - (b.bbox?.top || 0) || (a.bbox?.left || 0) - (b.bbox?.left || 0));
+  const bottomBand = lines
+    .filter((line) => (line.bbox?.top || 0) > pageHeight * 0.92)
+    .sort((a, b) => (a.bbox?.top || 0) - (b.bbox?.top || 0) || (a.bbox?.left || 0) - (b.bbox?.left || 0));
+  const topSet = new Set(topBand);
+  const bottomSet = new Set(bottomBand);
+  const body = lines.filter((line) => !topSet.has(line) && !bottomSet.has(line));
+  const left = body
+    .filter((line) => (line.bbox?.left || 0) < pageWidth * 0.48)
+    .sort((a, b) => (a.bbox?.top || 0) - (b.bbox?.top || 0) || (a.bbox?.left || 0) - (b.bbox?.left || 0));
+  const right = body
+    .filter((line) => (line.bbox?.left || 0) >= pageWidth * 0.48)
+    .sort((a, b) => (a.bbox?.top || 0) - (b.bbox?.top || 0) || (a.bbox?.left || 0) - (b.bbox?.left || 0));
+
+  return [...topBand, ...left, ...right, ...bottomBand].map((line, index) => ({ ...line, lineIndex: index }));
+};
+
 const extractPdfWithPdfJs = async (buffer: Buffer, fileId?: string): Promise<{ text: string; pages: PdfPageText[]; pageCount: number }> => {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const originalWarn = console.warn;
@@ -406,26 +480,40 @@ const extractPdfWithPdfJs = async (buffer: Buffer, fileId?: string): Promise<{ t
       let currentItems: typeof items = [];
       const flushLine = () => {
         if (!currentItems.length) return;
-        const text = currentItems.map((item: any, index: number) => {
-          if (index === 0) return item.text;
-          const previous = currentItems[index - 1];
-          const gap = item.x - (previous.x + previous.rect.width);
-          return `${gap > 3 ? ' ' : ''}${item.text}`;
-        }).join('').trim();
-        if (!text) {
-          currentItems = [];
-          return;
-        }
-        const charStart = globalCharCursor;
-        globalCharCursor += text.length + 1;
-        const rects = currentItems.map((item: any) => item.rect);
-        lines.push({
-          lineIndex: lines.length,
-          text,
-          charStart,
-          charEnd: charStart + text.length,
-          bbox: mergeRects(rects),
-          rects
+        const groups: typeof currentItems[] = [];
+        let group: typeof currentItems = [];
+        currentItems.forEach((item: any, index: number) => {
+          if (index > 0) {
+            const previous = currentItems[index - 1];
+            const gap = item.x - (previous.x + previous.rect.width);
+            if (gap > Math.max(28, viewport.width * 0.045)) {
+              if (group.length) groups.push(group);
+              group = [];
+            }
+          }
+          group.push(item);
+        });
+        if (group.length) groups.push(group);
+
+        groups.forEach((lineItems) => {
+          const text = lineItems.map((item: any, index: number) => {
+            if (index === 0) return item.text;
+            const previous = lineItems[index - 1];
+            const gap = item.x - (previous.x + previous.rect.width);
+            return `${gap > 3 ? ' ' : ''}${item.text}`;
+          }).join('').trim();
+          if (!text) return;
+          const charStart = globalCharCursor;
+          globalCharCursor += text.length + 1;
+          const rects = lineItems.map((item: any) => item.rect);
+          lines.push({
+            lineIndex: lines.length,
+            text,
+            charStart,
+            charEnd: charStart + text.length,
+            bbox: mergeRects(rects),
+            rects
+          });
         });
         currentItems = [];
       };
@@ -445,16 +533,17 @@ const extractPdfWithPdfJs = async (buffer: Buffer, fileId?: string): Promise<{ t
       });
       flushLine();
 
-      const text = lines.map((line) => line.text).join('\n');
+      const reorderedLines = reorderPdfLinesForReading(lines, viewport.width, viewport.height);
+      const text = reorderedLines.map((line) => line.text).join('\n');
       pages.push({
         fileId,
         page: pageNumber,
         text,
         width: viewport.width,
         height: viewport.height,
-        charStart: lines[0]?.charStart ?? globalCharCursor,
-        charEnd: lines[lines.length - 1]?.charEnd ?? globalCharCursor,
-        lines
+        charStart: reorderedLines[0]?.charStart ?? globalCharCursor,
+        charEnd: reorderedLines[reorderedLines.length - 1]?.charEnd ?? globalCharCursor,
+        lines: reorderedLines
       });
     }
 
@@ -477,13 +566,67 @@ const chunkDocxHtml = (html: string, fileId?: string): { text: string; chunks: S
   const textParts: string[] = [];
   let paragraphIndex = 0;
   let charCursor = 0;
-  const blockPattern = /<(h[1-6]|p|li)[^>]*>([\s\S]*?)<\/\1>/gi;
-  let match: RegExpExecArray | null;
+  let tableIndex = 0;
+  const dom = new JSDOM(`<main>${html}</main>`);
+  const blocks = Array.from(dom.window.document.querySelector('main')?.children || []);
 
-  while ((match = blockPattern.exec(html))) {
-    const tag = match[1].toLowerCase();
-    const text = decodeHtml(match[2]);
-    if (!text) continue;
+  blocks.forEach((element, blockIndex) => {
+    const tag = element.tagName.toLowerCase();
+    if (!['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'ol', 'table'].includes(tag)) return;
+
+    if (tag === 'ul' || tag === 'ol') {
+      Array.from(element.querySelectorAll(':scope > li')).forEach((item) => {
+        const text = decodeHtml(item.innerHTML);
+        if (!text) return;
+        const charStart = charCursor;
+        textParts.push(text);
+        charCursor += text.length + 2;
+        chunks.push({
+          fileId,
+          chunkIndex: chunks.length,
+          chunkType: 'list',
+          paragraphIndex,
+          blockIndex,
+          blockId: `docx-list-${paragraphIndex}`,
+          headingPath: headingStack.length ? [...headingStack] : undefined,
+          text,
+          html: sanitizeHtml(item.outerHTML),
+          charStart,
+          charEnd: charStart + text.length
+        });
+        paragraphIndex += 1;
+      });
+      return;
+    }
+
+    if (tag === 'table') {
+      const tableMarkdown = htmlTableToMarkdown(element.outerHTML);
+      if (!tableMarkdown) return;
+      const charStart = charCursor;
+      textParts.push(tableMarkdown);
+      charCursor += tableMarkdown.length + 2;
+      const currentTableIndex = tableIndex;
+      tableIndex += 1;
+      chunks.push({
+        fileId,
+        chunkIndex: chunks.length,
+        chunkType: 'table',
+        paragraphIndex,
+        blockIndex,
+        blockId: `docx-table-${currentTableIndex}`,
+        tableIndex: currentTableIndex,
+        headingPath: headingStack.length ? [...headingStack] : undefined,
+        text: tableMarkdown,
+        html: sanitizeHtml(element.outerHTML),
+        charStart,
+        charEnd: charStart + tableMarkdown.length
+      });
+      paragraphIndex += 1;
+      return;
+    }
+
+    const text = decodeHtml(element.innerHTML);
+    if (!text) return;
 
     if (/^h[1-6]$/.test(tag)) {
       const level = Number(tag.slice(1));
@@ -497,20 +640,206 @@ const chunkDocxHtml = (html: string, fileId?: string): { text: string; chunks: S
     chunks.push({
       fileId,
       chunkIndex: chunks.length,
+      chunkType: tag === 'li' ? 'list' : 'text',
       paragraphIndex,
+      blockIndex,
+      blockId: `docx-block-${blockIndex}`,
       headingPath: headingStack.length ? [...headingStack] : undefined,
       text,
-      html: sanitizeHtml(match[0]),
+      html: sanitizeHtml(element.outerHTML),
       charStart,
       charEnd: charStart + text.length
     });
     paragraphIndex += 1;
-  }
+  });
 
   const fullText = textParts.join('\n\n').trim() || stripHtml(html);
   return {
     text: fullText,
     chunks: chunks.length ? chunks : chunkPlainText(fullText, fileId)
+  };
+};
+
+const parseXml = (value: string) => new DOMParser().parseFromString(value, 'application/xml');
+
+const localName = (node: Node) => (node as Element).localName || node.nodeName.split(':').pop() || node.nodeName;
+
+const childElements = (node: Node, name?: string) =>
+  Array.from(node.childNodes || []).filter((child) => {
+    if (child.nodeType !== 1) return false;
+    return name ? localName(child) === name : true;
+  }) as Element[];
+
+const descendantElements = (node: Node, name: string) => {
+  const results: Element[] = [];
+  const visit = (current: Node) => {
+    childElements(current).forEach((child) => {
+      if (localName(child) === name) results.push(child);
+      visit(child);
+    });
+  };
+  visit(node);
+  return results;
+};
+
+const textFromXmlNode = (node: Node) =>
+  descendantElements(node, 't')
+    .map((item) => item.textContent || '')
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const extractPptxTable = (table: Element) =>
+  descendantElements(table, 'tr')
+    .map((row) =>
+      descendantElements(row, 'tc')
+        .map((cell) => textFromXmlNode(cell))
+        .filter((cell) => cell.trim())
+    )
+    .filter((row) => row.length);
+
+const tableRowsToMarkdown = (rows: string[][]) => {
+  if (!rows.length) return '';
+  const columnCount = Math.max(...rows.map((row) => row.length), 1);
+  const normalizeRow = (row: string[]) =>
+    Array.from({ length: columnCount }, (_, index) => escapeMarkdownCell(row[index] || ''));
+  return [
+    normalizeRow(rows[0]),
+    Array.from({ length: columnCount }, () => '---'),
+    ...rows.slice(1).map(normalizeRow)
+  ]
+    .map((row) => `| ${row.join(' | ')} |`)
+    .join('\n');
+};
+
+const extractPptxStructure = async (filePath: string, fileId?: string): Promise<{ text: string; chunks: StructuredDocumentChunk[] }> => {
+  const zip = await JSZip.loadAsync(await fs.readFile(filePath));
+  const slideFiles = Object.keys(zip.files)
+    .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+    .sort((left, right) => {
+      const leftNumber = Number(left.match(/slide(\d+)\.xml$/i)?.[1] || 0);
+      const rightNumber = Number(right.match(/slide(\d+)\.xml$/i)?.[1] || 0);
+      return leftNumber - rightNumber;
+    });
+  const chunks: StructuredDocumentChunk[] = [];
+  const textParts: string[] = [];
+  let charCursor = 0;
+
+  for (const [slideIndex, slideFile] of slideFiles.entries()) {
+    const slideNumber = slideIndex + 1;
+    const xml = await zip.file(slideFile)?.async('string');
+    if (!xml) continue;
+    const document = parseXml(xml);
+    const shapes = descendantElements(document, 'sp');
+    const tables = descendantElements(document, 'tbl');
+    const slideTexts: string[] = [];
+
+    shapes.forEach((shape, shapeIndex) => {
+      if (descendantElements(shape, 'tbl').length) return;
+      const paragraphs = descendantElements(shape, 'p')
+        .map((paragraph) => textFromXmlNode(paragraph))
+        .filter(Boolean);
+      const text = paragraphs.join('\n').trim();
+      if (!text) return;
+      const charStart = charCursor;
+      textParts.push(text);
+      slideTexts.push(text);
+      charCursor += text.length + 2;
+      chunks.push({
+        fileId,
+        chunkIndex: chunks.length,
+        chunkType: 'text',
+        page: slideNumber,
+        pageStart: slideNumber,
+        pageEnd: slideNumber,
+        slideIndex,
+        shapeIndex,
+        blockIndex: shapeIndex,
+        blockId: `slide-${slideNumber}-shape-${shapeIndex}`,
+        headingPath: [`Slide ${slideNumber}`],
+        text,
+        charStart,
+        charEnd: charStart + text.length
+      });
+    });
+
+    tables.forEach((table, tableIndex) => {
+      const markdown = tableRowsToMarkdown(extractPptxTable(table));
+      if (!markdown) return;
+      const charStart = charCursor;
+      textParts.push(markdown);
+      slideTexts.push(markdown);
+      charCursor += markdown.length + 2;
+      chunks.push({
+        fileId,
+        chunkIndex: chunks.length,
+        chunkType: 'table',
+        page: slideNumber,
+        pageStart: slideNumber,
+        pageEnd: slideNumber,
+        slideIndex,
+        tableIndex,
+        blockIndex: tableIndex,
+        blockId: `slide-${slideNumber}-table-${tableIndex}`,
+        headingPath: [`Slide ${slideNumber}`],
+        text: markdown,
+        charStart,
+        charEnd: charStart + markdown.length
+      });
+    });
+
+    const notesPath = `ppt/notesSlides/notesSlide${slideNumber}.xml`;
+    const notesXml = await zip.file(notesPath)?.async('string');
+    if (notesXml) {
+      const notesText = descendantElements(parseXml(notesXml), 'p')
+        .map((paragraph) => textFromXmlNode(paragraph))
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+      if (notesText) {
+        const charStart = charCursor;
+        const text = `Speaker notes:\n${notesText}`;
+        textParts.push(text);
+        slideTexts.push(text);
+        charCursor += text.length + 2;
+        chunks.push({
+          fileId,
+          chunkIndex: chunks.length,
+          chunkType: 'text',
+          page: slideNumber,
+          pageStart: slideNumber,
+          pageEnd: slideNumber,
+          slideIndex,
+          blockId: `slide-${slideNumber}-notes`,
+          headingPath: [`Slide ${slideNumber}`, 'Speaker notes'],
+          text,
+          charStart,
+          charEnd: charStart + text.length
+        });
+      }
+    }
+
+    if (!slideTexts.length) {
+      chunks.push({
+        fileId,
+        chunkIndex: chunks.length,
+        chunkType: 'text',
+        page: slideNumber,
+        pageStart: slideNumber,
+        pageEnd: slideNumber,
+        slideIndex,
+        blockId: `slide-${slideNumber}-empty`,
+        headingPath: [`Slide ${slideNumber}`],
+        text: '',
+        charStart: charCursor,
+        charEnd: charCursor
+      });
+    }
+  }
+
+  return {
+    text: textParts.join('\n\n').trim(),
+    chunks: chunks.filter((chunk) => chunk.text.trim())
   };
 };
 
@@ -586,6 +915,20 @@ export class DocumentTextExtractionService {
           extension,
           chunks: structured.chunks,
           messages: converted.messages || []
+        }
+      };
+    }
+
+    if (extension === 'pptx') {
+      const structured = await extractPptxStructure(filePath, file.id);
+
+      return {
+        text: structured.text,
+        extractor: 'pptx-openxml',
+        metadata: {
+          extension,
+          chunks: structured.chunks,
+          slideCount: Math.max(0, ...structured.chunks.map((chunk) => chunk.page || 0))
         }
       };
     }
@@ -697,6 +1040,28 @@ export class DocumentTextExtractionService {
         fileName: file.name,
         chunks: structured.chunks,
         extractor: 'mammoth'
+      };
+    }
+
+    if (extension === 'pptx') {
+      if (!file.storageKey) {
+        return {
+          kind: 'pptx',
+          fileId: file.id,
+          fileName: file.name,
+          chunks: [],
+          extractor: 'empty',
+          fallbackReason: 'PPTX source file has no storageKey'
+        };
+      }
+      const structured = await extractPptxStructure(LocalStorageService.getFilePath(file.storageKey), file.id);
+      return {
+        kind: 'pptx',
+        fileId: file.id,
+        fileName: file.name,
+        pageCount: Math.max(0, ...structured.chunks.map((chunk) => chunk.page || 0)),
+        chunks: structured.chunks,
+        extractor: 'pptx-openxml'
       };
     }
 

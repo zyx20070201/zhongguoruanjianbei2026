@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Settings, FolderTree, Copy, Archive, Trash2 } from 'lucide-react';
+import { X, Settings, FolderTree, Copy, Archive, Trash2, Code2 } from 'lucide-react';
 
 interface WorkspaceSettingsDialogProps {
   isOpen: boolean;
@@ -10,10 +10,21 @@ interface WorkspaceSettingsDialogProps {
     major: string;
   };
   onSave: (data: any) => void;
+  developerMode: boolean;
+  onToggleDeveloperMode: (enabled: boolean) => void;
+  developerContent?: React.ReactNode;
 }
 
-export default function WorkspaceSettingsDialog({ isOpen, onClose, initialData, onSave }: WorkspaceSettingsDialogProps) {
-  const [activeTab, setActiveTab] = useState<'general' | 'structure' | 'management'>('general');
+export default function WorkspaceSettingsDialog({
+  isOpen,
+  onClose,
+  initialData,
+  onSave,
+  developerMode,
+  onToggleDeveloperMode,
+  developerContent
+}: WorkspaceSettingsDialogProps) {
+  const [activeTab, setActiveTab] = useState<'general' | 'structure' | 'management' | 'developer'>('general');
   const [formData, setFormData] = useState(initialData);
 
   if (!isOpen) return null;
@@ -52,6 +63,12 @@ export default function WorkspaceSettingsDialog({ isOpen, onClose, initialData, 
               className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'management' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
             >
               Management
+            </button>
+            <button
+              onClick={() => setActiveTab('developer')}
+              className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'developer' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
+            >
+              Developer
             </button>
           </div>
 
@@ -143,6 +160,34 @@ export default function WorkspaceSettingsDialog({ isOpen, onClose, initialData, 
                     <Trash2 className="w-4 h-4" /> Delete
                   </button>
                 </div>
+              </div>
+            )}
+
+            {activeTab === 'developer' && (
+              <div className="space-y-4 animate-in slide-in-from-right-4">
+                <h3 className="text-lg font-semibold text-gray-800 border-b pb-2 mb-4 flex items-center gap-2">
+                  <Code2 className="w-5 h-5 text-gray-400" /> Developer Mode
+                </h3>
+                <div className="border border-gray-200 rounded-lg p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-gray-800">Enable developer mode</p>
+                      <p className="text-sm text-gray-500">Show debug panels and technical memory details in settings only.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onToggleDeveloperMode(!developerMode)}
+                      className={`inline-flex h-7 w-12 items-center rounded-full transition ${developerMode ? 'bg-blue-600 justify-end' : 'bg-gray-300 justify-start'} p-1`}
+                    >
+                      <span className="h-5 w-5 rounded-full bg-white" />
+                    </button>
+                  </div>
+                </div>
+                {developerMode && developerContent ? (
+                  <div className="max-h-[380px] overflow-y-auto rounded-lg border border-gray-200 p-3">
+                    {developerContent}
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

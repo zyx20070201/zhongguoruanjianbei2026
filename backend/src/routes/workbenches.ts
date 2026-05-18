@@ -1,13 +1,16 @@
 import { Router } from 'express';
 import { Request, Response } from 'express';
 import { workbenchService } from '../services/workbenchService';
+import { requireAuth, requireWorkbenchAccess, requireWorkspaceAccess } from '../middleware/auth';
 
 const router = Router();
 
 const getSingleValue = (value: string | string[] | undefined): string | undefined =>
   Array.isArray(value) ? value[0] : value;
 
-router.get('/', async (req: Request, res: Response) => {
+router.use(requireAuth);
+
+router.get('/', requireWorkspaceAccess, async (req: Request, res: Response) => {
   const workspaceId = getSingleValue(req.query.workspaceId as string | string[] | undefined);
 
   if (!workspaceId) {
@@ -18,7 +21,7 @@ router.get('/', async (req: Request, res: Response) => {
   return res.json({ workbenches });
 });
 
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', requireWorkspaceAccess, async (req: Request, res: Response) => {
   const { workspaceId, title, description } = req.body ?? {};
 
   if (!workspaceId || typeof workspaceId !== 'string') {
@@ -29,7 +32,7 @@ router.post('/', async (req: Request, res: Response) => {
   return res.status(201).json({ workbench });
 });
 
-router.get('/:id', async (req: Request, res: Response) => {
+router.get('/:id', requireWorkbenchAccess, async (req: Request, res: Response) => {
   const workbenchId = getSingleValue(req.params.id);
   if (!workbenchId) {
     return res.status(400).json({ error: 'Workbench id is required' });
@@ -44,7 +47,40 @@ router.get('/:id', async (req: Request, res: Response) => {
   return res.json({ workbench });
 });
 
-router.patch('/:id', async (req: Request, res: Response) => {
+router.get('/:id/resource-groups', requireWorkbenchAccess, async (req: Request, res: Response) => {
+  const workbenchId = getSingleValue(req.params.id);
+  if (!workbenchId) {
+    return res.status(400).json({ error: 'Workbench id is required' });
+  }
+
+  const groups = await workbenchService.getResourceGroups(workbenchId);
+
+  if (!groups) {
+    return res.status(404).json({ error: 'Workbench not found' });
+  }
+
+  return res.json(groups);
+});
+
+router.patch('/:id/resource-order', requireWorkbenchAccess, async (req: Request, res: Response) => {
+  const workbenchId = getSingleValue(req.params.id);
+  const orderedIds = Array.isArray(req.body?.orderedIds)
+    ? req.body.orderedIds.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+
+  if (!workbenchId) {
+    return res.status(400).json({ error: 'Workbench id is required' });
+  }
+
+  const groups = await workbenchService.reorderResources(workbenchId, orderedIds);
+  if (!groups) {
+    return res.status(404).json({ error: 'Workbench not found' });
+  }
+
+  return res.json(groups);
+});
+
+router.patch('/:id', requireWorkbenchAccess, async (req: Request, res: Response) => {
   const workbenchId = getSingleValue(req.params.id);
   if (!workbenchId) {
     return res.status(400).json({ error: 'Workbench id is required' });
@@ -59,7 +95,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
   return res.json({ workbench });
 });
 
-router.put('/:id/state', async (req: Request, res: Response) => {
+router.put('/:id/state', requireWorkbenchAccess, async (req: Request, res: Response) => {
   const workbenchId = getSingleValue(req.params.id);
   if (!workbenchId) {
     return res.status(400).json({ error: 'Workbench id is required' });
@@ -74,19 +110,24 @@ router.put('/:id/state', async (req: Request, res: Response) => {
   return res.json({ workbench });
 });
 
-router.delete('/:id', async (req: Request, res: Response) => {
+router.delete('/:id', requireWorkbenchAccess, async (req: Request, res: Response) => {
   const workbenchId = getSingleValue(req.params.id);
   if (!workbenchId) {
     return res.status(400).json({ error: 'Workbench id is required' });
   }
 
-  const deleted = await workbenchService.delete(workbenchId);
+  try {
+    const deleted = await workbenchService.delete(workbenchId);
 
-  if (!deleted) {
-    return res.status(404).json({ error: 'Workbench not found' });
+    if (!deleted) {
+      return res.status(404).json({ error: 'Workbench not found' });
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error(`Failed to delete workbench ${workbenchId}:`, error);
+    return res.status(500).json({ error: 'Failed to delete workbench' });
   }
-
-  return res.json({ success: true });
 });
 
 export default router;

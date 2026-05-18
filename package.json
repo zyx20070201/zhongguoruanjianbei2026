@@ -2,8 +2,8 @@
   "name": "pp1",
   "private": true,
   "scripts": {
-    "dev": "npm run dev:backend & npm run dev:frontend",
+    "dev": "node scripts/dev.mjs",
     "dev:backend": "npm --prefix backend run dev",
-    "dev:frontend": "npm --prefix frontend run dev"
+    "dev:frontend": "npm --prefix frontend run dev -- --port 5173 --strictPort"
   }
 }

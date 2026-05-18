@@ -16,10 +16,10 @@ export const useFileCommands = (workspaceId: string | undefined, commandOptions:
     if (!workspaceId) return;
     const data = commandOptions.resourceMode
       ? await fileSystemApi.getResources(workspaceId, {
-          workbenchId: commandOptions.workbenchId,
-          role: commandOptions.resourceRole === 'workspace' ? 'file' : commandOptions.resourceRole,
-          scope: commandOptions.scope || (commandOptions.workbenchId ? 'all' : 'workspace')
-        })
+        workbenchId: commandOptions.workbenchId,
+        role: commandOptions.resourceRole === 'workspace' ? 'file' : commandOptions.resourceRole,
+        scope: commandOptions.scope || (commandOptions.workbenchId ? 'workbench' : 'workspace')
+      })
       : await fileSystemApi.getTree(workspaceId);
     setFiles(data);
   }, [workspaceId, commandOptions.resourceMode, commandOptions.workbenchId, commandOptions.resourceRole, commandOptions.scope, setFiles]);
@@ -51,7 +51,7 @@ export const useFileCommands = (workspaceId: string | undefined, commandOptions:
       scope: commandOptions.scope
     });
     const data = commandOptions.resourceMode
-      ? await fileSystemApi.getResources(workspaceId, { workbenchId: commandOptions.workbenchId, role: commandOptions.resourceRole, scope: commandOptions.scope || 'all' })
+      ? await fileSystemApi.getResources(workspaceId, { workbenchId: commandOptions.workbenchId, role: commandOptions.resourceRole, scope: commandOptions.scope || (commandOptions.workbenchId ? 'workbench' : 'workspace') })
       : await fileSystemApi.getTree(workspaceId);
     setFiles(data);
     revealNode(data, created.id);
@@ -77,7 +77,7 @@ export const useFileCommands = (workspaceId: string | undefined, commandOptions:
       origin: options?.origin || 'user'
     });
     const data = commandOptions.resourceMode
-      ? await fileSystemApi.getResources(workspaceId, { workbenchId: commandOptions.workbenchId, role: commandOptions.resourceRole, scope: commandOptions.scope || 'all' })
+      ? await fileSystemApi.getResources(workspaceId, { workbenchId: commandOptions.workbenchId, role: commandOptions.resourceRole, scope: commandOptions.scope || (commandOptions.workbenchId ? 'workbench' : 'workspace') })
       : await fileSystemApi.getTree(workspaceId);
     setFiles(data);
     revealNode(data, created.id);
@@ -124,7 +124,7 @@ export const useFileCommands = (workspaceId: string | undefined, commandOptions:
       origin: 'upload'
     });
     const data = commandOptions.resourceMode
-      ? await fileSystemApi.getResources(workspaceId, { workbenchId: commandOptions.workbenchId, role: commandOptions.resourceRole, scope: commandOptions.scope || 'all' })
+      ? await fileSystemApi.getResources(workspaceId, { workbenchId: commandOptions.workbenchId, role: commandOptions.resourceRole, scope: commandOptions.scope || (commandOptions.workbenchId ? 'workbench' : 'workspace') })
       : await fileSystemApi.getTree(workspaceId);
     setFiles(data);
     const createdIds = Array.isArray(result)
@@ -152,7 +152,7 @@ export const useFileCommands = (workspaceId: string | undefined, commandOptions:
       origin: 'web'
     });
     const data = commandOptions.resourceMode
-      ? await fileSystemApi.getResources(workspaceId, { workbenchId: commandOptions.workbenchId, role: commandOptions.resourceRole || 'source', scope: commandOptions.scope || 'all' })
+      ? await fileSystemApi.getResources(workspaceId, { workbenchId: commandOptions.workbenchId, role: commandOptions.resourceRole || 'source', scope: commandOptions.scope || (commandOptions.workbenchId ? 'workbench' : 'workspace') })
       : await fileSystemApi.getTree(workspaceId);
     setFiles(data);
     revealNode(data, result.file.id);

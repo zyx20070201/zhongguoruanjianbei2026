@@ -1,5 +1,5 @@
 import client from '../api/client';
-import { Workbench, WorkbenchState } from '../types';
+import { Workbench, WorkbenchResourceGroups, WorkbenchState } from '../types';
 
 export const workbenchApi = {
   listByWorkspace: async (workspaceId: string): Promise<Workbench[]> => {
@@ -15,6 +15,16 @@ export const workbenchApi = {
   getById: async (id: string): Promise<Workbench> => {
     const response = await client.get(`/workbenches/${id}`);
     return response.data.workbench;
+  },
+
+  getResourceGroups: async (id: string): Promise<WorkbenchResourceGroups> => {
+    const response = await client.get(`/workbenches/${id}/resource-groups`);
+    return response.data;
+  },
+
+  reorderResources: async (id: string, orderedIds: string[]): Promise<WorkbenchResourceGroups> => {
+    const response = await client.patch(`/workbenches/${id}/resource-order`, { orderedIds });
+    return response.data;
   },
 
   update: async (id: string, data: { title?: string; description?: string }): Promise<Workbench> => {

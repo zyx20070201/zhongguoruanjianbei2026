@@ -9,9 +9,14 @@ import {
 import { knowledgeIndexingService } from './knowledgeIndexingService';
 import { knowledgeSearchService } from './knowledgeSearchService';
 import { documentChunkStore } from './documentChunkStore';
+import { findWorkbenchResourceFiles } from './workbenchResourceScope';
+import { videoAnalysisService } from './videoAnalysisService';
+import { stableHash } from './chunkSchema';
+import { LocalStorageService } from './storage/localStorageService';
 import {
   ActiveFileContext,
   ChatMessage,
+  ChatSessionAttachmentContext,
   Citation,
   ContextCapsule,
   ContextMode,
@@ -20,6 +25,7 @@ import {
   RetrievedChunk,
   ResourceContext,
   SourceInspectorItem,
+  VisualEvidenceItem,
   SelectionContext,
   ViewportContext
 } from '../types/contextSystem';
@@ -48,6 +54,8 @@ export interface ClientPanelContext {
     page?: number;
     pageStart?: number;
     pageEnd?: number;
+    timestampStart?: number;
+    timestampEnd?: number;
     charStart?: number;
     charEnd?: number;
     textLength?: number;
@@ -74,6 +82,7 @@ export interface ClientWorkbenchContext {
   activePanelId?: string | null;
   activeFileId?: string | null;
   contextMode?: ContextMode;
+  sourcePriority?: 'selected_resources' | 'active_context' | 'mixed';
   activeContextChips?: ClientContextChip[];
   activeFile?: {
     id?: string;
@@ -104,6 +113,8 @@ export interface ClientWorkbenchContext {
     label?: string;
     locator?: Citation['locator'];
   }>;
+  chatSessionAttachments?: ChatSessionAttachmentContext[];
+  selectedResourceIds?: string[];
   selectedText?: string;
   recentMessages?: ChatMessage[];
 }
@@ -117,23 +128,169 @@ const clip = (value: string | null | undefined, maxLength = 500) => {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 };
 
+const clipBlock = (value: string | null | undefined, maxLength = 900) => {
+  const text = String(value || '').trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+};
+
 const estimateTokens = (value: string | null | undefined) => Math.ceil(String(value || '').length / 4);
+
+const sanitizeChatSessionAttachment = (attachment: any): ChatSessionAttachmentContext | null => {
+  if (!attachment || typeof attachment !== 'object') return null;
+  const name = String(attachment.name || '').trim().slice(0, 180);
+  if (!name) return null;
+  const mimeType = String(attachment.mimeType || attachment.type || 'application/octet-stream').slice(0, 120);
+  const rawKind = String(attachment.kind || '').toLowerCase();
+  const kind = (['text', 'image', 'pdf', 'document', 'file'].includes(rawKind) ? rawKind : 'file') as ChatSessionAttachmentContext['kind'];
+  const dataUrl =
+    typeof attachment.dataUrl === 'string' && attachment.dataUrl.startsWith('data:') && attachment.dataUrl.length <= 6_000_000
+      ? attachment.dataUrl
+      : undefined;
+  const base64Data =
+    typeof attachment.base64Data === 'string' && attachment.base64Data.length <= 5_500_000
+      ? attachment.base64Data
+      : undefined;
+
+  return {
+    id: typeof attachment.id === 'string' ? attachment.id : crypto.randomUUID(),
+    name,
+    mimeType,
+    size: typeof attachment.size === 'number' ? attachment.size : 0,
+    kind,
+    createdAt: typeof attachment.createdAt === 'string' ? attachment.createdAt : undefined,
+    textContent: typeof attachment.textContent === 'string' ? clip(attachment.textContent, 12000) : undefined,
+    summary: typeof attachment.summary === 'string' ? clip(attachment.summary, 2000) : undefined,
+    dataUrl,
+    base64Data,
+    fileObjectId: typeof attachment.fileObjectId === 'string' ? attachment.fileObjectId : undefined,
+    savedToWorkbench: Boolean(attachment.savedToWorkbench),
+    status: ['ready', 'metadata_only', 'error'].includes(attachment.status) ? attachment.status : undefined,
+    error: typeof attachment.error === 'string' ? clip(attachment.error, 240) : undefined
+  };
+};
+
+const parseJsonObject = (value?: string | null): Record<string, unknown> => {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+};
+
+const storedVideoAnalysis = (file: { metadataJson?: string | null }) => {
+  const metadata = parseJsonObject(file.metadataJson);
+  const analysis = metadata.videoAnalysis;
+  return analysis && typeof analysis === 'object' ? analysis as Record<string, any> : null;
+};
+
+const hasStoredVideoAnalysis = (file: { metadataJson?: string | null }) => {
+  const analysis = storedVideoAnalysis(file);
+  if (!analysis) return false;
+  return Boolean(
+    analysis.status ||
+    analysis.sourceUrl ||
+    analysis.provider ||
+    analysis.summary ||
+    (Array.isArray(analysis.transcript) && analysis.transcript.length) ||
+    (Array.isArray(analysis.chapters) && analysis.chapters.length) ||
+    (Array.isArray(analysis.keyPoints) && analysis.keyPoints.length) ||
+    (Array.isArray(analysis.slides) && analysis.slides.length)
+  );
+};
+
+const hasIndexableVideoAnalysis = (file: { metadataJson?: string | null }) => {
+  const analysis = storedVideoAnalysis(file);
+  if (!analysis) return false;
+  return Boolean(
+    analysis.summary ||
+    (Array.isArray(analysis.transcript) && analysis.transcript.length) ||
+    (Array.isArray(analysis.chapters) && analysis.chapters.length) ||
+    (Array.isArray(analysis.keyPoints) && analysis.keyPoints.length) ||
+    (Array.isArray(analysis.slides) && analysis.slides.length)
+  );
+};
+
+const videoAnalysisSourceHash = (analysis: Record<string, any>) =>
+  stableHash({
+    runId: analysis.runId,
+    generatedAt: analysis.generatedAt,
+    manualRevision: analysis.manualRevision,
+    transcriptCount: Array.isArray(analysis.transcript) ? analysis.transcript.length : 0,
+    chapterCount: Array.isArray(analysis.chapters) ? analysis.chapters.length : 0,
+    keyPointCount: Array.isArray(analysis.keyPoints) ? analysis.keyPoints.length : 0,
+    slideCount: Array.isArray(analysis.slides) ? analysis.slides.length : 0
+  });
+
+const imageDataUrlFromFile = (file: { storageKey?: string | null; mimeType?: string | null }) => {
+  if (!file.storageKey || !file.mimeType?.startsWith('image/')) return null;
+  try {
+    const fs = require('fs');
+    const filePath = LocalStorageService.getFilePath(file.storageKey);
+    return `data:${file.mimeType};base64,${fs.readFileSync(filePath).toString('base64')}`;
+  } catch {
+    return null;
+  }
+};
+
+const renderPdfPageDataUrls = async (
+  file: { storageKey?: string | null },
+  pages: number[]
+): Promise<Map<number, string>> => {
+  const rendered = new Map<number, string>();
+  if (!file.storageKey || !pages.length) return rendered;
+
+  try {
+    const fs = require('fs/promises');
+    const { createCanvas } = require('@napi-rs/canvas');
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const buffer = await fs.readFile(LocalStorageService.getFilePath(file.storageKey));
+    const loadingTask = pdfjs.getDocument({
+      data: new Uint8Array(buffer),
+      disableWorker: true,
+      useSystemFonts: true,
+      verbosity: pdfjs.VerbosityLevel?.ERRORS ?? 0
+    } as any);
+    const document = await loadingTask.promise;
+    try {
+      for (const pageNumber of pages) {
+        if (pageNumber < 1 || pageNumber > document.numPages) continue;
+        const page = await document.getPage(pageNumber);
+        const viewport = page.getViewport({ scale: 1.35 });
+        const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+        const context = canvas.getContext('2d');
+        await page.render({ canvasContext: context, viewport } as any).promise;
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+        if (dataUrl?.startsWith('data:image/')) rendered.set(pageNumber, dataUrl);
+      }
+    } finally {
+      await document?.destroy?.().catch(() => undefined);
+    }
+  } catch {
+    return rendered;
+  }
+
+  return rendered;
+};
 
 const fileTypeFromName = (file: {
   name?: string | null;
   extension?: string | null;
   fileCategory?: string | null;
   mimeType?: string | null;
+  metadataJson?: string | null;
 }): ContextResourceType => {
   const extension = (file.extension || file.name?.split('.').pop() || '').toLowerCase();
   const category = (file.fileCategory || '').toLowerCase();
   const mimeType = (file.mimeType || '').toLowerCase();
 
+  if (hasStoredVideoAnalysis(file)) return 'video';
+  if (mimeType.startsWith('video/') || category === 'media') return 'video';
   if (extension === 'pdf') return 'pdf';
   if (extension === 'docx' || extension === 'doc') return 'docx';
   if (extension === 'md' || extension === 'markdown') return 'markdown';
   if (category === 'code') return 'code';
-  if (mimeType.startsWith('video/') || category === 'media') return 'video';
   if (category === 'generated') return 'generated';
   return 'blocksuite';
 };
@@ -157,6 +314,13 @@ const selectionTypeFromPanel = (panelType: string, resourceType?: ContextResourc
 };
 
 const citationLabel = (fileName: string, locator?: Citation['locator']) => {
+  if (typeof locator?.timestampStart === 'number') {
+    const start = secondsToClock(locator.timestampStart);
+    const end = typeof locator.timestampEnd === 'number' && locator.timestampEnd !== locator.timestampStart
+      ? `-${secondsToClock(locator.timestampEnd)}`
+      : '';
+    return `${fileName} ${start}${end}`;
+  }
   if (locator?.page || locator?.primaryPage) return `${fileName} 第 ${locator.page || locator.primaryPage} 页`;
   if (locator?.pageStart && locator?.pageEnd) {
     return locator.pageStart === locator.pageEnd
@@ -181,6 +345,16 @@ const citationLabel = (fileName: string, locator?: Citation['locator']) => {
   if (typeof locator?.paragraphIndex === 'number') return `${fileName} 段落 ${locator.paragraphIndex + 1}`;
   if (typeof locator?.chunkIndex === 'number') return `${fileName} chunk ${locator.chunkIndex}`;
   return fileName;
+};
+
+const secondsToClock = (seconds: number) => {
+  const safe = Math.max(0, Math.floor(seconds || 0));
+  const h = Math.floor(safe / 3600);
+  const m = Math.floor((safe % 3600) / 60);
+  const s = safe % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
 };
 
 export class ContextPolicyEngine {
@@ -389,10 +563,19 @@ export class WorkbenchContextService {
       input.context.lockedSelection?.content || input.context.selectedText || activePanel?.selectedText || '',
       12000
     );
+    const selectedResourceIds = [
+      ...new Set((input.context.selectedResourceIds || []).filter((value): value is string => typeof value === 'string' && Boolean(value)))
+    ];
+    const selectedResourceFocus = input.context.sourcePriority === 'selected_resources';
+    const chatSessionAttachments = (input.context.chatSessionAttachments || [])
+      .map(sanitizeChatSessionAttachment)
+      .filter((attachment): attachment is ChatSessionAttachmentContext => Boolean(attachment))
+      .slice(-8);
 
     let fileRecords = await this.loadResourceRecords(input.context, openPanels, activeFileId);
     fileRecords = await this.ensureIndexedRecords(input.context.workspaceId, fileRecords);
     const recordsById = new Map(fileRecords.map((file) => [file.id, file] as const));
+    const visualEvidence = await this.buildVisualEvidence(input.context.workspaceId, fileRecords);
     const activeRecord = activeFileId ? recordsById.get(activeFileId) : undefined;
     const activeFileContent =
       typeof input.context.activeFile?.content === 'string'
@@ -428,9 +611,9 @@ export class WorkbenchContextService {
       tokenBudget
     });
 
-    if (!chipEnabled('selection')) policy.includeSelection = false;
-    if (!chipEnabled('viewport')) policy.includeViewport = false;
-    if (!chipEnabled('active_file')) {
+    if (!chipEnabled('selection') || selectedResourceFocus) policy.includeSelection = false;
+    if (!chipEnabled('viewport') || selectedResourceFocus) policy.includeViewport = false;
+    if (!chipEnabled('active_file') || selectedResourceFocus) {
       policy.includeActiveFileFullText = false;
       policy.includeActiveFileSummary = false;
     }
@@ -439,7 +622,7 @@ export class WorkbenchContextService {
       if (policy.ragScope === 'workbench' || policy.ragScope === 'workspace') policy.ragScope = 'active_file';
     }
 
-    const resources = this.buildResources(fileRecords, activeFileId);
+    const resources = this.buildResources(fileRecords, activeFileId, selectedResourceFocus ? selectedResourceIds : undefined);
     const activeFile =
       activeFileId && activeRecord && chipEnabled('active_file')
         ? this.buildActiveFile(activeRecord, activeFileContent, activeTokens, policy)
@@ -448,12 +631,17 @@ export class WorkbenchContextService {
     let retrievedChunks = await this.retrieve({
       query: [...input.messages].reverse().find((message) => message.role === 'user')?.content || '',
       workspaceId: input.context.workspaceId,
-      activeFileId,
+      activeFileId: selectedResourceFocus ? null : activeFileId,
       resourceFileIds: resources.map((resource) => resource.fileId),
-      policy
+      videoResourceFileIds: resources.filter((resource) => resource.type === 'video').map((resource) => resource.fileId),
+      policy,
+      selectedResourceFocus
     });
 
-    retrievedChunks = this.packRetrievedChunks(retrievedChunks, tokenBudget, policy);
+    retrievedChunks = [
+      ...this.buildAttachmentChunks(chatSessionAttachments),
+      ...this.packRetrievedChunks(retrievedChunks, tokenBudget, policy)
+    ].slice(0, Math.max(policy.maxRetrievedChunks, chatSessionAttachments.length));
 
     const citations: Citation[] = [];
     if (selection && policy.includeSelection) {
@@ -487,9 +675,9 @@ export class WorkbenchContextService {
     retrievedChunks.forEach((chunk) =>
       citations.push(
         this.toCitation(chunk.fileId, chunk.fileName, chunk.locator, {
-          sourceType: 'retrieval',
           confidence: this.confidenceForChunk(chunk),
           score: chunk.score,
+          sourceType: chunk.source === 'chat_attachment' ? 'chat_attachment' : 'retrieval',
           retrievalReason: chunk.retrievalReason,
           matchedTerms: chunk.matchedTerms,
           scoreBreakdown: chunk.scoreBreakdown,
@@ -523,11 +711,13 @@ export class WorkbenchContextService {
       activePanelId: activePanelId || undefined,
       activeFileId: activeFileId || undefined,
       mode,
-      selection: policy.includeSelection ? selection : undefined,
-      viewport: policy.includeViewport ? viewport : undefined,
-      activeFile,
+      selection: policy.includeSelection && !selectedResourceFocus ? selection : undefined,
+      viewport: policy.includeViewport && !selectedResourceFocus ? viewport : undefined,
+      activeFile: selectedResourceFocus ? undefined : activeFile,
       resources: policy.includeResourceSummaries ? resources : resources.map((resource) => ({ ...resource, summary: undefined })),
+      chatSessionAttachments: this.stripAttachmentPayloads(chatSessionAttachments),
       retrievedChunks,
+      visualEvidence,
       profileSummary: input.profileSummary ? { content: input.profileSummary } : undefined,
       recentMessages: this.trimRecentMessages(input.context.recentMessages || input.messages.slice(-8), tokenBudget),
       tokenBudget,
@@ -571,7 +761,12 @@ export class WorkbenchContextService {
     openPanels: ClientPanelContext[],
     activeFileId: string | null
   ) {
-    const workbenchResourceIds = [
+    const selectedResourceIds = [
+      ...new Set((context.selectedResourceIds || []).filter((value): value is string => typeof value === 'string' && Boolean(value)))
+    ];
+    const selectedResourceOnly = context.sourcePriority === 'selected_resources';
+    const hasExplicitResourceSelection = selectedResourceIds.length > 0;
+    const explicitIds = [
       ...new Set(
         openPanels
           .map((panel) => panel.fileId)
@@ -581,9 +776,37 @@ export class WorkbenchContextService {
       )
     ];
 
-    if (workbenchResourceIds.length) {
+    if (selectedResourceOnly && !hasExplicitResourceSelection) {
+      return [];
+    }
+
+    if (context.workbenchId) {
+      const records = await findWorkbenchResourceFiles({
+        workspaceId: context.workspaceId,
+        workbenchId: context.workbenchId,
+        include: {
+          knowledgeChunks: { select: { id: true, summary: true, tokenEstimate: true, metadataJson: true }, take: 1 }
+        },
+        orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }]
+      });
+
+      if (selectedResourceOnly) {
+        const selectedSet = new Set(selectedResourceIds);
+        return records.filter((record) => selectedSet.has(record.id));
+      }
+
+      if (explicitIds.length === 0) {
+        return records;
+      }
+
+      const explicitSet = new Set(explicitIds);
+      const explicitRecords = records.filter((record) => explicitSet.has(record.id));
+      return explicitRecords.length ? explicitRecords : records;
+    }
+
+    if (explicitIds.length) {
       return prisma.fileSystemObject.findMany({
-        where: { workspaceId: context.workspaceId, id: { in: workbenchResourceIds }, nodeType: 'file' },
+        where: { workspaceId: context.workspaceId, id: { in: explicitIds }, nodeType: 'file' },
         include: { knowledgeChunks: { select: { id: true, summary: true, tokenEstimate: true, metadataJson: true }, take: 1 } }
       });
     }
@@ -599,27 +822,51 @@ export class WorkbenchContextService {
   private async ensureIndexedRecords(workspaceId: string, fileRecords: any[]) {
     const missingIndexedRecords = fileRecords.filter((file) => {
       const type = fileTypeFromName(file);
+      const analysis = storedVideoAnalysis(file);
+      if (analysis && hasIndexableVideoAnalysis(file)) {
+        const firstChunkMetadata = this.parseChunkMetadata(file.knowledgeChunks?.[0]?.metadataJson);
+        const hasVideoChunk = firstChunkMetadata.source === 'video-analysis' || String(firstChunkMetadata.chunkType || '').startsWith('video_');
+        const indexedHash = typeof firstChunkMetadata.videoAnalysisSourceHash === 'string'
+          ? firstChunkMetadata.videoAnalysisSourceHash
+          : typeof firstChunkMetadata.sourceHash === 'string' && firstChunkMetadata.source === 'video-analysis'
+            ? firstChunkMetadata.sourceHash
+            : undefined;
+        return !hasVideoChunk || indexedHash !== videoAnalysisSourceHash(analysis);
+      }
       if (file.knowledgeChunks?.length > 0) {
         const metadata = this.parseChunkMetadata(file.knowledgeChunks[0]?.metadataJson);
         if (metadata.locator || typeof metadata.chunkIndex === 'number' || metadata.page || metadata.lineStart) {
           return false;
         }
       }
-      return ['pdf', 'docx', 'markdown', 'blocksuite', 'code'].includes(type);
+      if (['pdf', 'docx', 'markdown', 'blocksuite', 'code'].includes(type)) return true;
+      if (type === 'video') {
+        const metadata = this.parseChunkMetadata(file.metadataJson);
+        const analysis = metadata.videoAnalysis && typeof metadata.videoAnalysis === 'object' ? metadata.videoAnalysis as Record<string, any> : {};
+        return Boolean(
+          analysis.summary ||
+          (Array.isArray(analysis.transcript) && analysis.transcript.length) ||
+          (Array.isArray(analysis.slides) && analysis.slides.length)
+        );
+      }
+      return false;
     });
 
     if (missingIndexedRecords.length === 0) return fileRecords;
 
     await Promise.all(
-      missingIndexedRecords.map((file) =>
-        knowledgeIndexingService
+      missingIndexedRecords.map((file) => {
+        if (fileTypeFromName(file) === 'video' && hasIndexableVideoAnalysis(file)) {
+          return videoAnalysisService.indexStoredAnalysis(workspaceId, file.id, 'context-system-on-demand-video').catch(() => null);
+        }
+        return knowledgeIndexingService
           .indexFile({
             workspaceId,
             fileObjectId: file.id,
             reason: 'context-system-on-demand'
           })
-          .catch(() => null)
-      )
+          .catch(() => null);
+      })
     );
 
     return prisma.fileSystemObject.findMany({
@@ -671,12 +918,41 @@ export class WorkbenchContextService {
       record = file;
     }
 
+    if (fileTypeFromName(record) === 'video') {
+      return this.videoTextForContext(record);
+    }
+
     try {
       return await FileSystemService.getFileContent(workspaceId, fileId);
     } catch {
       const extracted = await documentTextExtractionService.extract(record);
       return extracted.text || '';
     }
+  }
+
+  private videoTextForContext(file: any) {
+    const metadata = this.parseChunkMetadata(file.metadataJson);
+    const analysis = metadata.videoAnalysis && typeof metadata.videoAnalysis === 'object' ? metadata.videoAnalysis as Record<string, any> : {};
+    const transcript = Array.isArray(analysis.transcript) ? analysis.transcript : [];
+    const chapters = Array.isArray(analysis.chapters) ? analysis.chapters : [];
+    const keyPoints = Array.isArray(analysis.keyPoints) ? analysis.keyPoints : [];
+    const slides = Array.isArray(analysis.slides) ? analysis.slides : [];
+    return [
+      `Video: ${analysis.title || file.name}`,
+      analysis.summary ? `Summary:\n${analysis.summary}` : '',
+      chapters.length
+        ? `Chapters:\n${chapters.map((chapter: any) => `- [${secondsToClock(Number(chapter.start || 0))}] ${chapter.title || ''}: ${chapter.summary || ''}`).join('\n')}`
+        : '',
+      keyPoints.length
+        ? `Key points:\n${keyPoints.map((point: any) => `- ${point.concept || ''}: ${point.explanation || ''}`).join('\n')}`
+        : '',
+      slides.length
+        ? `Slides:\n${slides.filter((slide: any) => !slide.duplicateOf).map((slide: any) => `- [${secondsToClock(Number(slide.timestamp || 0))}] ${slide.title || ''}${slide.ocrText ? `\n  OCR: ${clip(slide.ocrText, 500)}` : ''}`).join('\n')}`
+        : '',
+      transcript.length
+        ? `Transcript:\n${transcript.map((segment: any) => `[${secondsToClock(Number(segment.start || 0))} - ${secondsToClock(Number(segment.end || segment.start || 0))}] ${segment.text || ''}`).join('\n')}`
+        : ''
+    ].filter(Boolean).join('\n\n');
   }
 
   private buildSelection(panel: ClientPanelContext, selectedText: string, activeRecord?: any): SelectionContext {
@@ -704,6 +980,8 @@ export class WorkbenchContextService {
         blockIds: panel.visibleBlockIds,
         scrollRatio: panel.scrollRatio ?? undefined,
         chunkIndex: typeof panel.approxChunkIndex === 'number' ? panel.approxChunkIndex : undefined,
+        timestampStart: selectedRange?.timestampStart,
+        timestampEnd: selectedRange?.timestampEnd,
         charStart: selectedRange?.charStart,
         charEnd: selectedRange?.charEnd,
         textLength: selectedRange?.textLength,
@@ -857,6 +1135,40 @@ export class WorkbenchContextService {
       }
     }
 
+    if (resourceType === 'video') {
+      try {
+        const chunks = await documentChunkStore.listFileChunks({ workspaceId, fileObjectId: file.id });
+        const videoChunks = chunks.filter((chunk) =>
+          ['video_transcript', 'video_chapter', 'video_key_point', 'video_slide', 'summary'].includes(chunk.chunkType)
+        );
+        const selected = this.pickViewportChunks(videoChunks.map((chunk) => ({
+          fileId: chunk.fileObjectId,
+          chunkIndex: chunk.chunkIndex,
+          text: chunk.text,
+          headingPath: chunk.headingPath,
+          lineStart: chunk.locator.lineStart,
+          lineEnd: chunk.locator.lineEnd,
+          charStart: chunk.locator.charStart,
+          charEnd: chunk.locator.charEnd
+        })), panel);
+        const selectedIndexes = new Set(selected.map((chunk) => chunk.chunkIndex));
+        const selectedVideoChunks = videoChunks.filter((chunk) => selectedIndexes.has(chunk.chunkIndex)).slice(0, 6);
+        if (selectedVideoChunks.length) {
+          return {
+            content: clip(selectedVideoChunks.map((chunk) => chunk.text).join('\n\n'), 7000),
+            locator: {
+              chunkIndex: selectedVideoChunks[0].chunkIndex,
+              headingPath: selectedVideoChunks[0].headingPath,
+              timestampStart: selectedVideoChunks[0].locator.timestampStart,
+              timestampEnd: selectedVideoChunks[selectedVideoChunks.length - 1].locator.timestampEnd
+            }
+          };
+        }
+      } catch (error) {
+        fallbackReasons.push(`${file.name}: video viewport 提取失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
     const fallback = clip(panel.visibleContent, 5000);
     if (!fallback) fallbackReasons.push(`${file.name}: viewport 正文为空，已降级为 locator-only context`);
     return {
@@ -923,8 +1235,10 @@ export class WorkbenchContextService {
     };
   }
 
-  private buildResources(fileRecords: any[], activeFileId: string | null): ResourceContext[] {
-    return fileRecords.map((file) => {
+  private buildResources(fileRecords: any[], activeFileId: string | null, primaryResourceIds?: string[]): ResourceContext[] {
+    const primaryOrder = new Map((primaryResourceIds || []).map((id, index) => [id, index] as const));
+    return fileRecords
+      .map((file) => {
       const indexed = file.knowledgeChunks?.length > 0;
       const summary = file.knowledgeChunks?.[0]?.summary || undefined;
       return {
@@ -938,7 +1252,14 @@ export class WorkbenchContextService {
         isActiveFile: file.id === activeFileId,
         lastOpenedAt: file.updatedAt?.toISOString?.()
       };
-    });
+      })
+      .sort((left, right) => {
+        const leftPrimary = primaryOrder.has(left.fileId);
+        const rightPrimary = primaryOrder.has(right.fileId);
+        if (leftPrimary !== rightPrimary) return leftPrimary ? -1 : 1;
+        if (leftPrimary && rightPrimary) return (primaryOrder.get(left.fileId) || 0) - (primaryOrder.get(right.fileId) || 0);
+        return 0;
+      });
   }
 
   private buildActiveFile(
@@ -972,18 +1293,24 @@ export class WorkbenchContextService {
     workspaceId: string;
     activeFileId: string | null;
     resourceFileIds: string[];
+    videoResourceFileIds: string[];
     policy: ContextPolicyDecision;
+    selectedResourceFocus?: boolean;
   }): Promise<RetrievedChunk[]> {
     if (input.policy.ragScope === 'none' || input.policy.maxRetrievedChunks <= 0) return [];
 
     const fileIds =
-      input.policy.ragScope === 'active_file'
+      input.selectedResourceFocus
+        ? input.resourceFileIds
+        : input.policy.ragScope === 'active_file'
         ? input.activeFileId
           ? [input.activeFileId]
           : []
         : input.policy.ragScope === 'workbench'
           ? input.resourceFileIds
           : undefined;
+
+    if (input.selectedResourceFocus && (fileIds || []).length === 0) return [];
 
     const results = await knowledgeSearchService.search({
       workspaceId: input.workspaceId,
@@ -994,7 +1321,7 @@ export class WorkbenchContextService {
       requireDiversity: input.policy.ragScope !== 'active_file'
     });
 
-    return results.map((item) => {
+    const retrieved = results.map((item) => {
       const metadataLocator =
         item.metadata.locator && typeof item.metadata.locator === 'object'
           ? (item.metadata.locator as Record<string, unknown>)
@@ -1027,6 +1354,8 @@ export class WorkbenchContextService {
         metadataLocator.bbox && typeof metadataLocator.bbox === 'object'
           ? (metadataLocator.bbox as NonNullable<Citation['locator']>['bbox'])
           : undefined;
+      const timestampStart = typeof metadataLocator.timestampStart === 'number' ? metadataLocator.timestampStart : undefined;
+      const timestampEnd = typeof metadataLocator.timestampEnd === 'number' ? metadataLocator.timestampEnd : timestampStart;
       return {
         chunkId: item.chunkId,
         fileId: item.fileObjectId,
@@ -1055,10 +1384,120 @@ export class WorkbenchContextService {
           blockId,
           blockIndex,
           rects,
-          bbox
+          bbox,
+          timestampStart,
+          timestampEnd
         }
       };
     });
+
+    const timestampChunks = await this.retrieveVideoTimestampChunks({
+      workspaceId: input.workspaceId,
+      query: input.query,
+      fileIds: fileIds || input.videoResourceFileIds,
+      activeFileId: input.activeFileId,
+      limit: Math.max(3, Math.min(6, input.policy.maxRetrievedChunks))
+    });
+
+    if (!timestampChunks.length) return retrieved;
+    const byKey = new Map<string, RetrievedChunk>();
+    [...timestampChunks, ...retrieved].forEach((chunk) => {
+      const key = chunk.chunkId || `${chunk.fileId}:${chunk.locator?.chunkIndex ?? chunk.content.slice(0, 80)}`;
+      const existing = byKey.get(key);
+      if (!existing || chunk.score > existing.score) byKey.set(key, chunk);
+    });
+    return Array.from(byKey.values()).sort((left, right) => right.score - left.score);
+  }
+
+  private parseTimestampQuery(query: string): number | null {
+    const normalized = query.replace(/\s+/g, '');
+    const clock = normalized.match(/(?<!\d)(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?(?!\d)/);
+    if (clock) {
+      const first = Number(clock[1]);
+      const second = Number(clock[2]);
+      const third = clock[3] ? Number(clock[3]) : undefined;
+      return typeof third === 'number' ? first * 3600 + second * 60 + third : first * 60 + second;
+    }
+    const zhMinuteSecond = normalized.match(/(\d{1,3})分(?:钟)?(?:(\d{1,2})秒)?/);
+    if (zhMinuteSecond) return Number(zhMinuteSecond[1]) * 60 + Number(zhMinuteSecond[2] || 0);
+    const englishMinute = normalized.match(/(?:at|around|near)?(\d{1,3})(?:min|mins|minute|minutes)\b/i);
+    if (englishMinute) return Number(englishMinute[1]) * 60;
+    return null;
+  }
+
+  private async retrieveVideoTimestampChunks(input: {
+    workspaceId: string;
+    query: string;
+    fileIds: string[];
+    activeFileId: string | null;
+    limit: number;
+  }): Promise<RetrievedChunk[]> {
+    const target = this.parseTimestampQuery(input.query);
+    if (typeof target !== 'number' || !Number.isFinite(target) || target < 0 || input.fileIds.length === 0) return [];
+
+    const perFile = await Promise.all(
+      input.fileIds.map((fileId) =>
+        documentChunkStore.listFileChunks({ workspaceId: input.workspaceId, fileObjectId: fileId }).catch(() => [])
+      )
+    );
+
+    const scored = perFile
+      .flat()
+      .filter((chunk) =>
+        ['video_transcript', 'video_chapter', 'video_key_point', 'video_slide', 'summary'].includes(chunk.chunkType) &&
+        typeof chunk.locator.timestampStart === 'number'
+      )
+      .map((chunk) => {
+        const start = Number(chunk.locator.timestampStart);
+        const end = Number(chunk.locator.timestampEnd ?? start);
+        const distance = target >= start && target <= end ? 0 : Math.min(Math.abs(target - start), Math.abs(target - end));
+        const typeBoost =
+          chunk.chunkType === 'video_transcript' ? 9 :
+            chunk.chunkType === 'video_slide' ? 6 :
+              chunk.chunkType === 'video_chapter' ? 5 :
+                chunk.chunkType === 'video_key_point' ? 4 : 2;
+        return {
+          chunk,
+          distance,
+          score: Math.max(0, 38 - distance / 3) + typeBoost + (chunk.fileObjectId === input.activeFileId ? 4 : 0)
+        };
+      })
+      .filter((item) => item.distance <= 180 || item.score >= 20)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, input.limit);
+
+    return scored.map(({ chunk, distance, score }) => ({
+      chunkId: chunk.chunkId,
+      fileId: chunk.fileObjectId,
+      fileName: chunk.fileName || 'Untitled video',
+      content: clip(chunk.text, 1800),
+      score: Number(score.toFixed(3)),
+      source: 'retrieval' as const,
+      retrievalReason: distance === 0
+        ? `命中用户指定视频时间戳 ${secondsToClock(target)}`
+        : `靠近用户指定视频时间戳 ${secondsToClock(target)}，相差约 ${Math.round(distance)} 秒`,
+      matchedTerms: [secondsToClock(target)],
+      scoreBreakdown: {
+        timestamp: Number(Math.max(0, 38 - distance / 3).toFixed(3)),
+        typeBoost: Number((score - Math.max(0, 38 - distance / 3)).toFixed(3))
+      },
+      locator: {
+        chunkIndex: chunk.chunkIndex,
+        headingPath: chunk.headingPath,
+        timestampStart: chunk.locator.timestampStart,
+        timestampEnd: chunk.locator.timestampEnd
+      },
+      supportSnippets: [{
+        text: clip(chunk.text, 700),
+        locator: chunk.locator,
+        score: Number(score.toFixed(3))
+      }],
+      citationQuality: {
+        supportCount: 1,
+        sourceCount: 1,
+        grounded: true
+      }
+    }));
   }
 
   private packRetrievedChunks(chunks: RetrievedChunk[], tokenBudget: number, policy: ContextPolicyDecision) {
@@ -1122,7 +1561,7 @@ export class WorkbenchContextService {
 
   private buildSourceMap(citations: Citation[]): SourceInspectorItem[] {
     return citations.map((citation, index) => ({
-      sourceId: `S${index + 1}`,
+      sourceId: citation.sourceId || `S${index + 1}`,
       sourceType: citation.sourceType || 'retrieval',
       confidence: citation.confidence || 'medium',
       fileId: citation.fileId,
@@ -1140,6 +1579,141 @@ export class WorkbenchContextService {
     }));
   }
 
+  private buildAttachmentChunks(attachments: ChatSessionAttachmentContext[]): RetrievedChunk[] {
+    return attachments.flatMap((attachment, index) => {
+        const content = clip(
+          [
+            `Chat 附件：${attachment.name}`,
+            `类型：${attachment.mimeType || attachment.kind}`,
+            `大小：${attachment.size || 0} bytes`,
+            attachment.textContent ? `内容：\n${attachment.textContent}` : '',
+            !attachment.textContent && attachment.kind === 'image'
+              ? '这是当前 AI Chat 会话内上传的图片附件。若当前模型支持多模态，系统会将图片载荷随请求提交；否则只能使用附件元数据回答。'
+              : '',
+            !attachment.textContent && attachment.kind !== 'image'
+              ? '该附件当前只有元数据，尚未提取正文。若需要跨 Chat 或深度检索，请保存到 Workbench 后索引。'
+              : ''
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          14000
+        );
+
+        if (!content) return [];
+
+        return [{
+          chunkId: `chat-attachment:${attachment.id}`,
+          sourceId: `A${index + 1}`,
+          fileId: `chat-attachment:${attachment.id}`,
+          fileName: attachment.name,
+          content,
+          score: 95 - index,
+          confidence: attachment.textContent || attachment.dataUrl || attachment.base64Data ? 'high' : 'medium',
+          source: 'chat_attachment',
+          retrievalReason: '当前 AI Chat 会话附件，高优先级显式上下文',
+          locator: { blockId: `chat-attachment:${attachment.id}` }
+        } satisfies RetrievedChunk];
+      });
+  }
+
+  private async buildVisualEvidence(workspaceId: string, fileRecords: any[]): Promise<VisualEvidenceItem[]> {
+    const items: VisualEvidenceItem[] = [];
+
+    for (const file of fileRecords) {
+      const type = fileTypeFromName(file);
+      if (type === 'video') {
+        const metadata = this.parseChunkMetadata(file.metadataJson);
+        const analysis = metadata.videoAnalysis && typeof metadata.videoAnalysis === 'object' ? metadata.videoAnalysis as Record<string, any> : {};
+        const slides = Array.isArray(analysis.slides) ? analysis.slides : [];
+        for (const [index, slide] of slides.slice(0, 8).entries()) {
+          const imageRecord = slide.imageFileId
+            ? await prisma.fileSystemObject.findFirst({ where: { workspaceId, id: slide.imageFileId } }).catch(() => null)
+            : null;
+          items.push({
+            id: `${file.id}:slide:${slide.id || index}`,
+            kind: 'video_slide',
+            fileId: file.id,
+            fileName: file.name,
+            title: slide.title || `Slide ${index + 1}`,
+            locator: {
+              timestampStart: slide.timestamp,
+              timestampEnd: slide.timestamp
+            },
+            textDescription: [
+              `Video slide at ${secondsToClock(Number(slide.timestamp || 0))}`,
+              slide.title ? `Title: ${slide.title}` : '',
+              slide.ocrText ? `OCR: ${clipBlock(slide.ocrText, 500)}` : '',
+              slide.imageFileId ? 'Rendered slide image available.' : ''
+            ].filter(Boolean).join('\n'),
+            ocrText: slide.ocrText,
+            nearbyText: slide.ocrText ? clipBlock(slide.ocrText, 700) : undefined,
+            imageFileId: slide.imageFileId,
+            dataUrl: imageRecord ? imageDataUrlFromFile(imageRecord) || undefined : undefined,
+            mimeType: 'image/jpeg'
+          });
+        }
+        continue;
+      }
+
+      if ((file.mimeType || '').startsWith('image/') || /(?:png|jpe?g|webp|gif|bmp|tiff?)$/i.test(String(file.name || ''))) {
+        items.push({
+          id: `${file.id}:image`,
+          kind: 'image_attachment',
+          fileId: file.id,
+          fileName: file.name,
+          title: file.name,
+          textDescription: [
+            `Image source: ${file.name}`,
+            file.path ? `Path: ${file.path}` : '',
+            file.tags?.length ? `Tags: ${file.tags.join(', ')}` : ''
+          ].filter(Boolean).join('\n'),
+          dataUrl: imageDataUrlFromFile(file) || undefined,
+          mimeType: file.mimeType || 'image/*'
+        });
+        continue;
+      }
+
+      if (type === 'pdf') {
+        try {
+          const pages = await documentTextExtractionService.extractPdfPages(file);
+          const renderTargets = pages.map((page) => page.page).slice(0, 6);
+          const renderedPages = await renderPdfPageDataUrls(file, renderTargets);
+          pages.filter((page) => page.text.trim()).slice(0, 6).forEach((page) => {
+            items.push({
+              id: `${file.id}:pdf:${page.page}`,
+              kind: 'pdf_page',
+              fileId: file.id,
+              fileName: file.name,
+              title: `Page ${page.page}`,
+              locator: { page: page.page, pageStart: page.page, pageEnd: page.page },
+              textDescription: [
+                `PDF page ${page.page}`,
+                page.text ? `Text: ${clipBlock(page.text, 700)}` : '',
+                page.lines?.length ? `Line count: ${page.lines.length}` : ''
+              ].filter(Boolean).join('\n'),
+              nearbyText: clipBlock(page.text, 700),
+              dataUrl: renderedPages.get(page.page) || undefined,
+              mimeType: 'image/jpeg'
+            });
+          });
+        } catch {
+          // Text-only fallback remains available.
+        }
+      }
+    }
+
+    return items.slice(0, 24);
+  }
+
+  private stripAttachmentPayloads(attachments: ChatSessionAttachmentContext[]): ChatSessionAttachmentContext[] {
+    return attachments.map((attachment) => ({
+      ...attachment,
+      dataUrl: undefined,
+      base64Data: undefined,
+      textContent: attachment.textContent ? clip(attachment.textContent, 1000) : undefined
+    }));
+  }
+
   private estimateCapsuleTokens(capsule: ContextCapsule) {
     return estimateTokens(
       [
@@ -1148,7 +1722,11 @@ export class WorkbenchContextService {
         capsule.activeFile?.content,
         capsule.activeFile?.summary,
         ...(capsule.resources || []).map((resource) => resource.summary),
+        ...(capsule.chatSessionAttachments || []).map((attachment) =>
+          [attachment.textContent, attachment.summary].filter(Boolean).join('\n')
+        ),
         ...(capsule.retrievedChunks || []).map((chunk) => chunk.content),
+        ...(capsule.visualEvidence || []).map((item) => [item.title, item.textDescription, item.ocrText, item.nearbyText].filter(Boolean).join('\n')),
         capsule.profileSummary?.content,
         ...(capsule.recentMessages || []).map((message) => message.content)
       ].join('\n')
@@ -1161,7 +1739,13 @@ export class WorkbenchContextService {
       viewport: estimateTokens(capsule.viewport?.content),
       activeFile: estimateTokens([capsule.activeFile?.content, capsule.activeFile?.summary].filter(Boolean).join('\n')),
       resources: estimateTokens((capsule.resources || []).map((resource) => resource.summary).join('\n')),
+      chatSessionAttachments: estimateTokens(
+        (capsule.chatSessionAttachments || [])
+          .map((attachment) => [attachment.textContent, attachment.summary].filter(Boolean).join('\n'))
+          .join('\n')
+      ),
       retrievedChunks: estimateTokens((capsule.retrievedChunks || []).map((chunk) => chunk.content).join('\n')),
+      visualEvidence: estimateTokens((capsule.visualEvidence || []).map((item) => [item.title, item.textDescription, item.ocrText, item.nearbyText].filter(Boolean).join('\n')).join('\n')),
       profileSummary: estimateTokens(capsule.profileSummary?.content),
       recentMessages: estimateTokens((capsule.recentMessages || []).map((message) => message.content).join('\n'))
     };
@@ -1179,6 +1763,8 @@ export class WorkbenchContextService {
     clippedItems.push({ layer: 'resources', reason: '超过 token budget，资源摘要降级为短摘要' });
     capsule.retrievedChunks = (capsule.retrievedChunks || []).slice(0, capsule.tokenBudget < 8000 ? 3 : 5);
     clippedItems.push({ layer: 'retrievedChunks', reason: '超过 token budget，按排序保留最强检索片段' });
+    capsule.visualEvidence = (capsule.visualEvidence || []).slice(0, 10);
+    clippedItems.push({ layer: 'visualEvidence', reason: '超过 token budget，裁剪视觉证据数量' });
     if (capsule.viewport?.content && capsule.viewport.content.length > 2400) {
       capsule.viewport.content = clip(capsule.viewport.content, 2400);
       clippedItems.push({ layer: 'viewport', reason: '超过 token budget，裁剪可视范围正文到 2400 字符' });
@@ -1202,11 +1788,18 @@ export class WorkbenchContextService {
   }
 
   private buildPromptPreview(capsule: ContextCapsule) {
+    const selectedResourceFocus = capsule.resources?.length && !capsule.selection && !capsule.viewport && !capsule.activeFile;
     return [
+      selectedResourceFocus ? 'AI Studio Source Policy: use the listed Primary Sources as the generation basis. Current open files are ambient workbench state only and must not override selected sources.' : '',
       capsule.selection ? `L0 Selection: ${capsule.selection.fileName}\n${clip(capsule.selection.content, 700)}` : '',
       capsule.viewport ? `L1 Viewport: ${citationLabel(capsule.viewport.fileName, capsule.viewport.locator)}\n${clip(capsule.viewport.content, 700)}` : '',
       capsule.activeFile ? `L3 Active File: ${capsule.activeFile.fileName} (${capsule.activeFile.strategy})\n${clip(capsule.activeFile.content || capsule.activeFile.summary, 700)}` : '',
-      capsule.resources?.length ? `L2 Resources: ${capsule.resources.map((resource) => resource.fileName).join(', ')}` : '',
+      capsule.resources?.length ? `${selectedResourceFocus ? 'Primary Sources' : 'L2 Resources'}: ${capsule.resources.map((resource) => resource.fileName).join(', ')}` : '',
+      capsule.chatSessionAttachments?.length
+        ? `L0.5 Chat Attachments: ${capsule.chatSessionAttachments
+            .map((attachment) => `${attachment.name} (${attachment.kind}, ${attachment.mimeType})${attachment.textContent ? `\n${clip(attachment.textContent, 700)}` : ''}`)
+            .join('\n\n')}`
+        : '',
       capsule.retrievedChunks?.length
         ? `Evidence Cards: ${capsule.retrievedChunks
             .map((chunk) => {
@@ -1219,6 +1812,16 @@ export class WorkbenchContextService {
               return `${sourceId}${citationLabel(chunk.fileName, chunk.locator)} score=${chunk.score}${confidence}${reason}\nEvidence: ${clip(chunk.content, 700)}${supports}`;
             })
             .join('\n\n')}\n\nCitation rule: answer only from Evidence Cards. Cite each factual claim with its [S#]. If evidence is insufficient, say so.`
+        : '',
+      capsule.visualEvidence?.length
+        ? `Visual Evidence:\n${capsule.visualEvidence
+            .map((item, index) => {
+              const header = `[V${index + 1}] ${item.title} (${item.kind})`;
+              const locator = item.locator?.page || item.locator?.timestampStart ? ` locator=${JSON.stringify(item.locator)}` : '';
+              const imageHint = item.dataUrl ? ' image=attached' : item.imageFileId ? ` imageFileId=${item.imageFileId}` : '';
+              return `${header}${locator}${imageHint}\n${clip(item.textDescription || item.nearbyText || item.ocrText, 700)}`;
+            })
+            .join('\n\n')}\n\nWhen visual evidence exists, ground image-related claims in [V#] items and do not ignore them.`
         : ''
     ]
       .filter(Boolean)

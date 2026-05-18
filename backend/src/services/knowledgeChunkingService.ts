@@ -560,7 +560,12 @@ const metadataChunks = (metadata?: Record<string, unknown>): DraftChunk[] | null
           strategy: page ? 'pdf-page-block' : 'extractor-structured',
           pageBlockIndex: typeof chunk?.blockIndex === 'number' ? chunk.blockIndex : undefined,
           bbox: chunk?.bbox,
-          html: chunk?.html
+          html: chunk?.html,
+          slideIndex: chunk?.slideIndex,
+          shapeIndex: chunk?.shapeIndex,
+          tableIndex: chunk?.tableIndex,
+          rowIndex: chunk?.rowIndex,
+          columnIndex: chunk?.columnIndex
         }
       } satisfies DraftChunk;
     })

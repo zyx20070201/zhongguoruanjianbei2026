@@ -1,5 +1,5 @@
 import { ContextCapsule } from '../types/contextSystem';
-import { deepseekService } from './deepseekService';
+import { aiModelProviderService } from './aiModelProviderService';
 
 export type QuizQuestionType =
   | 'single_choice'
@@ -226,14 +226,15 @@ const aiReviewQuestion = async (
   question: QuizQualityQuestion,
   evidenceBank: string[]
 ): Promise<QuizQualityIssue[]> => {
-  if (!deepseekService.isConfigured()) return [];
+  if (!aiModelProviderService.isConfigured({ useCase: 'quiz' })) return [];
   try {
-    const response = await deepseekService.json<{
+    const response = await aiModelProviderService.json<{
       grounded: boolean;
       answerValid: boolean;
       distractorsValid?: boolean;
       issues?: string[];
     }>({
+      useCase: 'quiz',
       instruction: [
         '你是 Quiz Quality Reviewer。',
         '请检查题目是否基于给定证据、答案是否合理、选择题干扰项是否有效。',

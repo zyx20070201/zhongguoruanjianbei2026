@@ -20,8 +20,27 @@ function createDefaultDoc() {
 export async function createBlocksuiteDoc(options: {
   snapshot?: BlocksuiteSnapshot | null;
   markdown?: string | null;
+  title?: string | null;
 }): Promise<Doc> {
-  const { snapshot, markdown } = options;
+  const { snapshot, markdown, title } = options;
+  const applyTitle = (doc: Doc) => {
+    const nextTitle = title?.trim();
+    if (!nextTitle) return doc;
+
+    doc.collection.meta.setDocMeta(doc.id, { title: nextTitle });
+
+    const rootTitle = (doc.root as any)?.title;
+    if (rootTitle && typeof rootTitle.toString === 'function' && rootTitle.toString() !== nextTitle) {
+      if (typeof rootTitle.delete === 'function' && rootTitle.length > 0) {
+        rootTitle.delete(0, rootTitle.length);
+      }
+      if (typeof rootTitle.insert === 'function') {
+        rootTitle.insert(nextTitle, 0);
+      }
+    }
+
+    return doc;
+  };
 
   if (snapshot) {
     try {
@@ -30,7 +49,7 @@ export async function createBlocksuiteDoc(options: {
       const doc = await job.snapshotToDoc(snapshot);
 
       if (doc) {
-        return doc;
+        return applyTitle(doc);
       }
     } catch (error) {
       console.error('Failed to restore BlockSuite snapshot:', error);
@@ -48,14 +67,14 @@ export async function createBlocksuiteDoc(options: {
       });
 
       if (doc) {
-        return doc;
+        return applyTitle(doc);
       }
     } catch (error) {
       console.error('Failed to import markdown into BlockSuite:', error);
     }
   }
 
-  return createDefaultDoc();
+  return applyTitle(createDefaultDoc());
 }
 
 export function serializeBlocksuiteSnapshot(doc: Doc): BlocksuiteSnapshot | null {

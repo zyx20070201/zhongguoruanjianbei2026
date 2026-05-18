@@ -1,4 +1,5 @@
 import prisma from '../config/db';
+import crypto from 'crypto';
 import {
   CopyNodeDTO,
   CreateFileDTO,
@@ -19,6 +20,11 @@ import {
 import { LocalStorageService } from './storage/localStorageService';
 import { inferFileCategory, isTextLikeFile } from './fileTypeService';
 import { knowledgeIndexingService } from './knowledgeIndexingService';
+import {
+  buildWorkbenchResourceWhere,
+  buildWorkspaceResourceWhere,
+  workbenchResourceTypeFilter
+} from './workbenchResourceScope';
 
 const CJK_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
 const SUSPICIOUS_LATIN1_PATTERN = /[À-ÿ]/;
@@ -84,6 +90,7 @@ const parseJsonObject = (value: unknown): Record<string, unknown> => {
 };
 
 const serializeMetadata = (value?: Record<string, unknown>) => JSON.stringify(value || {});
+const sha256Hex = (value: string) => crypto.createHash('sha256').update(value || '').digest('hex');
 
 const mapFileSystemObject = (node: any) => ({
   ...node,
@@ -92,8 +99,8 @@ const mapFileSystemObject = (node: any) => ({
 });
 
 const RESOURCE_ROLE_LABELS: Record<string, string> = {
-  source: 'Resources',
-  resource: 'Resources',
+  source: 'Sources',
+  resource: 'Sources',
   note: 'Files',
   file: 'Files',
   workspace: 'Files',
@@ -158,6 +165,19 @@ const INDEXABLE_EXTENSIONS = new Set([
   'rs',
   'sql'
 ]);
+
+const assertUserWorkbenchNote = (file: any) => {
+  const fileCategory = String(file?.fileCategory || '').toLowerCase();
+  const resourceType = String(file?.resourceType || '').toLowerCase();
+  const extension = String(file?.extension || getExtension(file?.name || '')).toLowerCase();
+  if (
+    file?.scope !== 'workbench' ||
+    file?.origin !== 'user' ||
+    !(fileCategory.includes('note') || resourceType === 'note' || ['md', 'markdown'].includes(extension))
+  ) {
+    throw new FileSystemError(403, 'Only user-created Workbench notes can be edited with AI revisions');
+  }
+};
 
 export class FileSystemService {
   private static async bindResourceToWorkbench(node: any, input: {
@@ -255,12 +275,10 @@ export class FileSystemService {
         select: { rootPath: true, title: true }
       });
       const rootPath = workbench?.rootPath || `/${workbench?.title || input.workbenchId}`;
-      const folder = await FileSystemService.ensureFolderPath(input.workspaceId, `${rootPath}/${section}`);
-      return { parentId: folder?.id, parentPath: folder?.path };
+      return { parentId: undefined, parentPath: `${rootPath}/${section}` };
     }
 
-    const folder = await FileSystemService.ensureFolderPath(input.workspaceId, `/${section}`);
-    return { parentId: folder?.id, parentPath: folder?.path };
+    return { parentId: undefined, parentPath: `/Global/${section}` };
   }
 
   private static async indexFileForKnowledge(node: any) {
@@ -455,6 +473,8 @@ export class FileSystemService {
     });
     if (dto.indexInBackground) {
       FileSystemService.scheduleKnowledgeIndexing(created);
+    } else if (dto.workbenchId) {
+      FileSystemService.scheduleKnowledgeIndexing(created);
     } else {
       await FileSystemService.indexFileForKnowledge(created);
     }
@@ -520,6 +540,7 @@ export class FileSystemService {
       resourceRole?: string;
       scope?: string;
       metadata?: Record<string, unknown>;
+      indexInBackground?: boolean;
     } = {}
   ) {
     const normalizedName = normalizePossiblyMojibakeName(file.originalname);
@@ -581,7 +602,11 @@ export class FileSystemService {
       source: 'uploaded',
       metadata: options.metadata
     });
-    await FileSystemService.indexFileForKnowledge(created);
+    if (options.indexInBackground ?? Boolean(options.workbenchId)) {
+      FileSystemService.scheduleKnowledgeIndexing(created);
+    } else {
+      await FileSystemService.indexFileForKnowledge(created);
+    }
     return mapFileSystemObject(created);
   }
 
@@ -880,21 +905,217 @@ export class FileSystemService {
     return mapFileSystemObject(updated);
   }
 
+  static async listWorkbenchNoteRevisions(workspaceId: string, fileObjectId: string, limit = 20) {
+    const file = await prisma.fileSystemObject.findFirst({ where: { id: fileObjectId, workspaceId } });
+    if (!file) throw new FileSystemError(404, 'File not found');
+    assertUserWorkbenchNote(file);
+
+    const revisions = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT * FROM "WorkbenchNoteRevision"
+       WHERE "workspaceId" = ? AND "fileObjectId" = ?
+       ORDER BY "revisionNumber" DESC, "createdAt" DESC
+       LIMIT ?`,
+      workspaceId,
+      fileObjectId,
+      Math.max(1, Math.min(Number(limit) || 20, 100))
+    );
+
+    return revisions;
+  }
+
+  static async applyWorkbenchNoteRevision(input: {
+    workspaceId: string;
+    fileObjectId: string;
+    content: string;
+    baseContentHash?: string | null;
+    actor?: string | null;
+    summary?: string | null;
+    actionType?: string | null;
+  }) {
+    const file = await prisma.fileSystemObject.findFirst({
+      where: { id: input.fileObjectId, workspaceId: input.workspaceId }
+    });
+    if (!file) throw new FileSystemError(404, 'File not found');
+    if (file.nodeType !== 'file') throw new FileSystemError(400, 'Cannot save content to a folder');
+    if (!isTextLikeFile(file)) throw new FileSystemError(400, 'Cannot save text content to a binary file');
+    assertUserWorkbenchNote(file);
+
+    const currentContent = await FileSystemService.getFileContent(input.workspaceId, input.fileObjectId);
+    const currentContentHash = sha256Hex(currentContent);
+    const baseContentHash = input.baseContentHash || null;
+    if (baseContentHash && currentContentHash !== baseContentHash) {
+      throw new FileSystemError(
+        409,
+        JSON.stringify({
+          message: 'Note content changed since the AI proposal was generated',
+          currentContentHash,
+          baseContentHash,
+          currentContent
+        })
+      );
+    }
+
+    const nextContent = String(input.content ?? '');
+    const nextContentHash = sha256Hex(nextContent);
+    const revisionRows = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT COALESCE(MAX("revisionNumber"), 0) AS "maxRevision"
+       FROM "WorkbenchNoteRevision"
+       WHERE "workspaceId" = ? AND "fileObjectId" = ?`,
+      input.workspaceId,
+      input.fileObjectId
+    );
+    const revisionNumber = Number(revisionRows[0]?.maxRevision || 0) + 1;
+
+    const { storageKey, size } = await LocalStorageService.saveTextFile(nextContent, file.storageKey || undefined);
+    const updated = await prisma.fileSystemObject.update({
+      where: { id: file.id },
+      data: { content: nextContent, storageKey, size, isBinary: false }
+    });
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "WorkbenchNoteRevision" (
+        "id", "workspaceId", "workbenchId", "fileObjectId", "revisionNumber",
+        "actionType", "actor", "summary", "baseContentHash",
+        "beforeContent", "beforeContentHash", "afterContent", "afterContentHash", "createdAt"
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      crypto.randomUUID(),
+      input.workspaceId,
+      file.ownerWorkbenchId || null,
+      file.id,
+      revisionNumber,
+      input.actionType || 'ai_note_edit',
+      input.actor || 'ai',
+      input.summary || null,
+      baseContentHash,
+      currentContent,
+      currentContentHash,
+      nextContent,
+      nextContentHash
+    );
+
+    await FileSystemService.indexFileForKnowledge(updated);
+    return {
+      file: mapFileSystemObject(updated),
+      revisionNumber,
+      beforeContent: currentContent,
+      afterContent: nextContent,
+      baseContentHash,
+      currentContentHash: nextContentHash
+    };
+  }
+
+  static async revertWorkbenchNoteRevision(input: {
+    workspaceId: string;
+    fileObjectId: string;
+    revisionId?: string | null;
+    actor?: string | null;
+  }) {
+    const file = await prisma.fileSystemObject.findFirst({
+      where: { id: input.fileObjectId, workspaceId: input.workspaceId }
+    });
+    if (!file) throw new FileSystemError(404, 'File not found');
+    assertUserWorkbenchNote(file);
+
+    const rows = input.revisionId
+      ? await prisma.$queryRawUnsafe<any[]>(
+          `SELECT * FROM "WorkbenchNoteRevision"
+           WHERE "workspaceId" = ? AND "fileObjectId" = ? AND "id" = ?
+           LIMIT 1`,
+          input.workspaceId,
+          input.fileObjectId,
+          input.revisionId
+        )
+      : await prisma.$queryRawUnsafe<any[]>(
+          `SELECT * FROM "WorkbenchNoteRevision"
+           WHERE "workspaceId" = ? AND "fileObjectId" = ?
+           ORDER BY "revisionNumber" DESC, "createdAt" DESC
+           LIMIT 1`,
+          input.workspaceId,
+          input.fileObjectId
+        );
+
+    const revision = rows[0];
+    if (!revision) throw new FileSystemError(404, 'Revision not found');
+
+    const currentContent = await FileSystemService.getFileContent(input.workspaceId, input.fileObjectId);
+    const revertContent = String(revision.beforeContent ?? '');
+    const currentContentHash = sha256Hex(currentContent);
+    const revertContentHash = sha256Hex(revertContent);
+    const revisionRows = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT COALESCE(MAX("revisionNumber"), 0) AS "maxRevision"
+       FROM "WorkbenchNoteRevision"
+       WHERE "workspaceId" = ? AND "fileObjectId" = ?`,
+      input.workspaceId,
+      input.fileObjectId
+    );
+    const revisionNumber = Number(revisionRows[0]?.maxRevision || 0) + 1;
+
+    const { storageKey, size } = await LocalStorageService.saveTextFile(revertContent, file.storageKey || undefined);
+    const updated = await prisma.fileSystemObject.update({
+      where: { id: file.id },
+      data: { content: revertContent, storageKey, size, isBinary: false }
+    });
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "WorkbenchNoteRevision" (
+        "id", "workspaceId", "workbenchId", "fileObjectId", "revisionNumber",
+        "actionType", "actor", "summary", "baseContentHash",
+        "beforeContent", "beforeContentHash", "afterContent", "afterContentHash", "createdAt"
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      crypto.randomUUID(),
+      input.workspaceId,
+      file.ownerWorkbenchId || null,
+      file.id,
+      revisionNumber,
+      'revert',
+      input.actor || 'user',
+      `Reverted revision ${revision.revisionNumber}`,
+      currentContentHash,
+      currentContent,
+      currentContentHash,
+      revertContent,
+      revertContentHash
+    );
+
+    await FileSystemService.indexFileForKnowledge(updated);
+    return {
+      file: mapFileSystemObject(updated),
+      revisionNumber,
+      revertedFromRevisionNumber: revision.revisionNumber,
+      beforeContent: currentContent,
+      afterContent: revertContent,
+      currentContentHash: revertContentHash
+    };
+  }
+
   static async saveGeneratedContent(dto: SaveGeneratedContentDTO) {
     const { workspaceId, targetDir, filename, content, category } = dto;
 
-    const folder = await FileSystemService.ensureFolderPath(workspaceId, targetDir);
+    const useVirtualTarget = Boolean(dto.workbenchId);
+    const target = useVirtualTarget
+      ? await FileSystemService.resolveDefaultParent({
+          workspaceId,
+          workbenchId: dto.workbenchId,
+          role: dto.resourceRole || dto.resourceType || category || 'generated',
+          scope: dto.scope || 'workbench'
+        })
+      : { parentPath: targetDir };
+    if (!target.parentPath) throw new FileSystemError(400, 'Target directory is required');
 
-    if (!folder) throw new FileSystemError(500, 'Failed to ensure target directory');
+    const folder = useVirtualTarget ? null : await FileSystemService.ensureFolderPath(workspaceId, target.parentPath);
+
+    if (!useVirtualTarget && !folder) throw new FileSystemError(500, 'Failed to ensure target directory');
 
     const siblings = await prisma.fileSystemObject.findMany({
-      where: { workspaceId, parentId: folder.id },
+      where: useVirtualTarget
+        ? { workspaceId, path: { startsWith: `${target.parentPath.replace(/\/+$/, '')}/` } }
+        : { workspaceId, parentId: folder!.id },
       select: { name: true }
     });
     const existingNames = new Set<string>(siblings.map((s: { name: string }) => s.name));
     const finalFilename = generateUniqueFilename(filename, existingNames);
     const extension = getExtension(finalFilename);
-    const newPath = generateNewPath(folder.path, finalFilename);
+    const newPath = generateNewPath(useVirtualTarget ? target.parentPath : folder!.path, finalFilename);
     const resourceType = inferResourceRole({
       nodeType: 'file',
       fileCategory: category || 'generated',
@@ -903,7 +1124,10 @@ export class FileSystemService {
       explicitType: dto.resourceType || 'generated'
     });
 
-    const { storageKey, size } = await LocalStorageService.saveTextFile(content);
+    const isBinary = dto.isBinary || Buffer.isBuffer(content);
+    const { storageKey, size } = isBinary
+      ? await LocalStorageService.saveBuffer(Buffer.isBuffer(content) ? content : Buffer.from(content))
+      : await LocalStorageService.saveTextFile(String(content));
 
     const created = await prisma.fileSystemObject.create({
       data: {
@@ -917,11 +1141,13 @@ export class FileSystemService {
         tags: '[]',
         extension,
         path: newPath,
-        content,
+        content: isBinary ? undefined : String(content),
+        mimeType: dto.mimeType,
         storageKey,
         size,
+        isBinary,
         workspaceId,
-        parentId: folder.id,
+        parentId: folder?.id,
         ownerWorkbenchId: dto.workbenchId || undefined
       } as any
     });
@@ -940,13 +1166,8 @@ export class FileSystemService {
     scope?: 'all' | 'workspace' | 'workbench' | string;
     role?: string;
   } = {}) {
-    const role = options.role ? normalizeResourceRole(options.role) : null;
     const scope = options.scope || 'all';
-    const resourceTypeFilter = role
-      ? role === 'file'
-        ? { in: ['file', 'note'] }
-        : role
-      : undefined;
+    const resourceTypeFilter = workbenchResourceTypeFilter(options.role);
 
     const baseWhere: any = {
       workspaceId,
@@ -954,27 +1175,32 @@ export class FileSystemService {
       ...(resourceTypeFilter ? { resourceType: resourceTypeFilter } : {})
     };
 
+    const workbenchRoot = options.workbenchId
+      ? await prisma.workbench.findUnique({
+          where: { id: options.workbenchId },
+          select: { rootPath: true }
+        })
+      : null;
+
     const workbenchWhere = options.workbenchId
-      ? {
-          OR: [
-            { ownerWorkbenchId: options.workbenchId },
-            { workbenchBindings: { some: { workbenchId: options.workbenchId, ...(role ? { role } : {}) } } }
-          ]
-        }
+      ? buildWorkbenchResourceWhere({
+          workspaceId,
+          workbenchId: options.workbenchId,
+          role: options.role,
+          rootPath: workbenchRoot?.rootPath
+        })
       : {};
 
-    const workspaceWhere = {
-      OR: [
-        { scope: 'workspace' },
-        { ownerWorkbenchId: null }
-      ]
-    };
+    const workspaceWhere = buildWorkspaceResourceWhere({
+      workspaceId,
+      role: options.role
+    });
 
     const where =
       scope === 'workbench'
-        ? { ...baseWhere, ...workbenchWhere }
+        ? workbenchWhere
         : scope === 'workspace'
-          ? { ...baseWhere, ...workspaceWhere }
+          ? workspaceWhere
           : options.workbenchId
             ? { ...baseWhere, OR: [...(workbenchWhere as any).OR, ...(workspaceWhere as any).OR] }
             : baseWhere;

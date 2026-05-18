@@ -2,6 +2,7 @@ import client from '../api/client';
 import {
   FileSystemObject,
   LearningGoalDraft,
+  PersonalizedWorkspaceIntegration,
   LearningTerminalMessage,
   LearningTerminalResponse,
   Workbench
@@ -59,6 +60,73 @@ export const learningApi = {
     return response.data;
   },
 
+  buildCourseKnowledgeGraph: async (data: {
+    workspaceId: string;
+    workbenchId?: string;
+    resourceRole?: string;
+    reindex?: boolean;
+    validate?: boolean;
+    includeWorkspaceResources?: boolean;
+    maxFilesPerWorkbench?: number;
+    maxWorkspaceFiles?: number;
+    graphLimit?: number;
+  }) => {
+    const response = await client.post('/learning/knowledge/graph/build', data);
+    return response.data;
+  },
+
+  startCourseGraphBuildJob: async (data: {
+    workspaceId: string;
+    workbenchId?: string;
+    resourceRole?: string;
+    reindex?: boolean;
+    validate?: boolean;
+    includeWorkspaceResources?: boolean;
+    maxFilesPerWorkbench?: number;
+    maxWorkspaceFiles?: number;
+    graphLimit?: number;
+  }) => {
+    const response = await client.post('/learning/knowledge/graph/build-job', data, { timeout: 10000 });
+    return response.data;
+  },
+
+  getCourseGraphBuildJob: async (jobId: string) => {
+    const response = await client.get(`/learning/knowledge/graph/build-jobs/${jobId}`, { timeout: 10000 });
+    return response.data;
+  },
+
+  listCourseGraphBuildJobs: async (workspaceId: string, limit = 10) => {
+    const response = await client.get('/learning/knowledge/graph/build-jobs', {
+      params: { workspaceId, limit },
+      timeout: 10000
+    });
+    return response.data;
+  },
+
+  buildTargetKnowledgeStructure: async (data: {
+    workspaceId: string;
+    workbenchId?: string;
+    goalId?: string;
+    objective?: string;
+    targetConcepts?: string[];
+    persist?: boolean;
+  }) => {
+    const response = await client.post('/learning/knowledge/target-structure', data, { timeout: 60000 });
+    return response.data;
+  },
+
+  runKnowledgeGapAnalysis: async (data: {
+    workspaceId: string;
+    workbenchId?: string;
+    goalId?: string;
+    objective?: string;
+    targetStructure?: Record<string, unknown>;
+    persist?: boolean;
+  }) => {
+    const response = await client.post('/learning/knowledge/gap-analysis', data, { timeout: 90000 });
+    return response.data;
+  },
+
   listKnowledgeIndexJobs: async (workspaceId: string, limit = 50) => {
     const response = await client.get('/learning/knowledge/jobs', {
       params: { workspaceId, limit }
@@ -99,8 +167,212 @@ export const learningApi = {
     return response.data;
   },
 
+  getCourseHome: async (workspaceId: string, params?: { workbenchId?: string }) => {
+    const response = await client.get('/learning/course-home', {
+      params: { workspaceId, ...(params || {}) }
+    });
+    return response.data;
+  },
+
+  getWorkspaceIntegration: async (
+    workspaceId: string,
+    params?: { workbenchId?: string; goalId?: string; query?: string }
+  ): Promise<{ integration: PersonalizedWorkspaceIntegration }> => {
+    const response = await client.get('/learning/workspace-integration', {
+      params: { workspaceId, ...(params || {}) }
+    });
+    return response.data;
+  },
+
+  getKnowledgeGraph: async (workspaceId: string, params?: { limit?: number }) => {
+    const response = await client.get('/learning/knowledge/graph', {
+      params: { workspaceId, ...(params || {}) }
+    });
+    return response.data;
+  },
+
+  getPrerequisiteGaps: async (workspaceId: string, params?: { conceptIds?: string[] }) => {
+    const response = await client.get('/learning/knowledge/graph/prerequisite-gaps', {
+      params: {
+        workspaceId,
+        ...(params?.conceptIds?.length ? { conceptIds: params.conceptIds.join(',') } : {})
+      }
+    });
+    return response.data;
+  },
+
+  getRemediationPath: async (workspaceId: string, targetConceptId: string) => {
+    const response = await client.get('/learning/knowledge/graph/remediation-path', {
+      params: { workspaceId, targetConceptId }
+    });
+    return response.data;
+  },
+
+  getDiagnosis: async (workspaceId: string, params?: { conceptIds?: string[]; limit?: number }) => {
+    const response = await client.get('/learning/diagnosis', {
+      params: {
+        workspaceId,
+        limit: params?.limit,
+        ...(params?.conceptIds?.length ? { conceptIds: params.conceptIds.join(',') } : {})
+      }
+    });
+    return response.data;
+  },
+
+  getGraphPlanCandidates: async (workspaceId: string, params?: { objective?: string; conceptIds?: string[]; maxConcepts?: number }) => {
+    const response = await client.get('/learning/planning/graph-candidates', {
+      params: {
+        workspaceId,
+        objective: params?.objective,
+        maxConcepts: params?.maxConcepts,
+        ...(params?.conceptIds?.length ? { conceptIds: params.conceptIds.join(',') } : {})
+      }
+    });
+    return response.data;
+  },
+
+  createKnowledgeGraphPlan: async (data: {
+    workspaceId: string;
+    workbenchId?: string;
+    goalId?: string;
+    objective?: string;
+    targetConcepts?: string[];
+    maxConcepts?: number;
+    persist?: boolean;
+  }) => {
+    const response = await client.post('/learning/planning/kg-plan', data);
+    return response.data;
+  },
+
+  listLearningPlans: async (
+    workspaceId: string,
+    params?: { workbenchId?: string; goalId?: string; limit?: number }
+  ) => {
+    const response = await client.get('/learning/planning/plans', {
+      params: { workspaceId, ...(params || {}) }
+    });
+    return response.data;
+  },
+
+  applyLearningPlanToWorkbench: async (
+    planId: string,
+    data: { workspaceId: string; workbenchId?: string; createWorkbench?: boolean; workbenchTitle?: string }
+  ) => {
+    const response = await client.post(`/learning/planning/plans/${planId}/apply`, data);
+    return response.data;
+  },
+
+  updateLearningPlanStepStatus: async (
+    planId: string,
+    stepId: string,
+    data: { workspaceId: string; status: 'pending' | 'active' | 'done' | 'skipped' | 'blocked' }
+  ) => {
+    const response = await client.patch(`/learning/planning/plans/${planId}/steps/${stepId}`, data);
+    return response.data;
+  },
+
+  performLearningPlanAction: async (
+    planId: string,
+    data: {
+      workspaceId: string;
+      action: 'start' | 'pause' | 'resume' | 'complete' | 'archive' | 'restore' | 'supersede' | 'set_primary' | 'reopen' | 'duplicate' | 'replan';
+      targetPlanId?: string;
+      title?: string;
+      note?: string;
+    }
+  ) => {
+    const response = await client.post(`/learning/planning/plans/${planId}/actions`, data);
+    return response.data;
+  },
+
+  updateLearningPlanStepDetails: async (
+    planId: string,
+    stepId: string,
+    data: {
+      workspaceId: string;
+      title?: string;
+      description?: string;
+      note?: string;
+      estimateMinutes?: number | null;
+      dueDate?: string | null;
+      tags?: string[];
+      artifactBindings?: Array<Record<string, unknown>>;
+    }
+  ) => {
+    const response = await client.patch(`/learning/planning/plans/${planId}/steps/${stepId}/details`, data);
+    return response.data;
+  },
+
+  recordLearningPlanFeedback: async (
+    planId: string,
+    data: {
+      workspaceId: string;
+      stepId?: string | null;
+      category: 'too_hard' | 'too_easy' | 'blocked' | 'resource_mismatch' | 'replan' | 'other';
+      note?: string;
+      rating?: number | null;
+    }
+  ) => {
+    const response = await client.post(`/learning/planning/plans/${planId}/feedback`, data);
+    return response.data;
+  },
+
+  rollbackLearningPlan: async (
+    planId: string,
+    data: { workspaceId: string; targetPlanId: string }
+  ) => {
+    const response = await client.post(`/learning/planning/plans/${planId}/rollback`, data);
+    return response.data;
+  },
+
+  getLearningEventDiagnostics: async (
+    workspaceId: string,
+    params?: { workbenchId?: string; goalId?: string; days?: number }
+  ) => {
+    const response = await client.get('/learning/events/diagnostics', {
+      params: { workspaceId, ...(params || {}) }
+    });
+    return response.data;
+  },
+
+  getLearningEventSequences: async (
+    workspaceId: string,
+    params?: { workbenchId?: string; patternType?: string; limit?: number }
+  ) => {
+    const response = await client.get('/learning/events/sequences', {
+      params: { workspaceId, ...(params || {}) }
+    });
+    return response.data;
+  },
+
   getMemoryHealth: async () => {
     const response = await client.get('/learning/memory/health');
+    return response.data;
+  },
+
+  recordLearningEvent: async (data: {
+    workspaceId: string;
+    workbenchId?: string;
+    goalId?: string;
+    eventType: string;
+    actor?: 'user' | 'assistant' | 'system' | 'agent';
+    payload?: Record<string, unknown>;
+    object?: { type?: string; id?: string; title?: string };
+    interaction?: Record<string, unknown>;
+    source?: Record<string, unknown>;
+    confidence?: number;
+  }) => {
+    const response = await client.post('/learning/events', data);
+    return response.data;
+  },
+
+  listLearningEvents: async (
+    workspaceId: string,
+    params?: { workbenchId?: string; eventType?: string; actor?: string; objectType?: string; objectId?: string; limit?: number }
+  ) => {
+    const response = await client.get('/learning/events', {
+      params: { workspaceId, ...(params || {}) }
+    });
     return response.data;
   },
 

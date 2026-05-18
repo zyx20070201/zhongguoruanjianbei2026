@@ -58,10 +58,7 @@ export interface WorkbenchState {
   aiAssistant?: {
     id: string;
     title: string;
-    mode: 'floating' | 'sidebar' | 'fullscreen';
-    isOpen: boolean;
     activeSessionId?: string;
-    sidebarWidth?: number;
     sessions?: Array<{
       id: string;
       title: string;
@@ -70,6 +67,18 @@ export interface WorkbenchState {
       viewState: Record<string, any>;
     }>;
     viewState: Record<string, any>;
+  };
+  aiStudio?: {
+    id: string;
+    title: string;
+    viewState: Record<string, any>;
+  };
+  aiToolPanel?: {
+    id: string;
+    activeTool: 'chat' | 'studio';
+    mode: 'floating' | 'sidebar' | 'fullscreen';
+    isOpen: boolean;
+    sidebarWidth?: number;
   };
   version: number;
 }
@@ -96,9 +105,16 @@ export interface WorkbenchSummary {
   updatedAt: string;
   lastOpenedAt: string;
   panelCount: number;
+  resourceCount: number;
 }
 
 export interface WorkbenchPayload {
   title?: string;
   description?: string;
+}
+
+export interface WorkbenchResourceGroups {
+  sources: ResourceReference[];
+  files: ResourceReference[];
+  generated: ResourceReference[];
 }

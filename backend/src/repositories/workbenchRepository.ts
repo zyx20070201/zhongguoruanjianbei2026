@@ -161,14 +161,61 @@ export class WorkbenchRepository {
   }
 
   async delete(id: string): Promise<boolean> {
-    try {
-      await prisma.panel.deleteMany({ where: { workbenchId: id } });
-      await prisma.learningEvent.deleteMany({ where: { workbenchId: id } });
-      await prisma.learningTrace.deleteMany({ where: { workbenchId: id } });
-      await prisma.workbench.delete({ where: { id } });
-      return true;
-    } catch {
+    const existing = await prisma.workbench.findUnique({
+      where: { id },
+      select: { id: true }
+    });
+
+    if (!existing) {
       return false;
+    }
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        const cards = await tx.flashcard.findMany({
+          where: { workbenchId: id },
+          select: { id: true }
+        });
+        const cardIds = cards.map((card) => card.id);
+
+        await tx.fileSystemObject.updateMany({
+          where: { ownerWorkbenchId: id },
+          data: { ownerWorkbenchId: null }
+        });
+        await tx.workbenchResource.deleteMany({ where: { workbenchId: id } });
+        await tx.panel.deleteMany({ where: { workbenchId: id } });
+        await tx.learningEvent.deleteMany({ where: { workbenchId: id } });
+        await tx.learningTrace.deleteMany({ where: { workbenchId: id } });
+        await tx.learningPlan.updateMany({
+          where: { workbenchId: id },
+          data: { previousPlanId: null }
+        });
+        await tx.learningPlan.deleteMany({ where: { workbenchId: id } });
+        await tx.flashcardReviewLog.deleteMany({ where: { cardId: { in: cardIds } } });
+        await tx.flashcard.deleteMany({ where: { workbenchId: id } });
+        await tx.flashcardDeck.deleteMany({ where: { workbenchId: id } });
+        await tx.conversationSession.updateMany({
+          where: { workbenchId: id },
+          data: { workbenchId: null }
+        });
+        await tx.conversationMessage.updateMany({
+          where: { workbenchId: id },
+          data: { workbenchId: null }
+        });
+        await tx.savedMemory.updateMany({
+          where: { workbenchId: id },
+          data: { workbenchId: null }
+        });
+        await tx.learnerStateTransition.deleteMany({ where: { workbenchId: id } });
+        await tx.learnerEvidence.deleteMany({ where: { workbenchId: id } });
+        await tx.learnerMemoryControl.deleteMany({ where: { workbenchId: id } });
+        await tx.workbenchTablePropertyValue.deleteMany({ where: { workbenchId: id } });
+        await tx.workbench.delete({ where: { id } });
+      });
+      return true;
+    } catch (error) {
+      console.error(`Failed to delete workbench ${id}:`, error);
+      throw error;
     }
   }
 
@@ -182,6 +229,7 @@ export class WorkbenchRepository {
     await prisma.panel.deleteMany({ where: { workbenchId: { in: ids } } });
     await prisma.learningEvent.deleteMany({ where: { workbenchId: { in: ids } } });
     await prisma.learningTrace.deleteMany({ where: { workbenchId: { in: ids } } });
+    await prisma.workbenchTablePropertyValue.deleteMany({ where: { workbenchId: { in: ids } } });
     await prisma.workbench.deleteMany({ where: { workspaceId } });
   }
 }

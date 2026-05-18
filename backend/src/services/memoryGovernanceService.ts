@@ -2,6 +2,7 @@ import prisma from '../config/db';
 import { conversationHistoryService } from './conversationHistoryService';
 import { learnerMemoryControlService } from './learnerMemoryControlService';
 import { learnerStateContextAdapter } from './learnerStateContextAdapter';
+import { learnerStateGovernanceService } from './learnerStateGovernanceService';
 import { learnerStateService } from './learnerStateService';
 import { savedMemoryService } from './savedMemoryService';
 
@@ -179,11 +180,16 @@ export class MemoryGovernanceService {
   }
 
   async runLifecycle(input: { workspaceId: string; workbenchId?: string | null }) {
-    return learnerStateService.governLifecycle({
+    return learnerStateGovernanceService.govern({
       workspaceId: input.workspaceId,
-      workbenchId: input.workbenchId || null,
-      changedBy: 'MemoryGovernanceService'
-    });
+      workbenchId: input.workbenchId || null
+    }).catch(() =>
+      learnerStateService.governLifecycle({
+        workspaceId: input.workspaceId,
+        workbenchId: input.workbenchId || null,
+        changedBy: 'MemoryGovernanceService'
+      })
+    );
   }
 }
 

@@ -1,6 +1,81 @@
 import prisma from './db';
 
 const statements = [
+  `CREATE TABLE IF NOT EXISTS "LearningEvent" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "eventType" TEXT NOT NULL,
+    "actor" TEXT NOT NULL DEFAULT 'system',
+    "schemaVersion" TEXT NOT NULL DEFAULT 'learning_event.v2',
+    "eventFamily" TEXT NOT NULL DEFAULT 'unknown',
+    "objectType" TEXT,
+    "objectId" TEXT,
+    "sessionId" TEXT,
+    "idempotencyKey" TEXT,
+    "payloadJson" TEXT NOT NULL DEFAULT '{}',
+    "metadataJson" TEXT NOT NULL DEFAULT '{}',
+    "cognitiveSignalsJson" TEXT NOT NULL DEFAULT '[]',
+    "diagnosticFeaturesJson" TEXT NOT NULL DEFAULT '{}',
+    "qualityJson" TEXT NOT NULL DEFAULT '{}',
+    "confidence" REAL NOT NULL DEFAULT 0.58,
+    "observedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "workspaceId" TEXT NOT NULL,
+    "workbenchId" TEXT,
+    "goalId" TEXT,
+    CONSTRAINT "LearningEvent_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "LearningEvent_workbenchId_fkey" FOREIGN KEY ("workbenchId") REFERENCES "Workbench" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "LearningEvent_goalId_fkey" FOREIGN KEY ("goalId") REFERENCES "LearningGoal" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS "LearningEvent_workspaceId_observedAt_idx" ON "LearningEvent"("workspaceId", "observedAt")`,
+  `CREATE INDEX IF NOT EXISTS "LearningEvent_workspaceId_eventType_observedAt_idx" ON "LearningEvent"("workspaceId", "eventType", "observedAt")`,
+  `CREATE INDEX IF NOT EXISTS "LearningEvent_workspaceId_eventFamily_observedAt_idx" ON "LearningEvent"("workspaceId", "eventFamily", "observedAt")`,
+  `CREATE INDEX IF NOT EXISTS "LearningEvent_workspaceId_actor_observedAt_idx" ON "LearningEvent"("workspaceId", "actor", "observedAt")`,
+  `CREATE INDEX IF NOT EXISTS "LearningEvent_objectType_objectId_idx" ON "LearningEvent"("objectType", "objectId")`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "LearningEvent_idempotencyKey_key" ON "LearningEvent"("idempotencyKey")`,
+  `CREATE TABLE IF NOT EXISTS "LearningEventSchemaRegistry" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "schemaKey" TEXT NOT NULL,
+    "version" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'active',
+    "scope" TEXT NOT NULL DEFAULT 'global',
+    "description" TEXT NOT NULL DEFAULT '',
+    "sourceFramework" TEXT NOT NULL DEFAULT '',
+    "eventFamiliesJson" TEXT NOT NULL DEFAULT '[]',
+    "dialogueActsJson" TEXT NOT NULL DEFAULT '[]',
+    "cognitiveSignalsJson" TEXT NOT NULL DEFAULT '[]',
+    "schemaJson" TEXT NOT NULL DEFAULT '{}',
+    "governanceJson" TEXT NOT NULL DEFAULT '{}',
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "workspaceId" TEXT,
+    CONSTRAINT "LearningEventSchemaRegistry_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "LearningEventSchemaRegistry_schemaKey_version_workspaceId_key" ON "LearningEventSchemaRegistry"("schemaKey", "version", "workspaceId")`,
+  `CREATE INDEX IF NOT EXISTS "LearningEventSchemaRegistry_status_updatedAt_idx" ON "LearningEventSchemaRegistry"("status", "updatedAt")`,
+  `CREATE INDEX IF NOT EXISTS "LearningEventSchemaRegistry_workspaceId_status_idx" ON "LearningEventSchemaRegistry"("workspaceId", "status")`,
+  `CREATE TABLE IF NOT EXISTS "LearningEventSequencePattern" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "patternKey" TEXT NOT NULL,
+    "patternType" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'active',
+    "eventIdsJson" TEXT NOT NULL DEFAULT '[]',
+    "involvedConceptsJson" TEXT NOT NULL DEFAULT '[]',
+    "signalSummaryJson" TEXT NOT NULL DEFAULT '{}',
+    "windowStart" DATETIME NOT NULL,
+    "windowEnd" DATETIME NOT NULL,
+    "confidence" REAL NOT NULL DEFAULT 0.5,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "workspaceId" TEXT NOT NULL,
+    "workbenchId" TEXT,
+    "goalId" TEXT,
+    CONSTRAINT "LearningEventSequencePattern_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "LearningEventSequencePattern_workbenchId_fkey" FOREIGN KEY ("workbenchId") REFERENCES "Workbench" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "LearningEventSequencePattern_workspaceId_patternKey_key" ON "LearningEventSequencePattern"("workspaceId", "patternKey")`,
+  `CREATE INDEX IF NOT EXISTS "LearningEventSequencePattern_workspaceId_patternType_updatedAt_idx" ON "LearningEventSequencePattern"("workspaceId", "patternType", "updatedAt")`,
+  `CREATE INDEX IF NOT EXISTS "LearningEventSequencePattern_workspaceId_status_updatedAt_idx" ON "LearningEventSequencePattern"("workspaceId", "status", "updatedAt")`,
+  `CREATE INDEX IF NOT EXISTS "LearningEventSequencePattern_workbenchId_updatedAt_idx" ON "LearningEventSequencePattern"("workbenchId", "updatedAt")`,
   `CREATE TABLE IF NOT EXISTS "FlashcardDeck" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "title" TEXT NOT NULL,
@@ -133,49 +208,89 @@ const statements = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "SavedMemory_workspaceId_memoryKey_key" ON "SavedMemory"("workspaceId", "memoryKey")`,
   `CREATE INDEX IF NOT EXISTS "SavedMemory_workspaceId_status_updatedAt_idx" ON "SavedMemory"("workspaceId", "status", "updatedAt")`,
-  `CREATE TABLE IF NOT EXISTS "LearnerState" (
+  `CREATE TABLE IF NOT EXISTS "LearnerStateCore" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "scope" TEXT NOT NULL DEFAULT 'workspace',
     "version" INTEGER NOT NULL DEFAULT 1,
-    "stateJson" TEXT NOT NULL DEFAULT '{}',
     "summary" TEXT NOT NULL DEFAULT '',
-    "profileBaseJson" TEXT NOT NULL DEFAULT '{}',
-    "knowledgeStateJson" TEXT NOT NULL DEFAULT '{}',
-    "misconceptionStateJson" TEXT NOT NULL DEFAULT '{}',
-    "preferenceStyleJson" TEXT NOT NULL DEFAULT '{}',
-    "behaviorEngagementJson" TEXT NOT NULL DEFAULT '{}',
-    "cognitiveStateJson" TEXT NOT NULL DEFAULT '{}',
-    "reviewPlanningJson" TEXT NOT NULL DEFAULT '{}',
-    "confidenceJson" TEXT NOT NULL DEFAULT '{}',
+    "governanceJson" TEXT NOT NULL DEFAULT '{}',
+    "currentPositionJson" TEXT NOT NULL DEFAULT '{}',
     "lastEvidenceAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "workspaceId" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
-    CONSTRAINT "LearnerState_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "LearnerState_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    CONSTRAINT "LearnerStateCore_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "LearnerStateCore_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
   )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS "LearnerState_workspaceId_scope_key" ON "LearnerState"("workspaceId", "scope")`,
-  `CREATE INDEX IF NOT EXISTS "LearnerState_userId_updatedAt_idx" ON "LearnerState"("userId", "updatedAt")`,
-  `CREATE INDEX IF NOT EXISTS "LearnerState_workspaceId_updatedAt_idx" ON "LearnerState"("workspaceId", "updatedAt")`,
-  `CREATE TABLE IF NOT EXISTS "LearnerStateVersion" (
+  `CREATE UNIQUE INDEX IF NOT EXISTS "LearnerStateCore_workspaceId_scope_key" ON "LearnerStateCore"("workspaceId", "scope")`,
+  `CREATE INDEX IF NOT EXISTS "LearnerStateCore_userId_updatedAt_idx" ON "LearnerStateCore"("userId", "updatedAt")`,
+  `CREATE INDEX IF NOT EXISTS "LearnerStateCore_workspaceId_updatedAt_idx" ON "LearnerStateCore"("workspaceId", "updatedAt")`,
+  `CREATE TABLE IF NOT EXISTS "LearnerStateSignal" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "signalKey" TEXT NOT NULL,
+    "layer" TEXT NOT NULL,
+    "dimension" TEXT NOT NULL,
+    "label" TEXT NOT NULL,
+    "value" TEXT NOT NULL,
+    "confidence" REAL NOT NULL DEFAULT 0.5,
+    "status" TEXT NOT NULL DEFAULT 'candidate',
+    "evidenceIdsJson" TEXT NOT NULL DEFAULT '[]',
+    "sourcesJson" TEXT NOT NULL DEFAULT '[]',
+    "rationale" TEXT NOT NULL DEFAULT '',
+    "firstObservedAt" DATETIME,
+    "lastObservedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "workspaceId" TEXT NOT NULL,
+    "learnerStateCoreId" TEXT NOT NULL,
+    CONSTRAINT "LearnerStateSignal_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "LearnerStateSignal_core_fkey" FOREIGN KEY ("learnerStateCoreId") REFERENCES "LearnerStateCore" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "LearnerStateSignal_core_signalKey_key" ON "LearnerStateSignal"("learnerStateCoreId", "signalKey")`,
+  `CREATE INDEX IF NOT EXISTS "LearnerStateSignal_workspaceId_layer_dimension_idx" ON "LearnerStateSignal"("workspaceId", "layer", "dimension")`,
+  `CREATE INDEX IF NOT EXISTS "LearnerStateSignal_workspaceId_status_updatedAt_idx" ON "LearnerStateSignal"("workspaceId", "status", "updatedAt")`,
+  `CREATE TABLE IF NOT EXISTS "LearnerObservation" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "observationKey" TEXT NOT NULL,
+    "dimension" TEXT NOT NULL,
+    "label" TEXT NOT NULL,
+    "value" TEXT NOT NULL,
+    "confidence" REAL NOT NULL DEFAULT 0.4,
+    "status" TEXT NOT NULL DEFAULT 'active',
+    "evidenceIdsJson" TEXT NOT NULL DEFAULT '[]',
+    "sourcesJson" TEXT NOT NULL DEFAULT '[]',
+    "rationale" TEXT NOT NULL DEFAULT '',
+    "observedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expiresAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "workspaceId" TEXT NOT NULL,
+    "learnerStateCoreId" TEXT NOT NULL,
+    CONSTRAINT "LearnerObservation_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "LearnerObservation_core_fkey" FOREIGN KEY ("learnerStateCoreId") REFERENCES "LearnerStateCore" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "LearnerObservation_core_observationKey_key" ON "LearnerObservation"("learnerStateCoreId", "observationKey")`,
+  `CREATE INDEX IF NOT EXISTS "LearnerObservation_workspaceId_status_observedAt_idx" ON "LearnerObservation"("workspaceId", "status", "observedAt")`,
+  `CREATE INDEX IF NOT EXISTS "LearnerObservation_workspaceId_dimension_observedAt_idx" ON "LearnerObservation"("workspaceId", "dimension", "observedAt")`,
+  `CREATE TABLE IF NOT EXISTS "LearnerStateSnapshotVersion" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "version" INTEGER NOT NULL,
-    "stateJson" TEXT NOT NULL DEFAULT '{}',
+    "snapshotJson" TEXT NOT NULL DEFAULT '{}',
     "summary" TEXT NOT NULL DEFAULT '',
     "changedBy" TEXT NOT NULL DEFAULT 'system',
     "changeReason" TEXT NOT NULL DEFAULT '',
-    "patchIdsJson" TEXT NOT NULL DEFAULT '[]',
+    "transitionIdsJson" TEXT NOT NULL DEFAULT '[]',
     "evidenceIdsJson" TEXT NOT NULL DEFAULT '[]',
     "confidenceJson" TEXT NOT NULL DEFAULT '{}',
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "workspaceId" TEXT NOT NULL,
-    "learnerStateId" TEXT NOT NULL,
-    CONSTRAINT "LearnerStateVersion_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "LearnerStateVersion_learnerStateId_fkey" FOREIGN KEY ("learnerStateId") REFERENCES "LearnerState" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "learnerStateCoreId" TEXT NOT NULL,
+    CONSTRAINT "LearnerStateSnapshotVersion_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "LearnerStateSnapshotVersion_core_fkey" FOREIGN KEY ("learnerStateCoreId") REFERENCES "LearnerStateCore" ("id") ON DELETE CASCADE ON UPDATE CASCADE
   )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS "LearnerStateVersion_learnerStateId_version_key" ON "LearnerStateVersion"("learnerStateId", "version")`,
-  `CREATE INDEX IF NOT EXISTS "LearnerStateVersion_workspaceId_createdAt_idx" ON "LearnerStateVersion"("workspaceId", "createdAt")`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "LearnerStateSnapshotVersion_core_version_key" ON "LearnerStateSnapshotVersion"("learnerStateCoreId", "version")`,
+  `CREATE INDEX IF NOT EXISTS "LearnerStateSnapshotVersion_workspaceId_createdAt_idx" ON "LearnerStateSnapshotVersion"("workspaceId", "createdAt")`,
   `CREATE TABLE IF NOT EXISTS "LearnerEvidence" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "evidenceType" TEXT NOT NULL,
@@ -197,7 +312,7 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS "LearnerEvidence_workspaceId_observedAt_idx" ON "LearnerEvidence"("workspaceId", "observedAt")`,
   `CREATE INDEX IF NOT EXISTS "LearnerEvidence_workspaceId_evidenceType_observedAt_idx" ON "LearnerEvidence"("workspaceId", "evidenceType", "observedAt")`,
   `CREATE INDEX IF NOT EXISTS "LearnerEvidence_sourceType_sourceId_idx" ON "LearnerEvidence"("sourceType", "sourceId")`,
-  `CREATE TABLE IF NOT EXISTS "LearnerStatePatch" (
+  `CREATE TABLE IF NOT EXISTS "LearnerStateTransition" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "status" TEXT NOT NULL DEFAULT 'pending',
     "proposedBy" TEXT NOT NULL DEFAULT 'system',
@@ -211,16 +326,16 @@ const statements = [
     "appliedAt" DATETIME,
     "workspaceId" TEXT NOT NULL,
     "workbenchId" TEXT,
-    "learnerStateId" TEXT,
+    "learnerStateCoreId" TEXT,
     "evidenceId" TEXT,
-    CONSTRAINT "LearnerStatePatch_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT "LearnerStatePatch_workbenchId_fkey" FOREIGN KEY ("workbenchId") REFERENCES "Workbench" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "LearnerStatePatch_learnerStateId_fkey" FOREIGN KEY ("learnerStateId") REFERENCES "LearnerState" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "LearnerStatePatch_evidenceId_fkey" FOREIGN KEY ("evidenceId") REFERENCES "LearnerEvidence" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    CONSTRAINT "LearnerStateTransition_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "LearnerStateTransition_workbenchId_fkey" FOREIGN KEY ("workbenchId") REFERENCES "Workbench" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "LearnerStateTransition_core_fkey" FOREIGN KEY ("learnerStateCoreId") REFERENCES "LearnerStateCore" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "LearnerStateTransition_evidenceId_fkey" FOREIGN KEY ("evidenceId") REFERENCES "LearnerEvidence" ("id") ON DELETE SET NULL ON UPDATE CASCADE
   )`,
-  `CREATE INDEX IF NOT EXISTS "LearnerStatePatch_workspaceId_status_createdAt_idx" ON "LearnerStatePatch"("workspaceId", "status", "createdAt")`,
-  `CREATE INDEX IF NOT EXISTS "LearnerStatePatch_learnerStateId_status_idx" ON "LearnerStatePatch"("learnerStateId", "status")`,
-  `CREATE INDEX IF NOT EXISTS "LearnerStatePatch_evidenceId_idx" ON "LearnerStatePatch"("evidenceId")`,
+  `CREATE INDEX IF NOT EXISTS "LearnerStateTransition_workspaceId_status_createdAt_idx" ON "LearnerStateTransition"("workspaceId", "status", "createdAt")`,
+  `CREATE INDEX IF NOT EXISTS "LearnerStateTransition_core_status_idx" ON "LearnerStateTransition"("learnerStateCoreId", "status")`,
+  `CREATE INDEX IF NOT EXISTS "LearnerStateTransition_evidenceId_idx" ON "LearnerStateTransition"("evidenceId")`,
   `CREATE TABLE IF NOT EXISTS "LearnerMemoryControl" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "workspaceId" TEXT NOT NULL,
@@ -248,4 +363,59 @@ export const ensureLearningStateSchema = async () => {
   for (const statement of statements) {
     await prisma.$executeRawUnsafe(statement);
   }
+  for (const column of [
+    ['schemaVersion', "TEXT NOT NULL DEFAULT 'learning_event.v2'"],
+    ['eventFamily', "TEXT NOT NULL DEFAULT 'unknown'"],
+    ['objectType', 'TEXT'],
+    ['objectId', 'TEXT'],
+    ['sessionId', 'TEXT'],
+    ['idempotencyKey', 'TEXT'],
+    ['metadataJson', "TEXT NOT NULL DEFAULT '{}'"],
+    ['cognitiveSignalsJson', "TEXT NOT NULL DEFAULT '[]'"],
+    ['diagnosticFeaturesJson', "TEXT NOT NULL DEFAULT '{}'"],
+    ['qualityJson', "TEXT NOT NULL DEFAULT '{}'"],
+    ['confidence', 'REAL NOT NULL DEFAULT 0.58'],
+    ['observedAt', 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP']
+  ]) {
+    try {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "LearningEvent" ADD COLUMN "${column[0]}" ${column[1]}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/duplicate column|already exists/i.test(message)) throw error;
+    }
+  }
+  await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "LearningEvent_idempotencyKey_key" ON "LearningEvent"("idempotencyKey")`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LearningEvent_workspaceId_eventFamily_observedAt_idx" ON "LearningEvent"("workspaceId", "eventFamily", "observedAt")`);
+  const schemaId = 'learning-event-schema-v2-global';
+  const now = new Date().toISOString();
+  await prisma.$executeRawUnsafe(
+    `INSERT OR IGNORE INTO "LearningEventSchemaRegistry" ("id","schemaKey","version","status","scope","description","sourceFramework","eventFamiliesJson","dialogueActsJson","cognitiveSignalsJson","schemaJson","governanceJson","createdAt","updatedAt")
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    schemaId,
+    'learning_event',
+    'v2',
+    'active',
+    'global',
+    'Evidence-backed learning event ontology for learner-state, dialogue diagnosis and planning.',
+    'DeepTutor interaction history; ParLD preview-analyze-reason; IntelliCode evidence-backed learner state',
+    JSON.stringify(['navigation','resource','dialogue','assessment','help','self_report','review','planning','production','system','unknown']),
+    JSON.stringify(['question','clarification_request','confusion_statement','hint_request','repair_or_reask','answer_attempt','self_explanation','reflection','planning_request','summary_request','resource_request','feedback_request','confirmation','off_task','learner_utterance']),
+    JSON.stringify(['course_engagement','workbench_engagement','resource_attention','help_seeking','explicit_confusion','repeated_question','hint_dependency','answer_attempt','correct_answer','incorrect_answer','partial_mastery','self_reported_unknown','self_reported_mastery','retrieval_strength','retrieval_difficulty','planning_intent','artifact_production']),
+    JSON.stringify({
+      required: ['workspaceId', 'eventType', 'actor', 'observedAt'],
+      recommended: ['object', 'interaction', 'source.clientEventId'],
+      payloadSchemas: {
+        dialogue: ['sessionId', 'userText', 'assistantText', 'dialogueAct'],
+        assessment: ['answerCorrect', 'score', 'question'],
+        review: ['score', 'concept', 'rating']
+      }
+    }),
+    JSON.stringify({
+      idempotency: ['source.clientEventId', 'interaction.messageId', 'payload.dedupeKey'],
+      qualityWarnings: ['unknown_event_family', 'missing_learning_object', 'missing_interaction_payload', 'no_cognitive_signal'],
+      promotionPolicy: 'Events become learner-state evidence immediately; stable profile changes require repeated or high-confidence evidence.'
+    }),
+    now,
+    now
+  );
 };

@@ -46,10 +46,12 @@ export interface CopyNodeDTO {
 
 export interface SaveGeneratedContentDTO {
   workspaceId: string;
-  targetDir: string;
+  targetDir?: string;
   filename: string;
-  content: string;
+  content: string | Buffer;
   category?: string;
+  mimeType?: string;
+  isBinary?: boolean;
   workbenchId?: string;
   resourceRole?: string;
   resourceType?: string;

@@ -1,7 +1,6 @@
 import crypto from 'crypto';
 import prisma from '../config/db';
 import { FileSystemService } from './fileSystemService';
-import { deepseekService } from './deepseekService';
 import { knowledgeSearchService } from './knowledgeSearchService';
 import { learningRunService } from './learningRunService';
 import { learnerStateAnalyzer } from './learnerStateAnalyzer';
@@ -9,12 +8,14 @@ import { LearnerStateAgentContext, learnerStateContextAdapter } from './learnerS
 import { conversationHistoryService, RetrievedConversationMemory } from './conversationHistoryService';
 import { savedMemoryService } from './savedMemoryService';
 import { memoryExtractorService } from './memoryExtractorService';
+import { findWorkbenchResourceFiles } from './workbenchResourceScope';
+import { aiModelProviderService } from './aiModelProviderService';
 import {
   ClientPanelContext,
   ClientWorkbenchContext,
   workbenchContextService
 } from './contextSystemService';
-import { ContextCapsule, ContextPolicyDecision } from '../types/contextSystem';
+import { ChatSessionAttachmentContext, ContextCapsule, ContextPolicyDecision } from '../types/contextSystem';
 
 type TaskType =
   | 'panel_qa'
@@ -58,6 +59,7 @@ interface BuiltContext {
   savedMemoryContext: string;
   referenceHistoryContext: string;
   retrievedHistory: RetrievedConversationMemory[];
+  chatSessionAttachments: ChatSessionAttachmentContext[];
   capsule: ContextCapsule;
   contextPolicy: ContextPolicyDecision;
   promptPreview: string;
@@ -239,11 +241,18 @@ class ContextService {
       )
     ];
 
-    const fileRecords = workbenchFileIds.length
-      ? await prisma.fileSystemObject.findMany({
-          where: { workspaceId: input.context.workspaceId, id: { in: workbenchFileIds }, nodeType: 'file' }
+    const fileRecords = input.context.workbenchId
+      ? await findWorkbenchResourceFiles({
+          workspaceId: input.context.workspaceId,
+          workbenchId: input.context.workbenchId,
+          take: 12,
+          orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }]
         })
-      : [];
+      : workbenchFileIds.length
+        ? await prisma.fileSystemObject.findMany({
+            where: { workspaceId: input.context.workspaceId, id: { in: workbenchFileIds }, nodeType: 'file' }
+          })
+        : [];
 
     const clientActiveContent = input.context.activeFile?.content;
     const workbenchFiles = await Promise.all(
@@ -308,6 +317,7 @@ class ContextService {
       savedMemoryContext,
       referenceHistoryContext: conversationHistoryService.formatRetrieved(retrievedHistory),
       retrievedHistory,
+      chatSessionAttachments: (input.context.chatSessionAttachments || []) as ChatSessionAttachmentContext[],
       capsule: capsuleResult.capsule,
       contextPolicy: capsuleResult.policy,
       promptPreview: capsuleResult.promptPreview
@@ -580,9 +590,9 @@ class ExplainAgent {
       })
       .join('\n\n');
 
-    if (!deepseekService.isConfigured()) {
+    if (!aiModelProviderService.isConfigured({ useCase: 'chat' })) {
       return [
-        '当前后端未配置 DeepSeek API，我先基于已采集到的上下文给出资料型回答：',
+        '当前后端未配置可用的 AI 模型服务，我先基于已采集到的上下文给出资料型回答：',
         '',
         input.retrievedChunks.length
           ? clip(input.retrievedChunks[0].content, 900)
@@ -626,7 +636,10 @@ class ExplainAgent {
       `资料片段:\n${sourceText || '无可用资料片段'}`
     ].join('\n');
 
-    const response = await deepseekService.chat([{ role: 'user', content: prompt }]);
+    const response = await aiModelProviderService.chat([{ role: 'user', content: prompt }], {
+      useCase: 'chat',
+      attachments: input.context.chatSessionAttachments
+    });
     return response.reply;
   }
 
@@ -636,7 +649,7 @@ class ExplainAgent {
     context: BuiltContext;
     retrievedChunks: RetrievedChunk[];
   }): AsyncGenerator<string> {
-    if (!deepseekService.isConfigured()) {
+    if (!aiModelProviderService.isConfigured({ useCase: 'chat' })) {
       yield await this.answer(input);
       return;
     }
@@ -683,7 +696,10 @@ class ExplainAgent {
       `资料片段:\n${sourceText || '无可用资料片段'}`
     ].join('\n');
 
-    for await (const delta of deepseekService.chatStream([{ role: 'user', content: prompt }])) {
+    for await (const delta of aiModelProviderService.chatStream([{ role: 'user', content: prompt }], {
+      useCase: 'chat',
+      attachments: input.context.chatSessionAttachments
+    })) {
       yield delta;
     }
   }
@@ -925,7 +941,9 @@ export class MultiAgentOrchestrator {
         },
         quality,
         profile: updatedProfile,
-        model: deepseekService.isConfigured() ? process.env.DEEPSEEK_MODEL || 'deepseek-chat' : 'local-context-fallback',
+        model: aiModelProviderService.isConfigured({ useCase: 'chat' })
+          ? aiModelProviderService.model(aiModelProviderService.provider({ useCase: 'chat' }), undefined, 'chat')
+          : 'local-context-fallback',
         usage: null
       };
     } catch (error) {
@@ -1002,7 +1020,9 @@ export class MultiAgentOrchestrator {
           sources: context.capsule.sourceMap?.length || 0,
           sourceConfidence: sourceConfidenceSummary(context)
         },
-        model: deepseekService.isConfigured() ? process.env.DEEPSEEK_MODEL || 'deepseek-chat' : 'local-context-fallback',
+        model: aiModelProviderService.isConfigured({ useCase: 'chat' })
+          ? aiModelProviderService.model(aiModelProviderService.provider({ useCase: 'chat' }), undefined, 'chat')
+          : 'local-context-fallback',
         usage: null
       });
       emit('timeline', logger.getTimeline());
@@ -1176,7 +1196,9 @@ export class MultiAgentOrchestrator {
         },
         quality,
         profile: updatedProfile,
-        model: deepseekService.isConfigured() ? process.env.DEEPSEEK_MODEL || 'deepseek-chat' : 'local-context-fallback',
+        model: aiModelProviderService.isConfigured({ useCase: 'chat' })
+          ? aiModelProviderService.model(aiModelProviderService.provider({ useCase: 'chat' }), undefined, 'chat')
+          : 'local-context-fallback',
         usage: null
       };
 

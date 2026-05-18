@@ -6,6 +6,10 @@ import {
   workbenchContextService
 } from './contextSystemService';
 import { ContextCapsule, ContextPolicyDecision } from '../types/contextSystem';
+import { buildWorkbenchResourceWhere } from './workbenchResourceScope';
+import { learningEventDiagnosticsService } from './learningEventDiagnosticsService';
+import { courseKnowledgeGraphService } from './courseKnowledgeGraphService';
+import { courseKnowledgeReasoningService } from './courseKnowledgeReasoningService';
 
 export interface MclLearningState {
   workspace: {
@@ -18,7 +22,6 @@ export interface MclLearningState {
     id: string;
     title: string;
     description: string;
-    rootPath?: string | null;
   } | null;
   learnerProfile: {
     id?: string;
@@ -94,10 +97,17 @@ export interface MclLearningState {
   recentEvents: Array<{
     id: string;
     eventType: string;
+    eventFamily: string;
     actor: string;
     payload: Record<string, unknown>;
+    cognitiveSignals: unknown[];
+    diagnosticFeatures: Record<string, unknown>;
+    quality: Record<string, unknown>;
+    observedAt: string;
     createdAt: string;
   }>;
+  eventDiagnostics?: Record<string, unknown>;
+  courseKnowledgeGraph?: Record<string, unknown>;
   readiness: {
     ready: boolean;
     stats: {
@@ -161,7 +171,14 @@ export class LearningStateBuilder {
       : null;
 
     const goalId = input.goalId || workbench?.learningGoalId || null;
-    const [goal, profile, activePlan, recentTraces, recentEvents, fileCount, indexedFiles, chunkCount, goalCount, traceCount, runCount] =
+    const resourceScopeWhere = input.workbenchId
+      ? buildWorkbenchResourceWhere({
+          workspaceId: input.workspaceId,
+          workbenchId: input.workbenchId
+        })
+      : { workspaceId: input.workspaceId, nodeType: 'file' };
+
+    const [goal, profile, activePlan, recentTraces, recentEvents, eventDiagnostics, courseKnowledgeGraphBase, courseKnowledgeReasoning, fileCount, indexedFiles, chunkCount, goalCount, traceCount, runCount] =
       await Promise.all([
         goalId
           ? prisma.learningGoal.findFirst({ where: { id: goalId, workspaceId: input.workspaceId } })
@@ -197,12 +214,33 @@ export class LearningStateBuilder {
           orderBy: { createdAt: 'desc' },
           take: 8
         }),
-        prisma.fileSystemObject.count({ where: { workspaceId: input.workspaceId, nodeType: 'file' } }),
+        learningEventDiagnosticsService.summarize({
+          workspaceId: input.workspaceId,
+          workbenchId: input.workbenchId || null,
+          goalId,
+          days: 30,
+          limit: 120
+        }).catch(() => undefined),
+        courseKnowledgeGraphService.getGraph({ workspaceId: input.workspaceId, limit: 80 }).catch(() => undefined),
+        Promise.all([
+          courseKnowledgeReasoningService.getPrerequisiteGaps({ workspaceId: input.workspaceId }).catch(() => []),
+          courseKnowledgeReasoningService.expandWeakNeighborhood({ workspaceId: input.workspaceId, limit: 30 }).catch(() => ({ seeds: [], neighbors: [] }))
+        ]).then(([prerequisiteGaps, weakNeighborhood]) => ({ prerequisiteGaps, weakNeighborhood })).catch(() => undefined),
+        prisma.fileSystemObject.count({ where: resourceScopeWhere as any }),
         prisma.knowledgeIndexJob.groupBy({
           by: ['fileObjectId'],
-          where: { workspaceId: input.workspaceId, status: 'completed' }
+          where: {
+            workspaceId: input.workspaceId,
+            status: 'completed',
+            fileObject: resourceScopeWhere as any
+          } as any
         }),
-        prisma.knowledgeChunk.count({ where: { workspaceId: input.workspaceId } }),
+        prisma.knowledgeChunk.count({
+          where: {
+            workspaceId: input.workspaceId,
+            fileObject: resourceScopeWhere as any
+          } as any
+        }),
         prisma.learningGoal.count({ where: { workspaceId: input.workspaceId } }),
         prisma.learningTrace.count({ where: { workspaceId: input.workspaceId } }),
         prisma.learningRun.count({ where: { workspaceId: input.workspaceId } })
@@ -269,8 +307,7 @@ export class LearningStateBuilder {
           ? {
               id: workbench.id,
               title: workbench.title || workbench.name,
-              description: workbench.description || '',
-              rootPath: workbench.rootPath
+              description: workbench.description || ''
             }
           : null,
         learnerProfile: {
@@ -351,10 +388,19 @@ export class LearningStateBuilder {
         recentEvents: recentEvents.map((event: typeof recentEvents[number]) => ({
           id: event.id,
           eventType: event.eventType,
+          eventFamily: event.eventFamily,
           actor: event.actor,
           payload: parseJson<Record<string, unknown>>(event.payloadJson, {}),
+          cognitiveSignals: parseJson<unknown[]>(event.cognitiveSignalsJson, []),
+          diagnosticFeatures: parseJson<Record<string, unknown>>(event.diagnosticFeaturesJson, {}),
+          quality: parseJson<Record<string, unknown>>(event.qualityJson, {}),
+          observedAt: event.observedAt.toISOString(),
           createdAt: event.createdAt.toISOString()
         })),
+        eventDiagnostics,
+        courseKnowledgeGraph: courseKnowledgeGraphBase
+          ? { ...courseKnowledgeGraphBase, reasoning: courseKnowledgeReasoning }
+          : undefined,
         readiness: {
           ready: checks.every((check) => check.ok),
           checks,

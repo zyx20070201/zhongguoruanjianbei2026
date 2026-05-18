@@ -45,6 +45,16 @@ export class LocalStorageService {
     return { storageKey, size: stats.size };
   }
 
+  static async saveBuffer(content: Buffer, existingStorageKey?: string): Promise<{ storageKey: string, size: number }> {
+    const storageKey = existingStorageKey || crypto.randomBytes(16).toString('hex');
+    const destPath = path.join(UPLOAD_DIR, storageKey);
+
+    await fs.writeFile(destPath, content);
+    const stats = await fs.stat(destPath);
+
+    return { storageKey, size: stats.size };
+  }
+
   /**
    * Copy an existing stored file to a new storage key.
    */

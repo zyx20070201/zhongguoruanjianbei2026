@@ -3,12 +3,13 @@ import ReactDOM from 'react-dom/client';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import './index.css';
 import Layout from './components/Layout';
+import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
 import WorkspaceListPage from './pages/WorkspaceListPage';
 import WorkspaceDetailPage from './pages/WorkspaceDetailPage';
+import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
 import WorkbenchPage from './pages/WorkbenchPage';
 import { ThemeProvider } from './theme';
-import { AppPreferencesProvider } from './appPreferences';
 
 const router = createBrowserRouter([
   {
@@ -16,9 +17,15 @@ const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { path: '/', element: <LoginPage /> },
-      { path: '/workspaces', element: <WorkspaceListPage /> },
-      { path: '/workspaces/:id', element: <WorkspaceDetailPage /> },
-      { path: '/workbenches/:id', element: <WorkbenchPage /> },
+      {
+        element: <ProtectedRoute />,
+        children: [
+          { path: '/workspaces', element: <WorkspaceListPage /> },
+          { path: '/workspaces/:id', element: <WorkspaceDetailPage /> },
+          { path: '/workspaces/:id/knowledge-graph', element: <KnowledgeGraphPage /> },
+          { path: '/workbenches/:id', element: <WorkbenchPage /> }
+        ]
+      }
     ],
   },
 ]);
@@ -26,9 +33,7 @@ const router = createBrowserRouter([
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ThemeProvider>
-      <AppPreferencesProvider>
-        <RouterProvider router={router} />
-      </AppPreferencesProvider>
+      <RouterProvider router={router} />
     </ThemeProvider>
   </React.StrictMode>
 );

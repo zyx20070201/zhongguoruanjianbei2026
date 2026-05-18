@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Plus, Search, X } from 'lucide-react';
 import { workspaceApi } from '../api/client';
 import { fileSystemApi } from '../services/fileSystemApi';
 import { useAuthStore } from '../store/authStore';
@@ -34,7 +35,7 @@ export default function WorkspaceListPage() {
     if (!user) return;
     setLoading(true);
     try {
-      const data = await workspaceApi.getWorkspaces(user.id);
+      const data = await workspaceApi.getWorkspaces();
       setWorkspaces(data);
     } catch (error) {
       console.error('Failed to load workspaces:', error);
@@ -61,8 +62,7 @@ export default function WorkspaceListPage() {
       const newWs = await workspaceApi.createWorkspace({
         name: formData.courseName,
         description: formData.description || '',
-        major: formData.major,
-        userId: user.id,
+        major: ''
       });
       
       setIsWizardOpen(false);
@@ -140,7 +140,7 @@ export default function WorkspaceListPage() {
       await workspaceApi.updateWorkspace(editingWorkspace.id, {
         name: editForm.name.trim(),
         description: editForm.description.trim(),
-        major: editForm.major.trim()
+        major: ''
       });
       setEditingWorkspace(null);
       await loadWorkspaces();
@@ -177,6 +177,8 @@ export default function WorkspaceListPage() {
     ]
       .map(value => new Date(value).getTime())
       .filter(value => !Number.isNaN(value));
+
+    if (timestamps.length === 0) return ws.updatedAt || ws.createdAt || new Date().toISOString();
 
     return new Date(Math.max(...timestamps)).toISOString();
   };
@@ -242,45 +244,59 @@ export default function WorkspaceListPage() {
     <div className="workspace-shell min-h-screen bg-[#fbfbfa] p-6 text-[#202124] md:p-8">
       <div className="mx-auto max-w-7xl">
       
-      <DashboardHeader 
-        searchTerm={searchTerm}
-        currentSort={sort}
-        onSearch={setSearchTerm}
-        onSortChange={setSort}
-        onCreateNew={() => setIsWizardOpen(true)}
-        onLogout={() => {
-          logout();
-          navigate('/', { replace: true });
-        }}
-      />
+        <DashboardHeader
+          searchTerm={searchTerm}
+          currentSort={sort}
+          onSearch={setSearchTerm}
+          onSortChange={setSort}
+          onCreateNew={() => setIsWizardOpen(true)}
+          onLogout={() => {
+            void logout().then(() => navigate('/', { replace: true }));
+          }}
+        />
 
-      <div className="workspace-card mb-6 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-[#34373c]">Recent</h2>
-        <span className="text-sm text-[#8a8d91]">{processedWorkspaces.length}</span>
-      </div>
+        <div className="workspace-page-enter mb-6 flex items-end gap-4" style={{ animationDelay: '70ms' }}>
+          <h2 className="text-3xl font-semibold tracking-normal text-[#202124]">My workspaces</h2>
+          <span className="pb-0.5 text-3xl font-semibold leading-none text-[#202124]">{processedWorkspaces.length}</span>
+        </div>
 
       {workspaces.length === 0 ? (
-        <div className="workspace-composer mx-auto max-w-xl rounded-[28px] border border-[#deded9] bg-white px-8 py-12 text-center shadow-[0_24px_70px_rgba(0,0,0,0.08)]">
+        <div className="workspace-page-enter mx-auto max-w-xl rounded-[28px] border border-[#deded9] bg-white px-8 py-12 text-center shadow-[0_24px_70px_rgba(0,0,0,0.08)]" style={{ animationDelay: '140ms' }}>
           <h3 className="mb-6 text-2xl font-semibold text-[#202124]">Create your first workspace</h3>
           <button 
             onClick={() => setIsWizardOpen(true)}
             className="inline-flex items-center gap-2 rounded-2xl bg-[#202124] px-5 py-3 text-sm font-medium text-white transition hover:bg-black"
           >
-            <span>+</span> New workspace
+            <span>+</span> Create new workspace
           </button>
         </div>
       ) : processedWorkspaces.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-[#deded9] bg-white py-12 text-center">
-          <p className="mb-4 text-[#777b80]">No matching workspaces.</p>
-          <button 
-            onClick={() => { setSearchTerm(''); }}
-            className="font-medium text-[#202124] hover:underline"
-          >
-            Clear search
-          </button>
+        <div className="workspace-page-enter flex min-h-[420px] items-center justify-center rounded-3xl bg-[#f6f8fc] px-6 py-16 text-center" style={{ animationDelay: '140ms' }}>
+          <div>
+            <Search className="mx-auto mb-6 h-16 w-16 stroke-[1.8] text-[#3c4043]" />
+            <h3 className="text-3xl font-normal text-[#202124]">No workspaces found</h3>
+            <p className="mt-4 text-lg text-[#5f6368]">Try searching for a different course title, major, or description</p>
+            <button
+              onClick={() => { setSearchTerm(''); }}
+              className="mt-8 rounded-full border border-[#d9dce1] bg-white px-7 py-3 text-base font-semibold text-[#202124] shadow-sm transition hover:bg-[#f6f7f8]"
+            >
+              Clear search
+            </button>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-5 pb-12 md:grid-cols-2 lg:grid-cols-3">
+          <button
+            type="button"
+            onClick={() => setIsWizardOpen(true)}
+            className="workspace-page-enter workspace-list-item flex min-h-[220px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-[#e4e6eb] bg-white text-center shadow-sm transition hover:-translate-y-0.5 hover:border-[#d6dae3] hover:shadow-[0_18px_44px_rgba(60,64,67,0.08)]"
+            style={{ animationDelay: '140ms' }}
+          >
+            <span className="flex h-20 w-20 items-center justify-center rounded-full bg-[#f1f3f4] text-[#5f6368]">
+              <Plus className="h-9 w-9" />
+            </span>
+            <span className="mt-5 text-xl font-semibold text-[#202124]">Create new workspace</span>
+          </button>
           {processedWorkspaces.map((ws, index) => (
             <WorkspaceCard 
               key={ws.id}
@@ -289,7 +305,7 @@ export default function WorkspaceListPage() {
               onEdit={handleEdit}
               onDuplicate={handleDuplicate}
               onDelete={handleDelete}
-              style={{ animationDelay: `${index * 60}ms` }}
+              style={{ animationDelay: `${180 + index * 70}ms` }}
             />
           ))}
         </div>
@@ -303,54 +319,67 @@ export default function WorkspaceListPage() {
 
       {editingWorkspace && (
         <div
-          className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
           onClick={() => setEditingWorkspace(null)}
         >
           <form
-          className="workspace-composer w-full max-w-lg rounded-[24px] border border-[#deded9] bg-white p-6 shadow-xl"
+            className="workspace-modal-enter w-full max-w-xl rounded-[22px] bg-[#fafafa] px-8 py-8 shadow-[0_28px_90px_rgba(60,64,67,0.24)]"
             onSubmit={handleSaveEdit}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="mb-4 text-lg font-semibold text-[#202124]">Edit workspace</h2>
-            <label className="mb-1 block text-sm font-medium text-[#34373c]" htmlFor="workspace-name">
-              Name
-            </label>
-            <input
-              id="workspace-name"
-              value={editForm.name}
-              onChange={(e) => setEditForm(form => ({ ...form, name: e.target.value }))}
-              className="mb-4 w-full rounded-xl border border-[#deded9] px-3 py-2 text-sm outline-none focus:border-[#c8c8c2]"
-              required
-            />
-            <label className="mb-1 block text-sm font-medium text-[#34373c]" htmlFor="workspace-major">
-              Major
-            </label>
-            <input
-              id="workspace-major"
-              value={editForm.major}
-              onChange={(e) => setEditForm(form => ({ ...form, major: e.target.value }))}
-              className="mb-4 w-full rounded-xl border border-[#deded9] px-3 py-2 text-sm outline-none focus:border-[#c8c8c2]"
-            />
-            <label className="mb-1 block text-sm font-medium text-[#34373c]" htmlFor="workspace-description">
-              Description
-            </label>
-            <textarea
-              id="workspace-description"
-              value={editForm.description}
-              onChange={(e) => setEditForm(form => ({ ...form, description: e.target.value }))}
-              className="mb-6 min-h-28 w-full rounded-xl border border-[#deded9] px-3 py-2 text-sm outline-none focus:border-[#c8c8c2]"
-            />
-            <div className="flex justify-end gap-2">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="text-2xl font-semibold tracking-normal text-[#202124]">Edit workspace</h2>
+              </div>
               <button
                 type="button"
                 onClick={() => setEditingWorkspace(null)}
-                className="rounded-xl border border-[#deded9] px-4 py-2 text-sm text-[#34373c] hover:bg-[#f6f6f4]"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[#7d8188] transition hover:bg-[#f1f3f4] hover:text-[#3c4043]"
+                title="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-10 space-y-7">
+              <div className="relative">
+                <input
+                  id="workspace-name"
+                  value={editForm.name}
+                  onChange={(e) => setEditForm(form => ({ ...form, name: e.target.value }))}
+                  className="peer h-14 w-full rounded-[6px] border border-[#cfd4dc] bg-transparent px-4 text-base text-[#202124] outline-none transition-[border,box-shadow] duration-200 placeholder:text-transparent focus:border-[#1a73e8] focus:border-2"
+                  placeholder="Workspace name"
+                  required
+                />
+                <label className="pointer-events-none absolute -top-2 left-3 bg-[#fafafa] px-1 text-xs font-medium text-[#5f6368] transition-colors peer-focus:text-[#1a73e8]" htmlFor="workspace-name">
+                  Workspace name *
+                </label>
+              </div>
+              <div className="relative">
+                <textarea
+                  id="workspace-description"
+                  value={editForm.description}
+                  onChange={(e) => setEditForm(form => ({ ...form, description: e.target.value }))}
+                  className="peer min-h-32 w-full resize-none rounded-[6px] border border-[#cfd4dc] bg-transparent px-4 py-4 text-sm leading-6 text-[#202124] outline-none transition-[border,box-shadow] duration-200 placeholder:text-transparent focus:border-[#1a73e8] focus:border-2"
+                  placeholder="Description"
+                />
+                <label className="pointer-events-none absolute -top-2 left-3 bg-[#fafafa] px-1 text-xs font-medium text-[#5f6368] transition-colors peer-focus:text-[#1a73e8]" htmlFor="workspace-description">
+                  Description
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-10 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setEditingWorkspace(null)}
+                className="rounded-full border border-[#d9dfe8] bg-white px-7 py-3 text-sm font-semibold text-[#202124] transition hover:bg-[#f6f7f8]"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="rounded-xl bg-[#202124] px-4 py-2 text-sm text-white hover:bg-black"
+                className="flex h-12 items-center gap-2 rounded-full bg-[#4357ff] px-7 text-sm font-semibold text-white shadow-sm transition hover:bg-[#3347f4]"
               >
                 Save
               </button>

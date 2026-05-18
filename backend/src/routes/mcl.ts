@@ -20,7 +20,8 @@ router.post('/execute', async (req: Request, res: Response) => {
     capability,
     capabilityInput,
     context,
-    previousPlan
+    previousPlan,
+    sync
   } = req.body ?? {};
 
   if (!workspaceId || typeof workspaceId !== 'string') {
@@ -43,7 +44,7 @@ router.post('/execute', async (req: Request, res: Response) => {
       previousPlan: previousPlan && typeof previousPlan === 'object' ? previousPlan : undefined
     };
     const resolvedIntent = typeof intent === 'string' ? intent : undefined;
-    const result = resolvedIntent === 'planning'
+    const result = resolvedIntent === 'planning' && !sync
       ? await mclOrchestrator.startPlanningRun(input)
       : await mclOrchestrator.execute(input);
     return res.json(result);

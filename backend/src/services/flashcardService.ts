@@ -1,7 +1,8 @@
 import prisma from '../config/db';
-import { deepseekService } from './deepseekService';
+import { aiModelProviderService } from './aiModelProviderService';
 import { learningMemoryService } from './learningMemoryService';
 import { learnerStateAnalyzer } from './learnerStateAnalyzer';
+import { learningEventCollectionService } from './learningEventCollectionService';
 
 export type FlashcardRating = 'again' | 'hard' | 'good' | 'easy';
 
@@ -358,6 +359,12 @@ export class FlashcardService {
       workbenchId: card.workbenchId,
       eventType: 'flashcard.reviewed',
       actor: 'user',
+      object: { type: 'flashcard', id: card.id, title: card.front.slice(0, 120) },
+      interaction: {
+        markedUnknown: input.rating === 'again' || input.rating === 'hard',
+        markedMastered: input.rating === 'easy',
+        score: input.rating === 'again' ? 0.25 : input.rating === 'hard' ? 0.45 : input.rating === 'good' ? 0.72 : 0.86
+      },
       payload: {
         cardId: card.id,
         deckId: card.deckId,
@@ -368,6 +375,30 @@ export class FlashcardService {
         state: next.state
       }
     });
+    if (input.rating === 'again' || input.rating === 'hard') {
+      await learningEventCollectionService.collect({
+        workspaceId: input.workspaceId,
+        workbenchId: card.workbenchId,
+        eventType: 'learner.marked_unknown',
+        actor: 'user',
+        object: { type: 'flashcard', id: card.id, title: card.concept || card.front.slice(0, 120) },
+        interaction: { markedUnknown: true, score: input.rating === 'again' ? 0.25 : 0.45 },
+        payload: { concept: card.concept, rating: input.rating, source: 'flashcard_review' },
+        confidence: 0.76
+      }).catch((error) => console.warn('Learning event collection marked_unknown failed:', error));
+    }
+    if (input.rating === 'easy') {
+      await learningEventCollectionService.collect({
+        workspaceId: input.workspaceId,
+        workbenchId: card.workbenchId,
+        eventType: 'learner.marked_mastered',
+        actor: 'user',
+        object: { type: 'flashcard', id: card.id, title: card.concept || card.front.slice(0, 120) },
+        interaction: { markedMastered: true, score: 0.86 },
+        payload: { concept: card.concept, rating: input.rating, source: 'flashcard_review' },
+        confidence: 0.72
+      }).catch((error) => console.warn('Learning event collection marked_mastered failed:', error));
+    }
     await learnerStateAnalyzer.analyzeFlashcardReview({
       workspaceId: input.workspaceId,
       workbenchId: card.workbenchId,
@@ -387,7 +418,7 @@ export class FlashcardService {
     const card = await prisma.flashcard.findFirst({ where: { id: input.cardId, workspaceId: input.workspaceId } });
     if (!card) throw new Error('Flashcard not found');
     const sourceRefs = parseJson<FlashcardSourceRef[]>(card.sourceRefsJson, []);
-    if (!deepseekService.isConfigured()) {
+    if (!aiModelProviderService.isConfigured({ useCase: 'flashcard' })) {
       return {
         reply: card.explanation || `这张卡考察「${card.concept || card.front}」。答案要点是：${card.back}`,
         sourceRefs,
@@ -395,7 +426,8 @@ export class FlashcardService {
       };
     }
 
-    const response = await deepseekService.json<{ reply: string; suggestedFollowUps?: string[] }>({
+    const response = await aiModelProviderService.json<{ reply: string; suggestedFollowUps?: string[] }>({
+      useCase: 'flashcard',
       instruction: [
         '你是 source-grounded flashcard tutor。',
         '只围绕这一张卡解释，回答要简洁、教学化、可用于复习。',
@@ -420,7 +452,7 @@ export class FlashcardService {
       reply: response.data.reply || card.explanation || card.back,
       suggestedFollowUps: response.data.suggestedFollowUps || [],
       sourceRefs,
-      explainedBy: 'deepseek'
+      explainedBy: response.provider
     };
   }
 }

@@ -1,9 +1,54 @@
 import client from '../api/client';
 
+const STUDIO_READ_TIMEOUT_MS = 45000;
+const STUDIO_GENERATE_TIMEOUT_MS = 420000;
+const STUDIO_JUDGE_TIMEOUT_MS = 90000;
+
 export interface AiChatMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt?: string;
+}
+
+export type AiChatAttachmentKind = 'text' | 'image' | 'pdf' | 'document' | 'file';
+
+export interface AiChatAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: AiChatAttachmentKind;
+  createdAt: string;
+  textContent?: string;
+  dataUrl?: string;
+  base64Data?: string;
+  fileObjectId?: string;
+  savedToWorkbench?: boolean;
+  status?: 'ready' | 'metadata_only' | 'error';
+  error?: string;
+}
+
+export type AiWelcomeActionIcon =
+  | 'summary'
+  | 'translate'
+  | 'analysis'
+  | 'task'
+  | 'outline'
+  | 'question'
+  | 'compare'
+  | 'search'
+  | 'practice'
+  | 'plan';
+
+export interface AiWelcomeSuggestion {
+  label: string;
+  icon: AiWelcomeActionIcon;
+}
+
+export interface AiWelcomeContent {
+  greeting: string;
+  actions: AiWelcomeSuggestion[];
+  generatedAt?: string;
 }
 
 export type AiContextMode =
@@ -21,6 +66,148 @@ export type AiStudioResourceType =
   | 'flashcards'
   | 'quiz'
   | 'data_table';
+
+export type AiStudioGoalCategory =
+  | 'understand'
+  | 'map'
+  | 'practice'
+  | 'review'
+  | 'lab'
+  | 'visualize'
+  | 'plan';
+
+export type AiStudioGeneratorKind =
+  | 'text'
+  | 'structure'
+  | 'assessment'
+  | 'memory'
+  | 'code_lab'
+  | 'multimodal'
+  | 'planning'
+  | 'review';
+
+export interface AiStudioGoalInfo {
+  id: AiStudioGoalCategory;
+  zh: string;
+  en: string;
+  description: string;
+}
+
+export interface AiStudioTemplate {
+  id: string;
+  version?: string;
+  goal: AiStudioGoalCategory;
+  title: string;
+  shortTitle?: string;
+  description: string;
+  generator: AiStudioGeneratorKind;
+  renderer: string;
+  format: 'md' | 'json' | 'csv';
+  filename: string;
+  outputLabel: string;
+  recommendedUse?: string;
+  tags?: string[];
+  legacyResourceType?: AiStudioResourceType;
+}
+
+export interface AiStudioRecommendation {
+  id: string;
+  goal: AiStudioGoalCategory;
+  templateId: string;
+  title: string;
+  reason: string;
+  priority: number;
+  evidence: string[];
+  actions: Array<{ id: string; label: string; templateId: string; goal: AiStudioGoalCategory }>;
+}
+
+export interface AiStudioPracticeNext {
+  templateId: string;
+  goal: 'practice';
+  title: string;
+  reason: string;
+  priority: number;
+  evidence: string[];
+  focusConcepts: string[];
+  preferredDifficulty: 'easy' | 'medium' | 'hard' | 'adaptive';
+  mastery?: {
+    averageScore: number;
+    attemptedCount: number;
+    correctCount: number;
+    weakConcepts: string[];
+    masteredConcepts: string[];
+    needsRemediation: boolean;
+  };
+}
+
+export interface AiStudioWorkflowTraceItem {
+  id: string;
+  agent: string;
+  title: string;
+  status: 'completed' | 'failed';
+  summary: string;
+  details?: Record<string, unknown>;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+}
+
+export interface AiStudioReviewReport {
+  score: number;
+  warnings: string[];
+  checks?: Array<{ id: string; label: string; passed: boolean; severity: string; message: string }>;
+  metrics?: Record<string, number>;
+  passed: boolean;
+  summary: string;
+}
+
+export interface AiStudioArtifactSummary {
+  id: string;
+  artifactKey: string;
+  title: string;
+  summary?: string;
+  goal?: string;
+  templateId: string;
+  templateVersion: string;
+  status?: string;
+  renderer?: string;
+  schemaVersion: string;
+  updatedAt?: string;
+}
+
+export interface AiStudioDeliveryArtifact {
+  kind: 'markdown' | 'pptx' | 'html' | 'python' | 'tsx';
+  filename: string;
+  mimeType: string;
+  fileObjectId: string;
+  path: string;
+  framework?: string;
+  previewContent?: string;
+}
+
+export interface AiStudioRenderJob {
+  id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | string;
+  stage: string;
+  progress: number;
+  templateId?: string;
+  renderer?: string;
+  framework?: string | null;
+  kind: string;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  logs?: string[];
+  error?: string | null;
+  workspaceId?: string;
+  workbenchId?: string | null;
+  artifactId?: string | null;
+  sourceFileObjectId?: string | null;
+  outputFileObjectId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
 
 export interface AiContextChipPayload {
   id: string;
@@ -72,6 +259,7 @@ export interface AiChatContext {
   liveContextVersion?: number;
   liveContextUpdatedAt?: string;
   contextMode?: AiContextMode;
+  sourcePriority?: 'selected_resources' | 'active_context' | 'mixed';
   activeContextChips?: AiContextChipPayload[];
   activePanelId?: string | null;
   activeFileId?: string | null;
@@ -80,6 +268,11 @@ export interface AiChatContext {
     name?: string;
     path?: string;
     content?: string;
+    fileCategory?: string;
+    resourceType?: string;
+    scope?: string;
+    origin?: string;
+    ownerWorkbenchId?: string;
   } | null;
   activeExternal?: {
     title?: string;
@@ -93,6 +286,11 @@ export interface AiChatContext {
     fileId?: string | null;
     fileName?: string;
     filePath?: string;
+    fileCategory?: string;
+    resourceType?: string;
+    scope?: string;
+    origin?: string;
+    ownerWorkbenchId?: string;
     visiblePages?: number[];
     primaryPage?: number;
     visibleLineRange?: { start: number; end: number } | null;
@@ -120,6 +318,8 @@ export interface AiChatContext {
       grounded?: boolean;
     };
   }>;
+  chatSessionAttachments?: AiChatAttachment[];
+  selectedResourceIds?: string[];
   selectedText?: string;
   recentMessages?: AiChatMessage[];
 }
@@ -234,6 +434,16 @@ export interface AiSourceInspectorItem {
   includedInPrompt: boolean;
 }
 
+export type AiNoteEditAction =
+  | 'proofread'
+  | 'improve'
+  | 'explain'
+  | 'reformat'
+  | 'shorten'
+  | 'expand'
+  | 'summarize'
+  | 'outline';
+
 export interface AiStreamResult {
   reply: string;
   model?: string;
@@ -283,6 +493,13 @@ const parseSseBlock = (block: string) => {
 };
 
 export const aiApi = {
+  chatWelcome: async (payload: {
+    context?: AiChatContext;
+  }): Promise<AiWelcomeContent> => {
+    const response = await client.post('/ai/chat/welcome', payload, { timeout: 10000 });
+    return response.data;
+  },
+
   chat: async (payload: {
     messages: AiChatMessage[];
     context?: AiChatContext;
@@ -371,26 +588,148 @@ export const aiApi = {
     return finalResult;
   },
 
+  editNoteSelection: async (payload: {
+    workspaceId: string;
+    workbenchId?: string | null;
+    action: AiNoteEditAction;
+    file: { id?: string; name?: string; path?: string };
+    selection: { text: string; surroundingText?: string; locator?: Record<string, unknown> };
+    documentContext?: { title?: string; nearbyHeadings?: string[]; visibleContent?: string };
+  }): Promise<{
+    replacement: string;
+    summary: string;
+    warnings?: string[];
+    model?: string;
+    provider?: string;
+    usage?: Record<string, unknown> | null;
+  }> => {
+    const response = await client.post('/ai/note-edit', payload, { timeout: 60000 });
+    return response.data;
+  },
+
+  listStudioTemplates: async (payload?: {
+    goal?: AiStudioGoalCategory;
+  }): Promise<{ goals: AiStudioGoalInfo[]; templates: AiStudioTemplate[] }> => {
+    const response = await client.get('/studio/templates', {
+      params: payload || {},
+      timeout: STUDIO_READ_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
+  getStudioVisualizationIrSchema: async (): Promise<{ schemaVersion: string; schema: Record<string, unknown> }> => {
+    const response = await client.get('/studio/visualization-ir/schema', {
+      timeout: STUDIO_READ_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
+  recommendStudioResources: async (payload: {
+    workspaceId: string;
+    workbenchId?: string;
+    goal?: AiStudioGoalCategory;
+    context: AiChatContext;
+  }): Promise<{
+    recommendations: AiStudioRecommendation[];
+    signals: Record<string, boolean>;
+    features?: Record<string, number | boolean>;
+    learnerContextPreview?: string;
+  }> => {
+    const response = await client.post('/studio/recommend', payload, {
+      timeout: STUDIO_READ_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
+  listStudioArtifacts: async (payload: {
+    workspaceId: string;
+    workbenchId?: string;
+    limit?: number;
+  }): Promise<{ artifacts: AiStudioArtifactSummary[] }> => {
+    const response = await client.get('/studio/artifacts', {
+      params: payload,
+      timeout: STUDIO_READ_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
+  getStudioRenderCapabilities: async (): Promise<Record<string, unknown>> => {
+    const response = await client.get('/studio/render-capabilities', {
+      timeout: STUDIO_READ_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
+  listStudioRenderJobs: async (payload: {
+    workspaceId: string;
+    workbenchId?: string;
+    sourceFileObjectId?: string;
+    limit?: number;
+  }): Promise<{ jobs: AiStudioRenderJob[] }> => {
+    const response = await client.get('/studio/render-jobs', {
+      params: payload,
+      timeout: STUDIO_READ_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
+  getStudioRenderJob: async (workspaceId: string, id: string): Promise<AiStudioRenderJob> => {
+    const response = await client.get(`/studio/render-jobs/${id}`, {
+      params: { workspaceId },
+      timeout: STUDIO_READ_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
+  retryStudioRenderJob: async (workspaceId: string, id: string): Promise<AiStudioRenderJob> => {
+    const response = await client.post(`/studio/render-jobs/${id}/retry`, { workspaceId }, {
+      timeout: STUDIO_GENERATE_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
   generateStudioResource: async (payload: {
     workspaceId: string;
     workbenchId?: string;
-    resourceType: AiStudioResourceType;
+    resourceType?: AiStudioResourceType;
+    goal?: AiStudioGoalCategory;
+    templateId?: string;
     prompt?: string;
     options?: Record<string, unknown>;
     context: AiChatContext;
   }): Promise<{
     file: any;
     content: string;
-    resourceType: AiStudioResourceType;
+    resourceType?: AiStudioResourceType;
+    template?: AiStudioTemplate;
+    goal?: AiStudioGoalCategory;
+    generator?: AiStudioGeneratorKind;
+    renderer?: string;
     runId: string;
     source: string;
     contextCapsule?: unknown;
     contextPolicy?: unknown;
-    qualityReport?: unknown;
+    review?: AiStudioReviewReport;
+    qualityReport?: {
+      score?: number;
+      keptCount?: number;
+      removedCount?: number;
+      warnings?: string[];
+      issues?: Array<{ questionId: string; severity: string; code: string; message: string }>;
+    } | null;
+    practiceNext?: AiStudioPracticeNext | null;
+    workflowTrace?: AiStudioWorkflowTraceItem[];
+    recommendation?: AiStudioRecommendation | null;
+    structured?: unknown;
+    artifact?: AiStudioArtifactSummary | null;
+    renderJob?: AiStudioRenderJob | null;
+    delivery?: AiStudioDeliveryArtifact | null;
     flashcardDeck?: FlashcardDeck | null;
     usedContextSummary?: AiUsedContextSummary;
   }> => {
-    const response = await client.post('/studio/generate', payload);
+    const response = await client.post('/studio/generate', payload, {
+      timeout: STUDIO_GENERATE_TIMEOUT_MS
+    });
     return response.data;
   },
 
@@ -407,7 +746,9 @@ export const aiApi = {
     matchedPoints?: string[];
     judgedBy: string;
   }> => {
-    const response = await client.post('/studio/judge-quiz', payload);
+    const response = await client.post('/studio/judge-quiz', payload, {
+      timeout: STUDIO_JUDGE_TIMEOUT_MS
+    });
     return response.data;
   },
 
@@ -423,7 +764,9 @@ export const aiApi = {
     issueType?: 'question_quality' | 'answer_quality' | 'needs_clarification' | 'none';
     suggestedActions?: string[];
   }> => {
-    const response = await client.post('/studio/quiz-question-assistant', payload);
+    const response = await client.post('/studio/quiz-question-assistant', payload, {
+      timeout: STUDIO_JUDGE_TIMEOUT_MS
+    });
     return response.data;
   },
 

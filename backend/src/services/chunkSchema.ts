@@ -1,7 +1,17 @@
 import crypto from 'crypto';
 import { ContextLocator } from '../types/contextSystem';
 
-export type KnowledgeChunkType = 'parent' | 'text' | 'table' | 'list' | 'code' | 'summary';
+export type KnowledgeChunkType =
+  | 'parent'
+  | 'text'
+  | 'table'
+  | 'list'
+  | 'code'
+  | 'summary'
+  | 'video_transcript'
+  | 'video_chapter'
+  | 'video_key_point'
+  | 'video_slide';
 
 export interface UnifiedChunkSchema {
   chunkId: string;

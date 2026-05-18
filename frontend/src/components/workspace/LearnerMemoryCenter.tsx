@@ -85,7 +85,9 @@ const dimensionLabel = (dimension: string) => {
     knowledgeState: '知识状态',
     preferenceStyle: '偏好',
     reviewPlanning: '复习计划',
-    misconceptionState: '误解候选'
+    misconceptionState: '误解候选',
+    behaviorEngagement: '学习行为',
+    cognitiveState: '认知状态'
   };
   return labels[dimension] || dimension;
 };
@@ -227,11 +229,11 @@ export default function LearnerMemoryCenter({ workspaceId, workbenchId }: Learne
         <div className="min-w-0">
           <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-[#f1f1ef] px-3 py-1 text-xs font-medium text-[#55585d]">
             <SlidersHorizontal className="h-3.5 w-3.5" />
-            Learner state signals
+            Centralized learner state
           </div>
-          <h3 className="text-2xl font-semibold tracking-normal text-[#202124]">学习状态信号</h3>
+          <h3 className="text-2xl font-semibold tracking-normal text-[#202124]">中心化学习者画像</h3>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[#666a70]">
-            这里展示会影响 tutor、planner、quiz 和 flashcard agent 的候选学习状态。它不是长期记忆；普通请求和单次格式偏好应先作为短期信号，只有明确保存才进入上方长期记忆。
+            这里按稳定画像、当前学习状态和短期观察三层展示会影响 tutor、planner、quiz 和 flashcard agent 的 learner state。短期观察不会直接等于长期画像，只有经过重复证据和状态治理后才会升级。
           </p>
           {contextSummary ? <p className="mt-2 text-xs leading-5 text-[#96999d]">{contextSummary}</p> : null}
         </div>
@@ -433,7 +435,7 @@ export default function LearnerMemoryCenter({ workspaceId, workbenchId }: Learne
           <h4 className="text-sm font-semibold text-[#202124]">为什么系统会这么认为</h4>
           {!selectedMemory ? (
             <p className="mt-3 text-sm leading-6 text-[#777b80]">
-              选择某条记忆的眼睛图标后，这里会展示证据、patch 和用户控制历史。解释会偏向来源和时间，而不是给用户贴固定标签。
+              选择某条状态的眼睛图标后，这里会展示证据、transition patch 和用户控制历史。解释会区分短期观察与稳定画像，而不是给用户贴固定标签。
             </p>
           ) : (
             <div className="mt-3 space-y-4">

@@ -5,6 +5,8 @@ import { documentTextExtractionService } from './documentTextExtractionService';
 import { documentChunkStore } from './documentChunkStore';
 import { knowledgeChunkingService } from './knowledgeChunkingService';
 import { vectorStoreService } from './vectorStoreService';
+import { courseKnowledgeGraphService, isCourseKnowledgeGraphSourceFile } from './courseKnowledgeGraphService';
+import { videoAnalysisService } from './videoAnalysisService';
 
 interface IndexFileInput {
   workspaceId: string;
@@ -55,6 +57,31 @@ const fileSourceHash = (file: any) =>
     updatedAt: file.updatedAt?.toISOString?.() || file.updatedAt
   });
 
+const parseJsonObject = (value?: string | null): Record<string, any> => {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const hasIndexableVideoAnalysis = (file: any) => {
+  const metadata = parseJsonObject(file.metadataJson);
+  const analysis = metadata.videoAnalysis && typeof metadata.videoAnalysis === 'object' ? metadata.videoAnalysis : null;
+  return Boolean(
+    analysis &&
+    (
+      analysis.summary ||
+      (Array.isArray(analysis.transcript) && analysis.transcript.length) ||
+      (Array.isArray(analysis.chapters) && analysis.chapters.length) ||
+      (Array.isArray(analysis.keyPoints) && analysis.keyPoints.length) ||
+      (Array.isArray(analysis.slides) && analysis.slides.length)
+    )
+  );
+};
+
 export class KnowledgeIndexingService {
   async indexFile(input: IndexFileInput) {
     const file = await prisma.fileSystemObject.findFirst({
@@ -66,6 +93,10 @@ export class KnowledgeIndexingService {
 
     if (!file) throw new FileSystemError(404, 'File not found');
     if (file.nodeType !== 'file') throw new FileSystemError(400, 'Cannot index a folder');
+    if (hasIndexableVideoAnalysis(file)) {
+      await videoAnalysisService.indexStoredAnalysis(input.workspaceId, input.fileObjectId, input.reason || 'knowledge-index-video-analysis');
+      return this.getLatestStatus(input.workspaceId, input.fileObjectId);
+    }
 
     const sourceHash = fileSourceHash(file);
     const latestCompleted = await prisma.knowledgeIndexJob.findFirst({
@@ -198,6 +229,13 @@ export class KnowledgeIndexingService {
 
       const finalStage: IndexStage = vectorError ? 'degraded' : 'indexed';
       snapshot.timings[snapshot.stage] = now() - (stageStartedAt.get(snapshot.stage) || now());
+      if (isCourseKnowledgeGraphSourceFile(file)) {
+        await courseKnowledgeGraphService.ingestResourceFile({
+          workspaceId: input.workspaceId,
+          fileObjectId: input.fileObjectId,
+          source: 'knowledge_indexing'
+        }).catch((error) => console.warn('Course KG resource ingestion failed:', error));
+      }
 
       return prisma.knowledgeIndexJob.update({
         where: { id: job.id },
@@ -263,16 +301,15 @@ export class KnowledgeIndexingService {
       orderBy: { updatedAt: 'desc' }
     });
 
-    const jobs = [];
+    const jobs: NonNullable<Awaited<ReturnType<KnowledgeIndexingService['indexFile']>>>[] = [];
     for (const file of files) {
-      jobs.push(
-        await this.indexFile({
-          workspaceId,
-          fileObjectId: file.id,
-          reason: 'workspace-reindex',
-          force: true
-        })
-      );
+      const job = await this.indexFile({
+        workspaceId,
+        fileObjectId: file.id,
+        reason: 'workspace-reindex',
+        force: true
+      });
+      if (job) jobs.push(job);
     }
 
     return jobs;

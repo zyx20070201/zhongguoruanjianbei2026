@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import prisma from '../config/db';
 import { FileSystemService } from './fileSystemService';
 import { workbenchService } from './workbenchService';
-import { deepseekService } from './deepseekService';
+import { aiModelProviderService } from './aiModelProviderService';
 import { learningMemoryService } from './learningMemoryService';
 import { knowledgeChunkingService } from './knowledgeChunkingService';
 import { learningResourceAllocatorService } from './learningResourceAllocatorService';
@@ -13,6 +13,7 @@ import { conversationHistoryService } from './conversationHistoryService';
 import { savedMemoryService } from './savedMemoryService';
 import { memoryExtractorService } from './memoryExtractorService';
 import { learnerStateContextAdapter } from './learnerStateContextAdapter';
+import { personalizedWorkspaceIntegrationService } from './personalizedWorkspaceIntegrationService';
 import { EditorLayoutNode, EditorState, WorkbenchState } from '../types/workbench';
 
 registerLearningCapabilities();
@@ -217,7 +218,7 @@ JSON schema:
   "notes": "# 学习笔记\\n... 空白但有结构的用户笔记模板"
 }`;
 
-const generateTerminalDraftWithDeepSeek = async (params: {
+const generateTerminalDraftWithModel = async (params: {
   workspaceName: string;
   major?: string | null;
   fileCount: number;
@@ -228,15 +229,15 @@ const generateTerminalDraftWithDeepSeek = async (params: {
   referenceHistoryContext?: string;
   learnerStateContext?: string;
 }): Promise<TerminalDraft | null> => {
-  if (!deepseekService.isConfigured()) return null;
+  if (!aiModelProviderService.isConfigured({ useCase: 'learning' })) return null;
 
   try {
-    const response = await deepseekService.chat([
+    const response = await aiModelProviderService.chat([
       {
         role: 'user',
         content: buildTerminalPrompt(params)
       }
-    ]);
+    ], { useCase: 'learning' });
     const parsed = extractJsonObject(response.reply);
     const fallback = buildFallbackGoalDraft(params.goalText, params.major);
     const parsedDraft = parsed.goalDraft || {};
@@ -253,25 +254,25 @@ const generateTerminalDraftWithDeepSeek = async (params: {
       goalDraft
     };
   } catch (error) {
-    console.warn('DeepSeek terminal draft failed, using fallback:', error);
+    console.warn('AI terminal draft failed, using fallback:', error);
     return null;
   }
 };
 
-const generateWorkbenchContentWithDeepSeek = async (params: {
+const generateWorkbenchContentWithModel = async (params: {
   workspaceName: string;
   major?: string | null;
   goalDraft: GoalDraft;
 }): Promise<GeneratedWorkbenchContent | null> => {
-  if (!deepseekService.isConfigured()) return null;
+  if (!aiModelProviderService.isConfigured({ useCase: 'learning' })) return null;
 
   try {
-    const response = await deepseekService.chat([
+    const response = await aiModelProviderService.chat([
       {
         role: 'user',
         content: buildWorkbenchContentPrompt(params)
       }
-    ]);
+    ], { useCase: 'learning' });
     const parsed = extractJsonObject(response.reply);
     const fallback = buildFallbackWorkbenchContent(params.goalDraft, params.workspaceName);
 
@@ -282,7 +283,7 @@ const generateWorkbenchContentWithDeepSeek = async (params: {
       notes: String(parsed.notes || fallback.notes)
     };
   } catch (error) {
-    console.warn('DeepSeek workbench content failed, using fallback:', error);
+    console.warn('AI workbench content failed, using fallback:', error);
     return null;
   }
 };
@@ -496,7 +497,7 @@ class LearningOrchestrationService {
     const workbenches = await workbenchService.listByWorkspace(input.workspaceId);
     const goalText = getLatestUserMessage(input.messages) || `学习 ${workspace.name}`;
     const fileCount = workspace.fileObjects.filter((file) => file.nodeType === 'file').length;
-    const [savedMemoryContext, learnerAgentContext, retrievedHistory] = await Promise.all([
+    const [savedMemoryContext, learnerAgentContext, retrievedHistory, workspaceIntegration] = await Promise.all([
       savedMemoryService.promptContext({ workspaceId: input.workspaceId, limit: 8 }),
       learnerStateContextAdapter.build({
         workspaceId: input.workspaceId,
@@ -511,10 +512,15 @@ class LearningOrchestrationService {
         currentSessionId: input.sessionId || null,
         query: goalText,
         limit: 6
-      })
+      }),
+      personalizedWorkspaceIntegrationService.build({
+        workspaceId: input.workspaceId,
+        workbenchId: input.workbenchId || null,
+        query: goalText
+      }).catch(() => null)
     ]);
     const referenceHistoryContext = conversationHistoryService.formatRetrieved(retrievedHistory);
-    const deepSeekDraft = await generateTerminalDraftWithDeepSeek({
+    const modelDraft = await generateTerminalDraftWithModel({
       workspaceName: workspace.name,
       major: workspace.major,
       fileCount,
@@ -526,7 +532,7 @@ class LearningOrchestrationService {
       learnerStateContext: learnerAgentContext.promptContext
     });
     const fallbackDraft = buildFallbackGoalDraft(goalText, workspace.major);
-    const terminalDraft: TerminalDraft = deepSeekDraft || {
+    const terminalDraft: TerminalDraft = modelDraft || {
       reply: buildFallbackTerminalReply(fallbackDraft.title, workbenches.length, fileCount),
       goalDraft: fallbackDraft
     };
@@ -557,7 +563,7 @@ class LearningOrchestrationService {
       payload: {
         goalText,
         goalDraft: terminalDraft.goalDraft,
-        source: deepSeekDraft ? 'deepseek' : 'fallback',
+        source: modelDraft ? 'model' : 'fallback',
         sessionId: savedTurn.sessionId,
         retrievedHistoryCount: retrievedHistory.length,
         memoryExtraction: {
@@ -575,9 +581,15 @@ class LearningOrchestrationService {
       memoryContext: {
         savedMemoryContext,
         referenceHistory: retrievedHistory,
-        learnerStateSummary: learnerAgentContext.summary
+        learnerStateSummary: learnerAgentContext.summary,
+        workspaceIntegration
       },
       suggestedActions: [
+        ...(workspaceIntegration?.taskRecommendations?.slice(0, 2).map((task: any) => ({
+          id: `next-task-${task.id}`,
+          label: task.title,
+          description: task.reason
+        })) || []),
         {
           id: 'create-guided-workbench',
           label: '创建学习现场',
@@ -604,14 +616,14 @@ class LearningOrchestrationService {
     const fallbackDraft = buildFallbackGoalDraft(input.goalText, workspace.major);
     const goalDraft: GoalDraft = {
       ...fallbackDraft,
-      title: clampTitle(input.title || input.goalDraft?.title || fallbackDraft.title, 'AI 引导学习现场'),
+      title: clampTitle(input.title || input.goalDraft?.title || fallbackDraft.title, '课程学习整理'),
       goalText: String(input.goalDraft?.goalText || input.goalText).trim() || input.goalText,
       skills: normalizeStringArray(input.goalDraft?.skills, fallbackDraft.skills),
       weaknesses: normalizeStringArray(input.goalDraft?.weaknesses, fallbackDraft.weaknesses),
       suggestedMode: input.mode || normalizeMode(input.goalDraft?.suggestedMode, fallbackDraft.suggestedMode)
     };
     const generatedContent =
-      (await generateWorkbenchContentWithDeepSeek({
+      (await generateWorkbenchContentWithModel({
         workspaceName: workspace.name,
         major: workspace.major,
         goalDraft
@@ -635,7 +647,7 @@ class LearningOrchestrationService {
 
     const workbench = await workbenchService.create(input.workspaceId, {
       title: goalDraft.title,
-      description: `AI 引导学习现场：${goalDraft.goalText}`
+      description: goalDraft.goalText
     });
     await learningMemoryService.attachGoalToWorkbench(learningGoal.id, workbench.id);
     const run = await learningRunService.startRun({
@@ -651,10 +663,9 @@ class LearningOrchestrationService {
       { runId: run.id, workspaceId: input.workspaceId, workbenchId: workbench.id, goalId: learningGoal.id }
     );
 
-    const targetDir = `${workbench.rootPath}/Generated`;
     const brief = await FileSystemService.saveGeneratedContent({
       workspaceId: input.workspaceId,
-      targetDir,
+      targetDir: 'Generated',
       filename: '01-learning-brief.md',
       category: 'generated',
       workbenchId: workbench.id,
@@ -666,7 +677,7 @@ class LearningOrchestrationService {
     });
     const practice = await FileSystemService.saveGeneratedContent({
       workspaceId: input.workspaceId,
-      targetDir,
+      targetDir: 'Generated',
       filename: '02-diagnostic-practice.md',
       category: 'generated',
       workbenchId: workbench.id,
@@ -678,7 +689,7 @@ class LearningOrchestrationService {
     });
     const plan = await FileSystemService.saveGeneratedContent({
       workspaceId: input.workspaceId,
-      targetDir,
+      targetDir: 'Generated',
       filename: '03-resource-plan.md',
       category: 'generated',
       workbenchId: workbench.id,
@@ -690,7 +701,7 @@ class LearningOrchestrationService {
     });
     const notes = await FileSystemService.saveGeneratedContent({
       workspaceId: input.workspaceId,
-      targetDir: workbench.rootPath,
+      targetDir: 'Files',
       filename: 'learning-notes.md',
       category: 'note',
       workbenchId: workbench.id,

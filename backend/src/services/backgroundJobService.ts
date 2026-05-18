@@ -46,8 +46,40 @@ export class BackgroundJobService {
     };
     this.records.set(id, record);
     this.queue.push({ record, payload });
-    void this.drain();
+    setImmediate(() => void this.drain());
     return record;
+  }
+
+  get(id: string) {
+    return this.records.get(id) || null;
+  }
+
+  queuePosition(id: string) {
+    const index = this.queue.findIndex((job) => job.record.id === id);
+    return index >= 0 ? index + 1 : undefined;
+  }
+
+  cancel(id: string) {
+    const record = this.records.get(id);
+    if (!record) return null;
+    const queuedIndex = this.queue.findIndex((job) => job.record.id === id);
+    if (queuedIndex >= 0) {
+      this.queue.splice(queuedIndex, 1);
+      record.status = 'failed';
+      record.lastError = 'cancelled';
+      record.failedAt = new Date().toISOString();
+      return record;
+    }
+    if (record.status === 'running') {
+      record.lastError = 'cancel_requested';
+      return record;
+    }
+    return record;
+  }
+
+  isCancellationRequested(id?: string | null) {
+    if (!id) return false;
+    return this.records.get(id)?.lastError === 'cancel_requested';
   }
 
   stats() {
@@ -91,8 +123,13 @@ export class BackgroundJobService {
 
     try {
       await handler(job.payload);
-      job.record.status = 'completed';
-      job.record.completedAt = new Date().toISOString();
+      if (job.record.lastError === 'cancel_requested') {
+        job.record.status = 'failed';
+        job.record.failedAt = new Date().toISOString();
+      } else {
+        job.record.status = 'completed';
+        job.record.completedAt = new Date().toISOString();
+      }
     } catch (error) {
       job.record.lastError = error instanceof Error ? error.message : String(error);
       if (job.record.attempts < job.record.maxAttempts) {

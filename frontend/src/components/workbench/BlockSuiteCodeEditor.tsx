@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { effects as registerBlocksuiteBlockEffects } from '@blocksuite/blocks/effects';
 import { effects as registerBlocksuiteEffects } from '@blocksuite/presets/effects';
 import type { Doc } from '@blocksuite/store';
-import { Code2, Layers3, Loader2, Map, MonitorSmartphone } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { EditorState, ResourceReference } from '../../types';
 import {
   BlocksuiteMode,
@@ -18,8 +18,13 @@ interface BlockSuiteCodeEditorProps {
   editor: EditorState;
   resource: ResourceReference;
   content: string;
+  isDirty?: boolean;
+  saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
+  savedAt?: string;
+  saveError?: string;
   isLoading: boolean;
   onChangeContent?: (resourceId: string, content: string) => void;
+  onSaveContent?: (content?: string) => void;
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
 }
 
@@ -96,6 +101,36 @@ export default function BlockSuiteCodeEditor({
     });
   };
 
+  const flushDocumentContent = async () => {
+    const activeDoc = docRef.current;
+    if (!activeDoc) return normalizedContent;
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    const snapshot = serializeBlocksuiteSnapshot(activeDoc);
+    const snapshotText = JSON.stringify(snapshot ?? null);
+    const markdown = await serializeBlocksuiteMarkdown(activeDoc);
+    const extractedContent = normalizeCodeContent(extractCodeFromBlocksuiteMarkdown(markdown));
+    const nextMode = editorElementRef.current?.mode || mode;
+
+    if (snapshotText !== lastSnapshotRef.current || extractedContent !== lastSourceContentRef.current || markdown !== lastMarkdownRef.current) {
+      lastSnapshotRef.current = snapshotText;
+      lastSourceContentRef.current = extractedContent;
+      lastMarkdownRef.current = markdown;
+      onUpdateViewState?.(editor.id, {
+        blocksuiteSnapshot: snapshot,
+        blocksuiteSourceContent: extractedContent,
+        blocksuiteMode: nextMode
+      });
+      onChangeContent?.(resource.id, extractedContent);
+    }
+
+    return extractedContent;
+  };
+
   useEffect(() => {
     ensureBlocksuiteRegistered();
   }, []);
@@ -146,9 +181,12 @@ export default function BlockSuiteCodeEditor({
 
     void createBlocksuiteDoc({
       snapshot: canUseSnapshot ? snapshot : null,
-      markdown: canUseSnapshot ? null : markdownSource
+      markdown: canUseSnapshot ? null : markdownSource,
+      title: resource.name
     })
       .then((doc) => {
+        if (loadedKeyRef.current !== loadKey) return;
+
         const host = containerRef.current;
         if (!host) return;
 
@@ -167,8 +205,7 @@ export default function BlockSuiteCodeEditor({
         onUpdateViewState?.(editor.id, {
           blocksuiteSnapshot: initialSnapshot,
           blocksuiteSourceContent: normalizedContent,
-          blocksuiteMode: mode,
-          codeOpenMode: 'blocksuite'
+          blocksuiteMode: mode
         });
         setDocRevision((value) => value + 1);
         setReady(true);
@@ -199,8 +236,7 @@ export default function BlockSuiteCodeEditor({
         void serializeBlocksuiteMarkdown(activeDoc).then((markdown) => {
           const extractedContent = normalizeCodeContent(extractCodeFromBlocksuiteMarkdown(markdown));
           const viewStatePatch: Record<string, any> = {
-            blocksuiteMode: nextMode,
-            codeOpenMode: 'blocksuite'
+            blocksuiteMode: nextMode
           };
           let shouldPersistViewState = false;
 
@@ -244,57 +280,21 @@ export default function BlockSuiteCodeEditor({
     };
   }, [docRevision, editor.id, mode, onChangeContent, onUpdateViewState, resource.id]);
 
+  useEffect(() => {
+    const handleJump = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { fileId?: string; locator?: Record<string, any> } | undefined;
+      if (!detail?.fileId || detail.fileId !== resource.id) return;
+      const start = Number(detail.locator?.lineStart || detail.locator?.startLine || 1);
+      if (!Number.isFinite(start)) return;
+      containerRef.current?.scrollTo({ top: Math.max(0, (start - 3) * 24), behavior: 'smooth' });
+    };
+
+    window.addEventListener('workbench:jump-to-citation', handleJump);
+    return () => window.removeEventListener('workbench:jump-to-citation', handleJump);
+  }, [resource.id]);
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--wb-editor)]">
-      <div className="flex items-center justify-between border-b border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-2">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onUpdateViewState?.(editor.id, { codeOpenMode: 'blocksuite' })}
-            className="inline-flex items-center gap-1 rounded-md bg-[var(--wb-tab)] px-3 py-1.5 text-xs font-medium text-[var(--wb-text)] shadow-sm ring-1 ring-[var(--wb-border)]"
-          >
-            <Layers3 className="h-3.5 w-3.5" />
-            BlockSuite
-          </button>
-          <button
-            onClick={() => onUpdateViewState?.(editor.id, { codeOpenMode: 'plain' })}
-            className="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium text-[var(--wb-text-muted)] hover:bg-white/5 hover:text-[var(--wb-text)]"
-          >
-            <MonitorSmartphone className="h-3.5 w-3.5" />
-            Plain
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onUpdateViewState?.(editor.id, { blocksuiteMode: 'page' })}
-            className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium ${
-              mode === 'page'
-                ? 'bg-[var(--wb-tab)] text-[var(--wb-text)] shadow-sm ring-1 ring-[var(--wb-border)]'
-                : 'text-[var(--wb-text-muted)] hover:bg-white/5 hover:text-[var(--wb-text)]'
-            }`}
-          >
-            <Layers3 className="h-3.5 w-3.5" />
-            Page
-          </button>
-          <button
-            onClick={() => onUpdateViewState?.(editor.id, { blocksuiteMode: 'edgeless' })}
-            className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium ${
-              mode === 'edgeless'
-                ? 'bg-[var(--wb-tab)] text-[var(--wb-text)] shadow-sm ring-1 ring-[var(--wb-border)]'
-                : 'text-[var(--wb-text-muted)] hover:bg-white/5 hover:text-[var(--wb-text)]'
-            }`}
-          >
-            <Map className="h-3.5 w-3.5" />
-            Edgeless
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2 text-xs text-[var(--wb-text-muted)]">
-          <Code2 className="h-3.5 w-3.5" />
-          <span>{resource.name}</span>
-        </div>
-      </div>
-
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {!ready && !error && (
           <div className="absolute inset-0 z-10 flex items-center justify-center gap-3 bg-[var(--wb-editor)] text-sm text-[var(--wb-text-muted)]">

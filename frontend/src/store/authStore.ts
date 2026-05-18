@@ -33,7 +33,7 @@ interface AuthState {
   login: (identifier: string, password: string) => Promise<User>;
   register: (payload: { username: string; email: string; password: string }) => Promise<User>;
   hydrate: () => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -72,7 +72,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
 
     try {
-      const user = await authApi.getCurrentUser(storedUser.id);
+      const user = await authApi.getCurrentUser();
       persistUser(user);
       set({ user, hydrated: true });
     } catch {
@@ -80,7 +80,12 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ user: null, hydrated: true });
     }
   },
-  logout: () => {
+  logout: async () => {
+    try {
+      await authApi.logout();
+    } catch {
+      // ignore logout failures and clear local state anyway
+    }
     persistUser(null);
     set({ user: null, hydrated: true });
   }

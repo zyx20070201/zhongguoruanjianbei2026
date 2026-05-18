@@ -1,7 +1,10 @@
 import {
   ArrowUpRight,
+  Bot,
+  Brain,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronUp,
   ChevronRight,
   Copy,
@@ -16,19 +19,35 @@ import {
   Image,
   Info,
   Layers3,
+  Languages,
+  ListChecks,
+  Lock,
   Loader2,
+  Maximize2,
+  MoreHorizontal,
+  PanelLeft,
+  PanelRight,
   PencilLine,
   Plus,
   RefreshCcw,
+  RotateCcw,
+  Search,
   Send,
   SlidersHorizontal,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
   Trash2,
+  Unlock,
   Volume2,
   X,
-  Video
+  ZoomIn,
+  ZoomOut,
+  Video,
+  CircleHelp,
+  ClipboardList,
+  GitCompare,
+  Route
 } from 'lucide-react';
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -38,15 +57,27 @@ import 'pdfjs-dist/web/pdf_viewer.css';
 import { EditorState, ResourceReference } from '../../types';
 import {
   FilePreviewInfo,
+  ResourceIntelligence,
   RenderableDocument,
   RenderableDocumentChunk,
+  SlideFrame,
+  TranscriptSegment,
+  VideoAnalysis,
+  VideoChapter,
+  VideoEvidenceSegment,
+  VideoKeyPoint,
+  VideoReviewStatus,
+  WorkbenchNoteRevision,
   fileSystemApi
 } from '../../services/fileSystemApi';
 import {
   aiApi,
+  AiChatAttachment,
   AiChatContext,
   AiChatMessage,
   AiContextMode,
+  AiWelcomeContent,
+  AiWelcomeSuggestion,
   AgentTimelineItem,
   AiLockedSelectionContext,
   AiSourceInspectorItem
@@ -65,27 +96,39 @@ import AIStudioPanel from './AIStudioPanel';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
+const previewInfoCache = new Map<string, FilePreviewInfo>();
+const documentStructureCache = new Map<string, RenderableDocument>();
+const webPreviewCache = new Map<string, WebPreviewData>();
+
+const previewCacheKey = (workspaceId: string, resourceId: string) => `${workspaceId}:${resourceId}`;
+
 interface WorkbenchEditorContentProps {
   editor: EditorState;
   resource: ResourceReference | null;
   workspaceId: string;
   content?: string;
   isDirty?: boolean;
+  saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
+  savedAt?: string;
+  saveError?: string;
   isLoading?: boolean;
   onChangeContent?: (resourceId: string, content: string) => void;
+  onSaveContent?: (content?: string) => void;
+  onApplyAiNoteEdit?: (
+    resourceId: string,
+    content: string,
+    options?: { baseContentHash?: string | null; revisionSummary?: string; actionType?: string; actor?: string }
+  ) => void | Promise<boolean | void>;
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
   onBindResource: (editorId: string) => void;
   aiContext?: AiChatContext & { activeFileContent?: string | null };
+  resources?: ResourceReference[];
 }
 
-interface TemporaryAttachment {
-  id: string;
-  name: string;
-  type: string;
-  size: number;
-  kind: 'image' | 'file';
-  textContent?: string;
-}
+const notionListClass = 'w-full divide-y divide-[#e1e1de] border-y border-[#e1e1de] bg-[#f8f8f6]';
+const notionRowClass = 'group w-full bg-transparent px-4 py-3 text-left transition duration-200 ease-out hover:bg-white focus-visible:bg-white focus-visible:outline-none';
+const notionActiveRowClass = 'bg-white hover:bg-white';
+const notionMetaClass = 'font-mono text-[11px] font-semibold text-[#777a80]';
 
 const getEditorIcon = (type: EditorState['type']) => {
   switch (type) {
@@ -129,7 +172,16 @@ const extractSourceMetadata = (content?: string | null) => {
   return { title, sourceType, url, body };
 };
 
+const getResourceSourceUrl = (resource?: ResourceReference | null) => {
+  const metadataUrl = resource?.metadata?.sourceUrl;
+  return typeof metadataUrl === 'string' && metadataUrl.trim() ? metadataUrl.trim() : undefined;
+};
+
 type WebPreviewData = Awaited<ReturnType<typeof fileSystemApi.extractUrlPreview>>;
+
+type ResourceIntelligenceKind = ResourceIntelligence['kind'] | 'html';
+type ResourceOutlineNodeUi = NonNullable<NonNullable<ResourceIntelligence['structure']>['outline']>[number];
+type ResourceTranscriptSegmentUi = NonNullable<ResourceIntelligence['transcript']>[number];
 
 const getEmbedInfo = (url?: string | null) => {
   if (!url) return null;
@@ -144,7 +196,7 @@ const getEmbedInfo = (url?: string | null) => {
         ? {
             type: 'video' as const,
             provider: 'YouTube',
-            embedUrl: `https://www.youtube.com/embed/${videoId}`
+            embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1&playsinline=1`
           }
         : null;
     }
@@ -172,92 +224,167 @@ const getEmbedInfo = (url?: string | null) => {
   return null;
 };
 
-function SourceGuide({
+const formatVideoTime = (seconds?: number) => {
+  const safe = Math.max(0, Math.floor(Number(seconds || 0)));
+  const h = Math.floor(safe / 3600);
+  const m = Math.floor((safe % 3600) / 60);
+  const s = safe % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
+};
+
+const videoRangeText = (start?: number, end?: number) => `${formatVideoTime(start)} - ${formatVideoTime(end ?? start)}`;
+
+const containsVideoTime = (start: number, end: number | undefined, currentTime: number, nextStart?: number) => {
+  const rangeEnd = end ?? nextStart ?? start + 45;
+  return currentTime >= start && currentTime < Math.max(rangeEnd, start + 1);
+};
+
+const videoAnalysisStatusLabel: Record<VideoAnalysis['status'], string> = {
+  idle: 'Not analyzed',
+  queued: 'Queued',
+  processing: 'Analyzing',
+  ready: 'Ready',
+  degraded: 'Partial',
+  failed: 'Failed',
+  cancelled: 'Cancelled'
+};
+
+const confidenceText: Record<string, string> = {
+  high: '高置信',
+  medium: '中置信',
+  low: '低置信'
+};
+
+const videoConfidenceClass: Record<string, string> = {
+  high: 'border-[#b8dfad] bg-[#f3faf1] text-[#2f6c2f]',
+  medium: 'border-amber-200 bg-amber-50 text-amber-800',
+  low: 'border-rose-200 bg-rose-50 text-rose-700'
+};
+
+const videoStageLabels: Record<string, string> = {
+  idle: 'Idle',
+  queued: 'Queued',
+  fetching_metadata: 'Fetching metadata',
+  extracting_captions: 'Extracting captions',
+  transcript_ready: 'Transcript ready',
+  analyzing_transcript: 'Analyzing transcript',
+  extracting_slides: 'Extracting slides',
+  running_ocr: 'Running OCR',
+  aligning_slides: 'Aligning slides',
+  indexing_context: 'Indexing context',
+  completed: 'Completed',
+  degraded: 'Partial result',
+  failed: 'Failed',
+  cancelled: 'Cancelled'
+};
+
+const errorClassLabel: Record<string, string> = {
+  network_timeout: 'Network timeout',
+  youtube_blocked: 'YouTube blocked',
+  caption_unavailable: 'Captions unavailable',
+  cookie_required: 'Cookies required',
+  ffmpeg_failed: 'Frame extraction failed',
+  ocr_unavailable: 'OCR unavailable',
+  llm_timeout: 'LLM timeout',
+  vector_index_failed: 'Context index degraded',
+  job_interrupted: 'Job interrupted',
+  cancelled: 'Cancelled',
+  unknown: 'Unknown error'
+};
+
+const formatDuration = (ms?: number) => {
+  if (ms == null || !Number.isFinite(ms)) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+};
+
+const clipText = (value: string, max = 220) => {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > max ? `${normalized.slice(0, max).trim()}...` : normalized;
+};
+
+const resourceIntelligenceLabel = (kind: ResourceIntelligenceKind) => {
+  return 'Source guide';
+};
+
+const resourceIntelligenceSubtitle = (kind: ResourceIntelligenceKind, loading: boolean, hasAnalysis: boolean) => {
+  if (!hasAnalysis) return loading ? 'Preparing semantic map' : 'Waiting for backend analysis';
+  if (kind === 'document') return 'Outline and page guide';
+  if (kind === 'code') return 'Outline and readable transcript';
+  if (kind === 'web') return 'Article outline and transcript';
+  return 'Outline and transcript';
+};
+
+const intelligenceRangeLabel = (locator?: Record<string, any>, fallback?: string) => {
+  const pageStart = Number(locator?.pageStart || locator?.page);
+  const pageEnd = Number(locator?.pageEnd || locator?.pageStart || locator?.page);
+  if (Number.isFinite(pageStart) && pageStart > 0) return pageEnd > pageStart ? `p${pageStart}-p${pageEnd}` : `p${pageStart}`;
+  return fallback || 'source';
+};
+
+const flattenResourceOutline = (nodes?: ResourceOutlineNodeUi[]): ResourceOutlineNodeUi[] => {
+  const output: ResourceOutlineNodeUi[] = [];
+  const visit = (node: ResourceOutlineNodeUi) => {
+    output.push(node);
+    (node.children || []).forEach(visit);
+  };
+  (nodes || []).forEach(visit);
+  return output;
+};
+
+function ResourceIntelligencePanel({
   resource,
   workspaceId,
-  editorId,
-  sourceText,
-  sourceUrl,
-  onUpdateViewState
+  kind,
+  collapsed,
+  onToggleCollapsed
 }: {
   resource: ResourceReference;
   workspaceId: string;
-  editorId: string;
-  sourceText?: string;
-  sourceUrl?: string;
-  onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
+  kind: ResourceIntelligenceKind;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }) {
-  const [isOpen, setIsOpen] = useState(true);
-  const [summary, setSummary] = useState<string>(() => String(resource.path ? '' : ''));
+  const [analysis, setAnalysis] = useState<ResourceIntelligence | null>(null);
   const [loading, setLoading] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [activeTab, setActiveTab] = useState<'outline' | 'slides'>('outline');
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const outlineNodes = analysis?.structure?.outline?.length
+    ? analysis.structure.outline
+    : analysis?.sections?.length
+      ? analysis.sections.map((section, index) => ({
+          id: section.id,
+          title: section.title,
+          level: section.level || (index === 0 ? 1 : 2),
+          summary: section.summary,
+          locator: section.locator,
+          confidence: section.confidence,
+          evidenceSnippets: section.evidenceSnippets,
+          pageTypes: section.pageTypes,
+          children: []
+        }))
+      : [];
+  const slideSegments = analysis?.transcript || [];
+  const hasAnalysis =
+    (analysis?.status === 'ready' || analysis?.status === 'degraded') &&
+    Boolean(outlineNodes.length || slideSegments.length || analysis.sections?.length);
+  const isProcessing = starting || analysis?.status === 'processing';
 
   useEffect(() => {
-    const clippedText = String(sourceText || '').replace(/\s+/g, ' ').trim().slice(0, 6000);
-    const key = `sourceGuide:${resource.id}:${clippedText ? 'text' : 'meta'}`;
-    const existing = sessionStorage.getItem(key);
-    if (existing) {
-      setSummary(existing);
-      return;
-    }
-
-    const fallback = clippedText
-      ? `${clippedText.slice(0, 220)}${clippedText.length > 220 ? '...' : ''}`
-      : sourceUrl
-        ? `这个来源来自 ${sourceUrl}。当前版本会展示可用的网页或视频内容，并保留链接用于后续检索与学习引用。`
-        : '这个资源暂时没有可读取的正文，但可以作为工作台中的引用材料继续打开、预览和讨论。';
-
-    if (!clippedText && sourceUrl) {
-      setSummary(fallback);
-      sessionStorage.setItem(key, fallback);
-      return;
-    }
-
     let cancelled = false;
     setLoading(true);
-    void aiApi
-      .chat({
-        messages: [
-          {
-            role: 'user',
-            content: [
-              '请为这个学习资源写一段 source guide。',
-              '要求：中文，100-200字，说明材料主题、适合怎么学习、值得注意的重点；只输出正文，不要标题。',
-              '',
-              `资源名称：${resource.name}`,
-              sourceUrl ? `URL：${sourceUrl}` : '',
-              '',
-              clippedText || fallback
-            ].filter(Boolean).join('\n')
-          }
-        ],
-        context: {
-          workspaceId,
-          activeFileId: resource.id,
-          activeFile: {
-            id: resource.id,
-            name: resource.name,
-            path: resource.path,
-            content: clippedText
-          },
-          contextMode: 'active_file'
-        }
+    void fileSystemApi
+      .getResourceIntelligence(workspaceId, resource.id)
+      .then((result) => {
+        if (!cancelled) setAnalysis(result);
       })
-      .then((response) => {
-        if (cancelled) return;
-        const nextSummary = response.reply.trim() || fallback;
-        setSummary(nextSummary);
-        sessionStorage.setItem(key, nextSummary);
-        onUpdateViewState?.(editorId, {
-          sourceGuideByResourceId: {
-            [resource.id]: nextSummary
-          }
-        });
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSummary(fallback);
-        sessionStorage.setItem(key, fallback);
-      })
+      .catch(() => undefined)
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
@@ -265,27 +392,355 @@ function SourceGuide({
     return () => {
       cancelled = true;
     };
-  }, [editorId, onUpdateViewState, resource.id, resource.name, resource.path, sourceText, sourceUrl, workspaceId]);
+  }, [resource.id, workspaceId]);
 
-  return (
-    <section className="rounded-2xl bg-[#f0f2fb] px-4 py-4 text-[#25272b]">
+  useEffect(() => {
+    if (analysis?.status !== 'processing') return;
+    let cancelled = false;
+    const intervalId = window.setInterval(() => {
+      void fileSystemApi
+        .getResourceIntelligence(workspaceId, resource.id)
+        .then((result) => {
+          if (!cancelled) setAnalysis(result);
+        })
+        .catch(() => undefined);
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [analysis?.status, resource.id, workspaceId]);
+
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!actionsRef.current?.contains(event.target as Node)) {
+        setActionsOpen(false);
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => window.removeEventListener('pointerdown', handlePointerDown);
+  }, [actionsOpen]);
+
+  const startAnalysis = (force = false) => {
+    setStarting(true);
+    const apiKind: ResourceIntelligence['kind'] = kind === 'html' ? 'visualization' : kind;
+    void fileSystemApi
+      .startResourceIntelligence(workspaceId, resource.id, { force })
+      .then(setAnalysis)
+      .catch((error) => {
+        setAnalysis({
+          status: 'failed',
+          kind: apiKind,
+          title: resource.name,
+          overview: '',
+          readingAdvice: '',
+          sections: [],
+          error: error?.response?.data?.error || error?.message || 'Source guide request failed.'
+        });
+      })
+      .finally(() => setStarting(false));
+  };
+
+  const jumpToLocator = (item: { id?: string; locator?: Record<string, any>; evidence?: string; summary?: string; text?: string }) => {
+    window.dispatchEvent(
+      new CustomEvent('workbench:jump-to-citation', {
+        detail: {
+          fileId: resource.id,
+          locator: item.locator || {},
+          sourceId: item.id,
+          preview: item.evidence || item.summary || item.text
+        }
+      })
+    );
+  };
+
+  if (collapsed) {
+    return (
       <button
         type="button"
-        onClick={() => setIsOpen((value) => !value)}
-        className="flex w-full items-center justify-between gap-3 text-left"
+        onClick={onToggleCollapsed}
+        className="flex h-full w-12 items-center justify-center border-l border-[#eeeeeb] bg-white text-[#5f6368] transition hover:bg-[#f6f6f4] hover:text-[#202124]"
+        title={`Open ${resourceIntelligenceLabel(kind)}`}
       >
-        <span className="inline-flex items-center gap-2 text-base font-semibold">
-          <Sparkles className="h-5 w-5" />
-          Source guide
-          {loading && <Loader2 className="h-4 w-4 animate-spin text-[#777a80]" />}
-        </span>
-        {isOpen ? <ChevronUp className="h-4 w-4 text-[#5f6368]" /> : <ChevronDown className="h-4 w-4 text-[#5f6368]" />}
+        <ChevronLeft className="h-4 w-4" />
       </button>
-      {isOpen && (
-        <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-[#3f4247]">
-          {summary || 'Generating source guide...'}
-        </p>
-      )}
+    );
+  }
+
+  const showSemanticMap = Boolean(hasAnalysis);
+  const intelligenceTitle = resourceIntelligenceLabel(kind);
+  const qualityLabel = analysis?.quality
+    ? `Extraction ${analysis.quality.extraction} · Structure ${analysis.quality.structure} · Grounding ${analysis.quality.grounding}`
+    : '';
+  const flatOutline = flattenResourceOutline(outlineNodes);
+  const parsedPages = analysis?.diagnostics?.parsedPageCount;
+  const totalPages = analysis?.diagnostics?.pageCount || analysis?.quality?.pageCount;
+  const oneLineSummary = clipText(analysis?.overview || analysis?.readingAdvice || '', 140);
+
+  return (
+    <section className="flex h-full min-h-0 flex-col bg-[#f8f8f6] text-[#25272b]">
+      <div className="shrink-0 border-b border-[#e1e1de] bg-[#f8f8f6] px-4 py-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#25272b]">
+              Source guide
+              {(loading || isProcessing) && <Loader2 className="h-4 w-4 animate-spin text-[#777a80]" />}
+            </div>
+            <div className="mt-1 text-xs leading-5 text-[#777a80]">
+              {analysis?.status === 'failed'
+                ? 'Source guide failed'
+                : oneLineSummary || resourceIntelligenceSubtitle(kind, loading || isProcessing, hasAnalysis)}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <div ref={actionsRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setActionsOpen((value) => !value)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#6f7378] transition hover:bg-[#f1f1ee] hover:text-[#202124]"
+                title="More actions"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+              {actionsOpen && (
+                <div className="absolute right-0 top-9 z-20 w-80 overflow-hidden rounded-xl border border-[#e5e5e1] bg-white py-1 text-sm shadow-lg shadow-black/10">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionsOpen(false);
+                      startAnalysis(true);
+                    }}
+                    disabled={starting}
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-[#34373c] transition hover:bg-[#f7f7f5] disabled:opacity-60"
+                  >
+                    <span>{analysis?.status === 'failed' ? 'Retry source guide' : 'Regenerate'}</span>
+                    {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5 text-[#8b8f94]" />}
+                  </button>
+                  {analysis ? (
+                    <div className="border-t border-[#eeeeeb] px-3 py-3 text-xs leading-5 text-[#5f6368]">
+                      <div className="mb-2 flex items-center gap-2 font-semibold text-[#34373c]">
+                        <Info className="h-3.5 w-3.5 text-[#8b8f94]" />
+                        Source guide details
+                      </div>
+                      <div className="space-y-1">
+                        <div>Status: {analysis.status}</div>
+                        {analysis.progress?.stage ? <div>Stage: {analysis.progress.stage}</div> : null}
+                        {analysis.progress?.message ? <div>{analysis.progress.message}</div> : null}
+                        {qualityLabel ? <div>{qualityLabel}</div> : null}
+                        {typeof analysis.quality?.coverage === 'number' ? <div>Coverage {Math.round(analysis.quality.coverage * 100)}%</div> : null}
+                        {typeof analysis.quality?.transcriptCoverage === 'number' ? <div>Transcript {Math.round(analysis.quality.transcriptCoverage * 100)}%</div> : null}
+                        {analysis.diagnostics ? (
+                          <div>
+                            Pages {parsedPages ?? 0}/{totalPages ?? '-'} · Outline {analysis.diagnostics.outlineNodeCount} · Slides {analysis.diagnostics.transcriptSegmentCount}
+                          </div>
+                        ) : null}
+                        {analysis.model ? <div>Model: {analysis.model}</div> : null}
+                        {analysis.completedAt ? <div>Completed {new Date(analysis.completedAt).toLocaleString()}</div> : null}
+                        {analysis.error ? <div className="text-[#9f341c]">{analysis.error}</div> : null}
+                      </div>
+                      {analysis.warnings?.length ? (
+                        <div className="mt-3 border-t border-[#eeeeeb] pt-2">
+                          <div className="mb-1 font-semibold text-[#34373c]">Notes</div>
+                          <div className="space-y-1 text-amber-700">
+                            {analysis.warnings.slice(0, 5).map((warning, index) => (
+                              <div key={`${warning}-${index}`}>{warning}</div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {analysis.progress?.stages?.length ? (
+                        <div className="mt-3 border-t border-[#eeeeeb] pt-2">
+                          <div className="mb-1 font-semibold text-[#34373c]">Run history</div>
+                          <div className="max-h-40 space-y-2 overflow-auto pr-1">
+                            {analysis.progress.stages.slice(-6).map((stage) => (
+                              <div key={`${stage.stage}-${stage.startedAt || stage.endedAt || ''}`} className="rounded-lg bg-[#fbfbfa] px-2 py-1.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-semibold text-[#34373c]">{stage.label || stage.stage}</span>
+                                  <span className="text-[#8b8f94]">{stage.status}</span>
+                                </div>
+                                {stage.message || stage.warning || stage.error ? (
+                                  <div className="mt-0.5 text-[#777a80]">{stage.message || stage.warning || stage.error}</div>
+                                ) : null}
+                                <div className="mt-0.5 flex flex-wrap gap-2 text-[#8b8f94]">
+                                  {stage.durationMs != null ? <span>{formatDuration(stage.durationMs)}</span> : null}
+                                  {stage.outputCount != null ? <span>{stage.outputCount} outputs</span> : null}
+                                  {stage.tool ? <span>{stage.tool}</span> : null}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#6f7378] transition hover:bg-[#f1f1ee] hover:text-[#202124]"
+              title={`Collapse ${intelligenceTitle}`}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto bg-[#f8f8f6] py-4">
+        {analysis?.status === 'ready' || analysis?.status === 'degraded' ? (
+          <div className="mb-4 px-4 text-sm leading-6 text-[#3f4247]">
+            {analysis.status === 'degraded' ? (
+              <div className="mb-2 inline-flex rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">Partial source guide</div>
+            ) : null}
+            {oneLineSummary || analysis.overview}
+            {analysis.readingAdvice ? <span className="text-[#6f7378]"> {analysis.readingAdvice}</span> : null}
+            {qualityLabel ? (
+              <div className="mt-2 text-xs leading-5 text-[#777a80]">Details are available from the more menu.</div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="mb-4 px-4">
+            <div className="text-sm font-semibold text-[#25272b]">
+              {isProcessing
+                ? 'Source guide in progress'
+                : analysis?.status === 'failed'
+                  ? 'Source guide unavailable'
+                  : 'No source guide generated yet'}
+            </div>
+            <div className="mt-1 text-xs leading-5 text-[#777a80]">
+              {isProcessing
+                ? 'The backend is extracting structure and building a cited map.'
+                : analysis?.error || 'Run source guide to build a cited map for this source.'}
+            </div>
+            {isProcessing ? null : (
+              <button
+                type="button"
+                onClick={() => startAnalysis(Boolean(analysis?.status === 'failed'))}
+                disabled={starting}
+                className="mt-3 inline-flex h-8 items-center gap-2 rounded-full bg-[#202124] px-3 text-xs font-medium text-white transition hover:bg-[#34373c] disabled:opacity-60"
+              >
+                {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                {analysis?.status === 'failed' ? 'Retry' : 'Generate'}
+              </button>
+            )}
+          </div>
+        )}
+        {showSemanticMap ? (
+          <div>
+            <div className="mb-3 px-4">
+            <div className="flex items-center gap-1">
+              {(['outline', 'slides'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className={`flex h-9 items-center justify-center overflow-hidden rounded-xl transition-all duration-300 ease-out ${
+                    activeTab === tab
+                      ? 'w-[116px] bg-white px-3 text-[#202124] shadow-[0_8px_24px_rgba(0,0,0,0.07)]'
+                      : 'w-9 px-0 text-[#7a7e84] hover:bg-white/70 hover:text-[#202124]'
+                  }`}
+                  title={tab === 'outline' ? 'Outline' : 'Slides'}
+                >
+                  {tab === 'outline' ? (
+                    <FileText className="h-4 w-4 shrink-0" />
+                  ) : (
+                    <Image className="h-4 w-4 shrink-0" />
+                  )}
+                  <span
+                    className={`whitespace-nowrap text-sm font-semibold transition-all duration-300 ease-out ${
+                      activeTab === tab ? 'ml-2 max-w-[76px] opacity-100' : 'ml-0 max-w-0 opacity-0'
+                    }`}
+                  >
+                    {tab === 'outline' ? `Outline ${flatOutline.length || ''}` : `Slides ${slideSegments.length || ''}`}
+                  </span>
+                </button>
+              ))}
+            </div>
+            </div>
+            {activeTab === 'outline' ? (
+              <div className="w-full divide-y divide-[#e1e1de] border-y border-[#e1e1de]">
+                {flatOutline.map((node) => (
+                  <button
+                    key={node.id}
+                    type="button"
+                    onClick={() => jumpToLocator(node)}
+                    className="group grid w-full grid-cols-[24px_1fr] gap-3 bg-transparent px-4 py-3 text-left transition duration-200 ease-out hover:bg-white focus-visible:bg-white focus-visible:outline-none"
+                    style={{ paddingLeft: `${12 + Math.max(0, (node.level || 1) - 1) * 14}px` }}
+                  >
+                    <FileText className="mt-0.5 h-5 w-5 text-[#9b9a95] transition group-hover:text-[#777a80]" />
+                    <div className="min-w-0">
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className={notionMetaClass}>
+                          {intelligenceRangeLabel(node.locator, node.pageStart ? `p${node.pageStart}` : undefined)}
+                        </span>
+                        <span className="text-[11px] text-[#b0b2b6]">L{node.level || 1}</span>
+                      </div>
+                      <div className="text-sm font-semibold leading-5 text-[#25272b]">{node.title}</div>
+                      {node.summary ? <p className="mt-2 text-sm leading-6 text-[#5f6368]">{node.summary}</p> : null}
+                      {node.evidenceSnippets?.length ? (
+                        <div className="mt-2 text-xs leading-5 text-[#777a80]">
+                          {node.evidenceSnippets[0]?.page ? <span className="font-mono text-[rgb(46,113,236)]">p{node.evidenceSnippets[0].page}</span> : null}
+                          {node.evidenceSnippets[0]?.page ? ' · ' : ''}
+                          {node.evidenceSnippets[0]?.text}
+                        </div>
+                      ) : null}
+                      {node.pageTypes?.length || node.confidence ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {node.confidence ? (
+                            <span className="text-[11px] text-[#777a80]">{node.confidence}</span>
+                          ) : null}
+                          {node.pageTypes?.slice(0, 2).map((pageType) => (
+                            <span key={`${node.id}:${pageType}`} className="text-[11px] text-[#777a80]">{pageType}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="w-full divide-y divide-[#e1e1de] border-y border-[#e1e1de]">
+                {slideSegments.map((segment: ResourceTranscriptSegmentUi) => (
+                  <button
+                    key={segment.id}
+                    type="button"
+                    onClick={() => jumpToLocator(segment)}
+                    className="group grid w-full grid-cols-[24px_1fr] gap-3 bg-transparent px-4 py-3 text-left transition duration-200 ease-out hover:bg-white focus-visible:bg-white focus-visible:outline-none"
+                  >
+                    <FileText className="mt-0.5 h-5 w-5 text-[#9b9a95] transition group-hover:text-[#777a80]" />
+                    <div className="min-w-0">
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className={notionMetaClass}>
+                          {intelligenceRangeLabel(segment.locator, segment.pageStart ? `p${segment.pageStart}` : `Part ${segment.index + 1}`)}
+                        </span>
+                        {segment.title ? <span className="truncate text-[11px] text-[#96999d]">{segment.title}</span> : null}
+                      </div>
+                      <p className="line-clamp-6 whitespace-pre-wrap text-sm leading-6 text-[#34373c]">{segment.text}</p>
+                      {segment.confidence ? (
+                        <div className="mt-2">
+                          <span className="text-[11px] text-[#777a80]">{segment.confidence}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : loading || isProcessing ? (
+          <div className="space-y-0 divide-y divide-[#e1e1de] border-y border-[#e1e1de]">
+            {[0, 1, 2, 3, 4].map((item) => (
+              <div key={item} className="px-4 py-3">
+                <div className="h-3 w-24 animate-pulse rounded bg-[#ececea]" />
+                <div className="mt-3 h-3 w-3/4 animate-pulse rounded bg-[#f0f0ee]" />
+                <div className="mt-2 h-3 w-11/12 animate-pulse rounded bg-[#f0f0ee]" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -294,7 +749,8 @@ function ResourcePanelShell({
   editor,
   resource,
   workspaceId,
-  sourceText,
+  guideKind,
+  guidePanel,
   sourceUrl,
   onUpdateViewState,
   children
@@ -302,45 +758,1022 @@ function ResourcePanelShell({
   editor: EditorState;
   resource: ResourceReference;
   workspaceId: string;
-  sourceText?: string;
+  guideKind?: ResourceIntelligenceKind;
+  guidePanel?: (props: { collapsed: boolean; onToggleCollapsed: () => void }) => ReactNode;
   sourceUrl?: string;
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
   children: ReactNode;
 }) {
+  const [guideOpen, setGuideOpen] = useState(false);
+  const hasGuide = Boolean(guidePanel || guideKind);
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white text-[#25272b]">
-      <div className="shrink-0 border-b border-[#eeeeeb] bg-white px-6 py-5">
+      <div className="shrink-0 border-b border-[#eeeeeb] bg-white px-5 py-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="truncate text-2xl font-semibold tracking-[-0.01em] text-[#202124]">
+            <h1 className="truncate text-xl font-semibold text-[#202124]">
               {resource.name}
             </h1>
             <div className="mt-1 truncate text-sm text-[#8b8f94]">{resource.path}</div>
           </div>
-          {sourceUrl && (
-            <a
-              href={sourceUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#4b4f55] transition hover:bg-[#f1f1ef] hover:text-[#202124]"
-              title="Open source"
-            >
-              <ArrowUpRight className="h-5 w-5" />
-            </a>
-          )}
-        </div>
-        <div className="mt-5">
-          <SourceGuide
-            resource={resource}
-            workspaceId={workspaceId}
-            editorId={editor.id}
-            sourceText={sourceText}
-            sourceUrl={sourceUrl}
-            onUpdateViewState={onUpdateViewState}
-          />
+          <div className="flex shrink-0 items-center gap-2">
+            {hasGuide && (
+              <button
+                type="button"
+                onClick={() => setGuideOpen((value) => !value)}
+                className={`inline-flex h-9 items-center justify-center overflow-hidden rounded-xl transition-all duration-300 ease-out ${
+                  guideOpen
+                    ? 'w-[132px] bg-[#f3f2ee] px-3 text-[#202124] shadow-[0_8px_24px_rgba(0,0,0,0.07)]'
+                    : 'w-9 px-0 text-[#7a7e84] hover:bg-[#f6f6f4] hover:text-[#202124]'
+                }`}
+                title="Source guide"
+                aria-pressed={guideOpen}
+              >
+                <PanelRight className="h-4 w-4 shrink-0" />
+                <span
+                  className={`whitespace-nowrap text-sm font-semibold transition-all duration-300 ease-out ${
+                    guideOpen ? 'ml-2 max-w-[92px] opacity-100' : 'ml-0 max-w-0 opacity-0'
+                  }`}
+                >
+                  Source guide
+                </span>
+              </button>
+            )}
+            {sourceUrl && (
+              <a
+                href={sourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#4b4f55] transition hover:bg-[#f1f1ef] hover:text-[#202124]"
+                title="Open source"
+              >
+                <ArrowUpRight className="h-5 w-5" />
+              </a>
+            )}
+          </div>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+      <div
+        className={`grid min-h-0 flex-1 bg-white ${
+          guideOpen ? 'xl:grid-cols-[minmax(0,1fr)_420px]' : 'xl:grid-cols-[minmax(0,1fr)]'
+        }`}
+      >
+        <div className="min-h-0 overflow-hidden">{children}</div>
+        {guideOpen && (
+        <aside className="hidden min-h-0 border-l border-[#eeeeeb] bg-[#f8f8f6] xl:block">
+          {guidePanel ? (
+            guidePanel({
+              collapsed: false,
+              onToggleCollapsed: () => setGuideOpen(false)
+            })
+          ) : guideKind ? (
+            <ResourceIntelligencePanel
+              resource={resource}
+              workspaceId={workspaceId}
+              kind={guideKind}
+              collapsed={false}
+              onToggleCollapsed={() => setGuideOpen(false)}
+            />
+          ) : null}
+        </aside>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function VideoLearningPanel({
+  resource,
+  workspaceId,
+  editorId,
+  currentTime = 0,
+  onSeek,
+  onUpdateViewState,
+  onClose
+}: {
+  resource: ResourceReference;
+  workspaceId: string;
+  editorId?: string;
+  currentTime?: number;
+  onSeek?: (seconds: number) => void;
+  onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
+  onClose?: () => void;
+}) {
+  const [analysis, setAnalysis] = useState<VideoAnalysis | null>(null);
+  const [activeTrack, setActiveTrack] = useState<'learning' | 'chapters' | 'transcript' | 'slides' | 'review'>('chapters');
+  const [loading, setLoading] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [savingEdits, setSavingEdits] = useState(false);
+  const [error, setError] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [compareOriginal, setCompareOriginal] = useState(false);
+  const [opsPanelOpen, setOpsPanelOpen] = useState(false);
+  const [preserveManualEdits, setPreserveManualEdits] = useState(true);
+  const [draftSummary, setDraftSummary] = useState('');
+  const [draftChapters, setDraftChapters] = useState<VideoChapter[]>([]);
+  const [draftKeyPoints, setDraftKeyPoints] = useState<VideoKeyPoint[]>([]);
+  const [selectedRange, setSelectedRange] = useState<{ start: number; end: number; segmentIds: string[] } | null>(null);
+  const [rangeAnchorId, setRangeAnchorId] = useState<string | null>(null);
+  const [highlightedTimestamp, setHighlightedTimestamp] = useState<number | null>(null);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const lastContextRef = useRef('');
+  const isStaleAnalysis = Boolean(
+    analysis &&
+    ['queued', 'processing'].includes(analysis.status) &&
+    Date.now() - new Date(analysis.startedAt || analysis.queuedAt || 0).getTime() > 30 * 60 * 1000
+  );
+  const isLocked = Boolean(analysis?.review?.locked);
+  const reviewStatus = analysis?.review?.status || 'draft';
+
+  const loadAnalysis = () => {
+    if (!resource.id) return;
+    setLoading(true);
+    setError('');
+    void fileSystemApi
+      .getVideoAnalysis(workspaceId, resource.id)
+      .then(setAnalysis)
+      .catch((err) => setError(err?.response?.data?.error || err?.message || 'Failed to load video analysis.'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadAnalysis();
+  }, [resource.id, workspaceId]);
+
+  useEffect(() => {
+    if (!analysis || editing) return;
+    setDraftSummary(analysis.summary || '');
+    setDraftChapters(analysis.chapters || []);
+    setDraftKeyPoints(analysis.keyPoints || []);
+  }, [analysis, editing]);
+
+  useEffect(() => {
+    if (!analysis || !['queued', 'processing'].includes(analysis.status) || isStaleAnalysis) return;
+    const timer = window.setInterval(loadAnalysis, 2500);
+    return () => window.clearInterval(timer);
+  }, [analysis?.status, isStaleAnalysis, resource.id, workspaceId]);
+
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!actionsRef.current?.contains(event.target as Node)) {
+        setActionsOpen(false);
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => window.removeEventListener('pointerdown', handlePointerDown);
+  }, [actionsOpen]);
+
+  const startAnalysis = (force = false) => {
+    setStarting(true);
+    setError('');
+    void fileSystemApi
+      .startVideoAnalysis(workspaceId, resource.id, force, preserveManualEdits)
+      .then(setAnalysis)
+      .catch((err) => setError(err?.response?.data?.error || err?.message || 'Failed to start video analysis.'))
+      .finally(() => setStarting(false));
+  };
+
+  const cancelAnalysis = () => {
+    setStarting(true);
+    setError('');
+    void fileSystemApi
+      .cancelVideoAnalysis(workspaceId, resource.id)
+      .then(setAnalysis)
+      .catch((err) => setError(err?.response?.data?.error || err?.message || 'Failed to cancel video analysis.'))
+      .finally(() => setStarting(false));
+  };
+
+  const saveManualEdits = (reviewPatch?: { status?: VideoReviewStatus; locked?: boolean }) => {
+    setSavingEdits(true);
+    setError('');
+    void fileSystemApi
+      .updateVideoAnalysis(workspaceId, resource.id, {
+        summary: draftSummary,
+        chapters: draftChapters,
+        keyPoints: draftKeyPoints,
+        review: reviewPatch
+      })
+      .then((next) => {
+        setAnalysis(next);
+        setEditing(false);
+      })
+      .catch((err) => setError(err?.response?.data?.error || err?.message || 'Failed to save video analysis edits.'))
+      .finally(() => setSavingEdits(false));
+  };
+
+  const updateReview = (reviewPatch: { status?: VideoReviewStatus; locked?: boolean }) => {
+    if (!analysis) return;
+    setSavingEdits(true);
+    setError('');
+    void fileSystemApi
+      .updateVideoAnalysis(workspaceId, resource.id, {
+        summary: analysis.summary,
+        chapters: analysis.chapters,
+        keyPoints: analysis.keyPoints,
+        review: reviewPatch
+      })
+      .then(setAnalysis)
+      .catch((err) => setError(err?.response?.data?.error || err?.message || 'Failed to update review state.'))
+      .finally(() => setSavingEdits(false));
+  };
+
+  const cancelManualEdits = () => {
+    setDraftSummary(analysis?.summary || '');
+    setDraftChapters(analysis?.chapters || []);
+    setDraftKeyPoints(analysis?.keyPoints || []);
+    setEditing(false);
+  };
+
+  const hasContent = Boolean(
+    analysis?.summary ||
+    analysis?.transcript?.length ||
+    analysis?.chapters?.length ||
+    analysis?.keyPoints?.length ||
+    analysis?.slides?.length
+  );
+  const isRunning = analysis?.status === 'queued' || analysis?.status === 'processing';
+  const progress = analysis?.progress;
+  const showOpsSummary = Boolean(progress && hasContent && !isRunning && !analysis?.error);
+  const showOpsDetails = Boolean(progress && opsPanelOpen);
+  const activeStage = progress?.stage || analysis?.status || 'idle';
+  const progressPercent = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
+  const canStartAnalysis = !starting && (isStaleAnalysis || !isRunning);
+  const analysisActionLabel = analysis?.status === 'failed' || analysis?.status === 'cancelled'
+    ? 'Retry'
+    : hasContent || isStaleAnalysis
+      ? 'Regenerate'
+      : 'Analyze';
+  const videoSubtitle = loading && !analysis
+    ? 'Loading analysis...'
+    : analysis
+      ? analysis.status === 'failed' || analysis.status === 'cancelled'
+        ? 'Analysis did not finish'
+        : isRunning
+          ? `${videoAnalysisStatusLabel[analysis.status]} · ${videoStageLabels[activeStage] || activeStage}`
+          : hasContent
+            ? `${videoAnalysisStatusLabel[analysis.status]} · ${analysis.provider}`
+            : videoAnalysisStatusLabel[analysis.status]
+      : 'Transcript, chapters, key points, and slide frames';
+  const hasAnalysisIssue = Boolean(error || analysis?.error || analysis?.status === 'failed' || analysis?.status === 'cancelled');
+  const chapters = editing ? draftChapters : analysis?.chapters || [];
+  const keyPoints = editing ? draftKeyPoints : analysis?.keyPoints || [];
+  const transcript = analysis?.transcript || [];
+  const slides = analysis?.slides || [];
+  const activeTranscript = transcript.find((segment) => currentTime >= segment.start && currentTime < segment.end);
+  const activeChapter = chapters.find((chapter, index) =>
+    containsVideoTime(chapter.start, chapter.end, currentTime, chapters[index + 1]?.start)
+  );
+  const activeSlide = slides.reduce<SlideFrame | undefined>((best, slide) => {
+    if (slide.timestamp > currentTime) return best;
+    if (!best || slide.timestamp > best.timestamp) return slide;
+    return best;
+  }, undefined);
+  const nearbySlides = slides
+    .filter((slide) => Math.abs(slide.timestamp - currentTime) <= 120 || slide.id === activeSlide?.id || slide.chapterId === activeChapter?.id)
+    .slice(0, 6);
+  const activeKeyPoints = keyPoints.filter((point) =>
+    point.timestamps.some((timestamp) => Math.abs(timestamp - currentTime) <= 45) || point.sourceRange && containsVideoTime(point.sourceRange.start, point.sourceRange.end, currentTime)
+  );
+
+  const seekTo = (seconds?: number) => {
+    if (seconds == null || Number.isNaN(Number(seconds))) return;
+    const next = Math.max(0, Number(seconds));
+    setHighlightedTimestamp(next);
+    onSeek?.(next);
+    window.setTimeout(() => setHighlightedTimestamp(null), 2800);
+  };
+
+  const buildRangeText = (range: { start: number; end: number; segmentIds: string[] }) => {
+    const segments = range.segmentIds
+      .map((id) => transcript.find((segment) => segment.id === id))
+      .filter(Boolean) as TranscriptSegment[];
+    const text = segments.map((segment) => `[${formatVideoTime(segment.start)}] ${segment.text}`).join('\n');
+    return text || `Video range ${videoRangeText(range.start, range.end)}`;
+  };
+
+  const publishVideoContext = (range = selectedRange) => {
+    if (!editorId || !onUpdateViewState || !analysis) return;
+    const selectedText = range ? buildRangeText(range) : '';
+    const contextLines = [
+      `Video: ${analysis.title || resource.name}`,
+      `Current time: ${formatVideoTime(currentTime)}`,
+      activeChapter ? `Current chapter: ${videoRangeText(activeChapter.start, activeChapter.end)} ${activeChapter.title}` : '',
+      activeSlide ? `Current slide: ${formatVideoTime(activeSlide.timestamp)} ${activeSlide.title || activeSlide.ocrText || ''}` : '',
+      activeTranscript ? `Current transcript: ${activeTranscript.text}` : '',
+      range ? `Selected range: ${videoRangeText(range.start, range.end)}\n${selectedText}` : ''
+    ].filter(Boolean).join('\n');
+    onUpdateViewState(editorId, {
+      selectedText,
+      selectedRange: range
+        ? {
+            timestampStart: range.start,
+            timestampEnd: range.end,
+            textLength: selectedText.length,
+            sourceType: 'video_selection'
+          }
+        : null,
+      videoCurrentTime: currentTime,
+      videoActiveChapterId: activeChapter?.id,
+      videoActiveSlideId: activeSlide?.id,
+      videoContextText: contextLines,
+      visibleContent: contextLines,
+      approxChunkIndex: Math.max(0, Math.floor(currentTime / 30))
+    });
+  };
+
+  useEffect(() => {
+    if (!analysis || !editorId || !onUpdateViewState) return;
+    const signature = [
+      Math.floor(currentTime / 5),
+      activeChapter?.id || '',
+      activeSlide?.id || '',
+      activeTranscript?.id || '',
+      selectedRange ? `${selectedRange.start}-${selectedRange.end}` : ''
+    ].join(':');
+    if (signature === lastContextRef.current) return;
+    lastContextRef.current = signature;
+    publishVideoContext(selectedRange);
+  }, [analysis, editorId, onUpdateViewState, currentTime, activeChapter?.id, activeSlide?.id, activeTranscript?.id, selectedRange?.start, selectedRange?.end]);
+
+  useEffect(() => {
+    const handleJump = (event: Event) => {
+      const detail = (event as CustomEvent<CitationJumpDetail>).detail;
+      if (!detail?.fileId || detail.fileId !== resource.id) return;
+      const start = Number(detail.locator?.timestampStart ?? detail.locator?.start ?? detail.locator?.time ?? detail.locator?.timestamp);
+      const end = Number(detail.locator?.timestampEnd ?? detail.locator?.end ?? start);
+      if (!Number.isFinite(start)) return;
+      seekTo(start);
+      setSelectedRange(Number.isFinite(end) && end > start ? { start, end, segmentIds: transcript.filter((segment) => segment.end >= start && segment.start <= end).map((segment) => segment.id) } : null);
+      trackRef.current?.scrollTo({ top: Math.max(0, start * 3), behavior: 'smooth' });
+    };
+    window.addEventListener('workbench:jump-to-citation', handleJump);
+    return () => window.removeEventListener('workbench:jump-to-citation', handleJump);
+  }, [resource.id, transcript, onSeek]);
+
+  const selectTranscriptRange = (segment: TranscriptSegment, extend = false) => {
+    if (!extend || !rangeAnchorId) {
+      setRangeAnchorId(segment.id);
+      setSelectedRange({ start: segment.start, end: segment.end, segmentIds: [segment.id] });
+      return;
+    }
+    const anchorIndex = transcript.findIndex((item) => item.id === rangeAnchorId);
+    const currentIndex = transcript.findIndex((item) => item.id === segment.id);
+    if (anchorIndex < 0 || currentIndex < 0) return;
+    const [from, to] = anchorIndex <= currentIndex ? [anchorIndex, currentIndex] : [currentIndex, anchorIndex];
+    const items = transcript.slice(from, to + 1);
+    setSelectedRange({
+      start: items[0]?.start ?? segment.start,
+      end: items[items.length - 1]?.end ?? segment.end,
+      segmentIds: items.map((item) => item.id)
+    });
+  };
+
+  const clearRange = () => {
+    setSelectedRange(null);
+    setRangeAnchorId(null);
+    if (editorId && onUpdateViewState) {
+      onUpdateViewState(editorId, { selectedText: '', selectedRange: null });
+    }
+  };
+
+  const EvidenceList = ({ evidence }: { evidence?: VideoEvidenceSegment[] }) => {
+    if (!evidence?.length) return null;
+    return (
+      <div className="mt-3 border-y border-[#e1e1de] bg-[#f8f8f6]">
+        <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#777a80]">依据字幕</div>
+        <div className={notionListClass}>
+          {evidence.slice(0, 3).map((segment) => (
+            <button
+              key={`${segment.segmentId}-${segment.start}`}
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                seekTo(segment.start);
+              }}
+              className={`${notionRowClass} grid grid-cols-[64px_1fr] gap-2 text-xs leading-5 text-[#5f6368] hover:text-[#25272b]`}
+            >
+              <span className="font-semibold text-[rgb(46,113,236)]">{formatVideoTime(segment.start)}</span>
+              <span className="line-clamp-2">{segment.text}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const ConfidenceBadge = ({ confidence, edited }: { confidence?: string; edited?: boolean }) => (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${videoConfidenceClass[confidence || 'low'] || videoConfidenceClass.low}`}>
+      {edited ? '人工修订' : confidenceText[confidence || 'low']}
+    </span>
+  );
+
+  const ProgressPanel = () => {
+    if (!analysis || !progress) return null;
+    const visibleStages = (progress.stages || []).slice(-8);
+    if (!showOpsDetails && showOpsSummary) {
+      return (
+        <button
+          type="button"
+          onClick={() => setOpsPanelOpen(true)}
+          className="mb-3 flex w-full items-center justify-between gap-3 border-y border-[#e1e1de] bg-[#f8f8f6] px-4 py-3 text-left text-xs text-[#777a80] transition hover:bg-white"
+        >
+          <span>
+            <span className="font-semibold text-[#34373c]">{videoStageLabels[activeStage] || activeStage}</span>
+            <span className="ml-2">{progress.message || 'Video analysis completed.'}</span>
+          </span>
+          <span className="shrink-0 font-semibold text-[rgb(46,113,236)]">More</span>
+        </button>
+      );
+    }
+    if (!showOpsDetails) return null;
+    return (
+      <div className="mb-4 border-y border-[#e1e1de] bg-[#f8f8f6] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-semibold text-[#25272b]">
+              {videoStageLabels[activeStage] || activeStage}
+            </div>
+            <div className="mt-1 text-xs leading-5 text-[#777a80]">
+              {progress.message || (isRunning ? 'Video analysis is running.' : 'Video analysis status is available.')}
+              {progress.queuePosition ? ` Queue position ${progress.queuePosition}.` : ''}
+              {progress.heartbeatAt ? ` Last update ${new Date(progress.heartbeatAt).toLocaleTimeString()}.` : ''}
+            </div>
+          </div>
+          <div className="text-right text-xs text-[#777a80]">
+            <div className="font-semibold text-[#34373c]">{progressPercent}%</div>
+            {progress.costEstimate != null && <div>cost {progress.costEstimate}</div>}
+            {!isRunning && hasContent && (
+              <button
+                type="button"
+                onClick={() => setOpsPanelOpen(false)}
+                className="mt-1 font-medium text-[rgb(46,113,236)] hover:underline"
+              >
+                Collapse
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#ececea]">
+          <div className="h-full rounded-full bg-[rgb(46,113,236)] transition-all" style={{ width: `${progressPercent}%` }} />
+        </div>
+        {visibleStages.length > 0 && (
+          <div className="mt-3 divide-y divide-[#e1e1de] border-y border-[#e1e1de]">
+            {visibleStages.map((stage) => (
+              <div key={`${stage.stage}-${stage.startedAt || ''}`} className="bg-transparent px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="truncate text-xs font-semibold text-[#34373c]">
+                    {stage.label || videoStageLabels[stage.stage] || stage.stage}
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                    stage.status === 'completed' ? 'bg-[#f3faf1] text-[#2f6c2f]' :
+                      stage.status === 'failed' ? 'bg-[#fff3f0] text-[#9f341c]' :
+                        stage.status === 'cancelled' ? 'bg-[#f6f6f4] text-[#777a80]' :
+                          stage.status === 'skipped' ? 'bg-[#f6f6f4] text-[#777a80]' :
+                            'bg-[#f0f2fb] text-[rgb(46,113,236)]'
+                  }`}>
+                    {stage.status}
+                  </span>
+                </div>
+                <div className="mt-1 text-[11px] leading-4 text-[#777a80]">
+                  {stage.message || stage.warning || stage.error || stage.tool || ''}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-[#8b8f94]">
+                  {stage.durationMs != null && <span>{formatDuration(stage.durationMs)}</span>}
+                  {stage.outputCount != null && <span>{stage.outputCount} outputs</span>}
+                  {stage.errorClass && <span>{errorClassLabel[stage.errorClass] || stage.errorClass}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex h-full min-h-[520px] flex-col bg-[#f8f8f6] xl:min-h-0">
+      <div className="shrink-0 border-b border-[#e1e1de] bg-[#f8f8f6] px-4 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+            <div className="text-sm font-semibold text-[#25272b]">Source guide</div>
+          <div className="mt-1 text-xs text-[#777a80]">
+            {videoSubtitle}
+          </div>
+          {hasAnalysisIssue && (
+            <button
+              type="button"
+              onClick={() => {
+                setOpsPanelOpen(true);
+                setActionsOpen(true);
+              }}
+              className="mt-2 inline-flex h-7 max-w-full items-center gap-2 rounded-full bg-[#fff3ef] px-3 text-xs font-medium text-[#a3341c] ring-1 ring-[#f1d3ca] transition hover:bg-[#ffebe5]"
+            >
+              <span className="truncate">
+                {analysis?.status === 'failed' || analysis?.status === 'cancelled' ? 'Video analysis did not finish.' : 'Video analysis needs attention.'}
+              </span>
+              <span className="shrink-0 font-semibold text-[rgb(46,113,236)]">Details</span>
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {hasContent && (
+            editing ? (
+              <>
+                <button
+                  type="button"
+                  onClick={cancelManualEdits}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#eeeeeb] px-3 text-xs font-medium text-[#5f6368] transition hover:bg-[#f6f6f4]"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => saveManualEdits({ status: reviewStatus, locked: isLocked })}
+                  disabled={savingEdits}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#202124] px-3 text-xs font-medium text-white transition hover:bg-[#34373c] disabled:opacity-60"
+                >
+                  {savingEdits ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                  Save
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                disabled={isLocked}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#eeeeeb] px-3 text-xs font-medium text-[#5f6368] transition hover:bg-[#f6f6f4]"
+              >
+                <Edit3 className="h-3.5 w-3.5" />
+                Edit
+              </button>
+            )
+          )}
+          <div ref={actionsRef} className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setActionsOpen((value) => !value);
+                setOpsPanelOpen(true);
+              }}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#5f6368] transition hover:bg-[#f6f6f4] hover:text-[#202124]"
+              title="More actions"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+            {actionsOpen && (
+              <div className="absolute right-0 top-9 z-30 w-80 overflow-hidden rounded-xl border border-[#e5e5e1] bg-white py-1 text-sm shadow-lg shadow-black/10">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActionsOpen(false);
+                    startAnalysis(Boolean(hasContent || isStaleAnalysis));
+                  }}
+                  disabled={!canStartAnalysis}
+                  className="flex w-full items-center justify-between px-3 py-2 text-left text-[#34373c] transition hover:bg-[#f7f7f5] disabled:opacity-60"
+                >
+                  <span>{analysisActionLabel}</span>
+                  {starting || (!isStaleAnalysis && isRunning)
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : hasContent ? <RefreshCcw className="h-3.5 w-3.5 text-[#8b8f94]" /> : <Sparkles className="h-3.5 w-3.5 text-[#8b8f94]" />}
+                </button>
+                {isRunning && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionsOpen(false);
+                      cancelAnalysis();
+                    }}
+                    disabled={starting || progress?.canCancel === false}
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-[#34373c] transition hover:bg-[#f7f7f5] disabled:opacity-60"
+                  >
+                    <span>Cancel analysis</span>
+                    <X className="h-3.5 w-3.5 text-[#8b8f94]" />
+                  </button>
+                )}
+                <div className="border-t border-[#eeeeeb] px-3 py-3 text-xs leading-5 text-[#5f6368]">
+                  <div className="mb-2 flex items-center gap-2 font-semibold text-[#34373c]">
+                    <Info className="h-3.5 w-3.5 text-[#8b8f94]" />
+                    Source guide details
+                  </div>
+                  <div className="space-y-1">
+                    <div>Status: {analysis ? videoAnalysisStatusLabel[analysis.status] : loading ? 'Loading' : 'Not analyzed'}</div>
+                    {analysis?.provider ? <div>Source: {analysis.provider}</div> : null}
+                    {progress ? <div>Stage: {videoStageLabels[activeStage] || activeStage} · {progressPercent}%</div> : null}
+                    {progress?.message ? <div>{progress.message}</div> : null}
+                    {progress?.heartbeatAt ? <div>Last update {new Date(progress.heartbeatAt).toLocaleString()}</div> : null}
+                    {analysis?.manualRevision ? (
+                      <div>Manual revision {analysis.manualRevision.revision} saved {new Date(analysis.manualRevision.updatedAt).toLocaleString()}</div>
+                    ) : null}
+                    {analysis?.review ? <div>Review: {reviewStatus.replace('_', ' ')}{isLocked ? ' · locked' : ''}</div> : null}
+                    {analysis?.errorClass ? <div>{errorClassLabel[analysis.errorClass] || analysis.errorClass}</div> : null}
+                    {analysis?.error ? <div className="text-[#9f341c]">{analysis.error}</div> : null}
+                    {error ? <div className="text-[#9f341c]">{error}</div> : null}
+                  </div>
+                  {progress?.stages?.length ? <div className="mt-3"><ProgressPanel /></div> : null}
+                  {analysis?.warnings?.length ? (
+                    <div className="mt-3 border-t border-[#eeeeeb] pt-2">
+                      <div className="mb-1 font-semibold text-[#34373c]">Notes</div>
+                      <div className="space-y-1 text-amber-700">
+                        {analysis.warnings.slice(0, 5).map((warning, index) => (
+                          <div key={`${warning}-${index}`}>{warning}</div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            )}
+          </div>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#6f7378] transition hover:bg-[#f1f1ee] hover:text-[#202124]"
+              title="Close source guide"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        </div>
+      </div>
+
+      <div className="shrink-0 border-b border-[#e1e1de] bg-[#f8f8f6] px-4 py-3">
+        <div className="flex items-center gap-1">
+          {([
+            { key: 'chapters', label: 'Chapters', count: chapters.length, icon: FileText },
+            { key: 'transcript', label: 'Transcript', count: transcript.length, icon: FileText },
+            { key: 'slides', label: 'Slides', count: slides.length, icon: Image },
+            { key: 'learning', label: 'Evidence & Review', count: keyPoints.length, icon: Sparkles }
+          ] as const).map(({ key, label, count, icon: Icon }) => {
+            const active = activeTrack === key || (activeTrack === 'review' && key === 'learning');
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveTrack(key)}
+                className={`flex h-9 items-center justify-center overflow-hidden rounded-xl transition-all duration-300 ease-out ${
+                  active
+                    ? 'w-[132px] bg-white px-3 text-[#202124] shadow-[0_8px_24px_rgba(0,0,0,0.07)]'
+                    : 'w-9 px-0 text-[#7a7e84] hover:bg-white/70 hover:text-[#202124]'
+                }`}
+                title={label}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className={`whitespace-nowrap text-sm font-semibold transition-all duration-300 ease-out ${
+                  active ? 'ml-2 max-w-[96px] opacity-100' : 'ml-0 max-w-0 opacity-0'
+                }`}>
+                  {label}{count ? ` ${count}` : ''}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto bg-[#f8f8f6] py-4">
+        {!analysis || (!hasContent && analysis.status === 'idle') ? (
+          <div className="border-y border-[#e1e1de] px-4 py-5 text-sm leading-6 text-[#5f6368]">
+            Start analysis to extract captions, AI chapters, learning key points, and slide-like frames from this video.
+          </div>
+        ) : (
+            <section ref={trackRef} className="min-w-0">
+              {selectedRange && (
+	                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-y border-[#d7dcf4] bg-[#f7f8ff] px-3 py-2 text-xs text-[#4b4f55]">
+                  <div>
+                    <span className="font-semibold text-[#202124]">Context chip</span>
+                    <span className="ml-2 font-semibold text-[rgb(46,113,236)]">{videoRangeText(selectedRange.start, selectedRange.end)}</span>
+                    <span className="ml-2 text-[#777a80]">{selectedRange.segmentIds.length} transcript lines selected</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => publishVideoContext(selectedRange)} className="bg-[#202124] px-3 py-1.5 font-medium text-white">Use in AI</button>
+                    <button type="button" onClick={clearRange} className="border border-[#d7d7d2] bg-white px-3 py-1.5 font-medium text-[#5f6368]">Clear</button>
+                  </div>
+                </div>
+              )}
+
+              {activeTrack === 'learning' && (
+                <div className="space-y-4">
+            {analysis.manualRevision && (
+              <div className="border-y border-[#e1e1de] px-4 py-2 text-xs text-[#777a80]">
+                Manual revision {analysis.manualRevision.revision} saved {new Date(analysis.manualRevision.updatedAt).toLocaleString()} · {reviewStatus.replace('_', ' ')}{isLocked ? ' · locked' : ''}
+              </div>
+            )}
+            {editing ? (
+              <textarea
+                value={draftSummary}
+                onChange={(event) => setDraftSummary(event.target.value)}
+                className="min-h-[140px] w-full rounded-xl border border-[#d7d7d2] px-3 py-2 text-sm leading-6 text-[#34373c] outline-none focus:border-[rgb(46,113,236)] focus:ring-2 focus:ring-[rgb(46,113,236)]/15"
+              />
+            ) : analysis.summary ? <div className="px-4">
+              <div className="mb-2 flex items-center gap-2">
+                <ConfidenceBadge confidence={analysis.summaryConfidence} edited={analysis.summaryManuallyEdited} />
+                {analysis.summarySourceRange && (
+                  <span className="text-xs text-[#777a80]">
+                    {videoRangeText(analysis.summarySourceRange.start, analysis.summarySourceRange.end)}
+                  </span>
+                )}
+              </div>
+              <p className="whitespace-pre-wrap text-sm leading-7 text-[#34373c]">{analysis.summary}</p>
+              <EvidenceList evidence={analysis.summaryEvidenceSegments} />
+            </div> : (
+              <p className="text-sm leading-7 text-[#777a80]">No summary is available yet.</p>
+            )}
+                  {activeChapter && (
+                    <button type="button" onClick={() => seekTo(activeChapter.start)} className={`${notionRowClass} border-y border-[#e1e1de]`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-[#777a80]">Current chapter</div>
+                        <span className="text-xs font-semibold text-[rgb(46,113,236)]">{videoRangeText(activeChapter.start, activeChapter.end)}</span>
+                      </div>
+                      <div className="mt-2 text-sm font-semibold text-[#25272b]">{activeChapter.title}</div>
+                      {activeChapter.summary && <p className="mt-1 text-sm leading-6 text-[#5f6368]">{activeChapter.summary}</p>}
+                    </button>
+                  )}
+
+                  {nearbySlides.length > 0 && (
+	                    <div className={notionListClass}>
+                      {nearbySlides.map((slide) => {
+                        const src = slide.imageUrl || (slide.imageFileId ? fileSystemApi.downloadUrl(workspaceId, slide.imageFileId) : '');
+                        const active = slide.id === activeSlide?.id;
+                        return (
+	                          <button key={slide.id} type="button" onClick={() => seekTo(slide.timestamp)} className={`${notionRowClass} grid grid-cols-[96px_1fr] gap-3 ${active ? notionActiveRowClass : ''}`}>
+                            {src ? <img src={src} alt={slide.title || 'Video frame'} className="aspect-video w-full bg-[#f6f6f4] object-cover" /> : <div className="flex aspect-video w-full items-center justify-center bg-[#f6f6f4] text-xs text-[#777a80]">Frame</div>}
+                            <div className="min-w-0 text-xs">
+                              <div className="font-semibold text-[rgb(46,113,236)]">{formatVideoTime(slide.timestamp)}</div>
+                              {slide.title && <div className="mt-1 line-clamp-1 font-semibold text-[#25272b]">{slide.title}</div>}
+                              {slide.ocrText && <div className="mt-1 line-clamp-2 text-[#5f6368]">{slide.ocrText}</div>}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+	                  <div className="border-y border-[#e1e1de] bg-[#f8f8f6]">
+                    <div className="flex items-center justify-between border-b border-[#e1e1de] px-4 py-2">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-[#777a80]">Live transcript evidence</div>
+                      <div className="text-xs font-semibold text-[rgb(46,113,236)]">{formatVideoTime(currentTime)}</div>
+                    </div>
+	                    <div className="max-h-[260px] overflow-auto">
+                      {transcript.length ? transcript.map((segment) => {
+                        const active = activeTranscript?.id === segment.id || highlightedTimestamp != null && highlightedTimestamp >= segment.start && highlightedTimestamp <= segment.end;
+                        const selected = selectedRange?.segmentIds.includes(segment.id);
+                        return (
+                          <button
+                            key={segment.id}
+                            type="button"
+                            onClick={(event) => {
+                              seekTo(segment.start);
+                              selectTranscriptRange(segment, event.shiftKey);
+                            }}
+	                            className={`${notionRowClass} grid grid-cols-[88px_1fr] gap-3 ${
+	                              active ? notionActiveRowClass : selected ? 'bg-[#f7f8ff]' : ''
+	                            }`}
+                          >
+                            <span className="text-xs font-semibold text-[rgb(46,113,236)]">{videoRangeText(segment.start, segment.end)}</span>
+                            <span className="text-sm leading-6 text-[#34373c]">{segment.text}</span>
+                          </button>
+                        );
+                      }) : <div className="px-4 py-3 text-sm text-[#777a80]">No transcript available.</div>}
+                    </div>
+                  </div>
+
+                  {activeKeyPoints.length > 0 && (
+	                    <div className={notionListClass}>
+                      {activeKeyPoints.map((point) => (
+	                        <button key={point.id} type="button" onClick={() => seekTo(point.timestamps[0] ?? point.sourceRange?.start)} className={notionRowClass}>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-sm font-semibold text-[#25272b]">{point.concept}</div>
+                            <ConfidenceBadge confidence={point.confidence} edited={point.manuallyEdited} />
+                          </div>
+                          <div className="mt-1 text-xs leading-5 text-[#5f6368]">{point.explanation}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+            {keyPoints.length > 0 && (
+	              <div className={notionListClass}>
+                {keyPoints.map((point, index) => (
+                  <div
+                    key={point.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => point.timestamps[0] != null && seekTo(point.timestamps[0])}
+                    onKeyDown={(event) => {
+                      if ((event.key === 'Enter' || event.key === ' ') && point.timestamps[0] != null) {
+                        event.preventDefault();
+                        seekTo(point.timestamps[0]);
+                      }
+                    }}
+	                    className={notionRowClass}
+                  >
+                    {editing ? (
+                      <div className="space-y-2" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          value={point.concept}
+                          onChange={(event) => setDraftKeyPoints((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, concept: event.target.value } : item))}
+                          className="w-full rounded-lg border border-[#d7d7d2] px-2 py-1.5 text-sm font-semibold outline-none focus:border-[rgb(46,113,236)]"
+                        />
+                        <textarea
+                          value={point.explanation}
+                          onChange={(event) => setDraftKeyPoints((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, explanation: event.target.value } : item))}
+                          className="min-h-[72px] w-full rounded-lg border border-[#d7d7d2] px-2 py-1.5 text-xs leading-5 outline-none focus:border-[rgb(46,113,236)]"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm font-semibold text-[#25272b]">{point.concept}</div>
+                          <ConfidenceBadge confidence={point.confidence} edited={point.manuallyEdited} />
+                        </div>
+                        <div className="mt-1 text-xs leading-5 text-[#5f6368]">{point.explanation}</div>
+                      </>
+                    )}
+                    {point.timestamps.length > 0 && <div className="mt-2 text-xs font-medium text-[rgb(46,113,236)]">{point.timestamps.map(formatVideoTime).join(', ')}</div>}
+                    {!editing && <EvidenceList evidence={point.evidenceSegments} />}
+                  </div>
+                ))}
+              </div>
+            )}
+                </div>
+              )}
+
+              {activeTrack === 'chapters' && (
+	          <div className={notionListClass}>
+            {chapters.length ? chapters.map((chapter, index) => {
+              const active = activeChapter?.id === chapter.id;
+              return (
+                <button
+                  key={chapter.id}
+                  type="button"
+                  onClick={() => seekTo(chapter.start)}
+	                  className={`${notionRowClass} ${
+	                    active ? notionActiveRowClass : ''
+	                  }`}
+                >
+                  <div className="text-xs font-semibold text-[rgb(46,113,236)]">{videoRangeText(chapter.start, chapter.end ?? chapters[index + 1]?.start)}</div>
+                  <div className="mt-1 text-sm font-semibold text-[#25272b]">{chapter.title}</div>
+                  {chapter.summary && <p className="mt-1 line-clamp-3 text-xs leading-5 text-[#5f6368]">{chapter.summary}</p>}
+                  {chapter.keyPoints.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {chapter.keyPoints.slice(0, 4).map((point) => (
+                        <span key={point} className="bg-[#f0f2fb] px-1.5 py-0.5 text-[11px] text-[#4b4f55]">{point}</span>
+                      ))}
+                    </div>
+                  )}
+                </button>
+              );
+            }) : <div className="px-3 py-4 text-sm text-[#777a80]">No chapters available.</div>}
+          </div>
+              )}
+
+              {activeTrack === 'transcript' && (
+	          <div className={notionListClass}>
+            {analysis.transcript.length ? analysis.transcript.map((segment) => (
+              <button
+                key={segment.id}
+                type="button"
+                onClick={(event) => {
+                  seekTo(segment.start);
+                  selectTranscriptRange(segment, event.shiftKey);
+                }}
+	                className={`${notionRowClass} grid grid-cols-[96px_1fr] gap-3 py-2 ${
+	                  activeTranscript?.id === segment.id ? notionActiveRowClass : selectedRange?.segmentIds.includes(segment.id) ? 'bg-[#f7f8ff]' : ''
+	                }`}
+              >
+                <span className="text-xs font-semibold text-[rgb(46,113,236)]">
+                  {videoRangeText(segment.start, segment.end)}
+                </span>
+                <span className="text-sm leading-6 text-[#34373c]">{segment.text}</span>
+              </button>
+            )) : <div className="px-4 py-3 text-sm text-[#777a80]">No transcript available.</div>}
+          </div>
+              )}
+
+              {activeTrack === 'slides' && (
+	          <div className={notionListClass}>
+            {analysis.slides.length ? analysis.slides.map((slide) => {
+              const src = slide.imageUrl || (slide.imageFileId ? fileSystemApi.downloadUrl(workspaceId, slide.imageFileId) : '');
+              const chapter = slide.chapterId ? analysis.chapters.find((item) => item.id === slide.chapterId) : undefined;
+              const transcript = (slide.transcriptSegmentIds || [])
+                .map((segmentId) => analysis.transcript.find((segment) => segment.id === segmentId))
+                .filter(Boolean)
+                .slice(0, 2);
+              return (
+                <button
+                  key={slide.id}
+                  type="button"
+                  onClick={() => seekTo(slide.timestamp)}
+	                  className={`${notionRowClass} grid grid-cols-[104px_1fr] gap-3 py-2 ${activeSlide?.id === slide.id ? notionActiveRowClass : ''}`}
+                >
+                  {src ? <img src={src} alt={slide.title || 'Video frame'} className="aspect-video w-full bg-[#f6f6f4] object-cover" /> : (
+                    <div className="flex aspect-video w-full items-center justify-center bg-[#f6f6f4] text-xs text-[#777a80]">Frame</div>
+                  )}
+                  <div className="min-w-0 space-y-1 text-xs text-[#4b4f55]">
+                    <div className="flex flex-wrap items-center gap-2 font-medium">
+                      <span className="text-[rgb(46,113,236)]">{formatVideoTime(slide.timestamp)}</span>
+                      {slide.duplicateOf && <span className="rounded-full bg-[#f6f6f4] px-2 py-0.5 text-[11px] text-[#777a80]">重复帧</span>}
+                    </div>
+                    {slide.title && <div className="font-semibold text-[#25272b] line-clamp-1">{slide.title}</div>}
+                    {chapter && <div className="line-clamp-1 text-[#777a80]">章节：{chapter.title}</div>}
+                    {slide.ocrText && <div className="line-clamp-2 text-[#5f6368]">OCR：{slide.ocrText}</div>}
+                    {transcript.length > 0 && (
+                      <div className="line-clamp-2 text-[#777a80]">
+                        讲解：{transcript.map((segment) => segment?.text).filter(Boolean).join(' ')}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              );
+            }) : <div className="px-4 py-3 text-sm text-[#777a80]">No slide frames available yet. Uploaded videos can use ffmpeg-based frame extraction.</div>}
+          </div>
+              )}
+
+              {(activeTrack === 'review' || activeTrack === 'learning') && (
+                <div className="space-y-4">
+                  <div className="border-y border-[#e1e1de] px-4 py-3">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#777a80]">Review controls</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="inline-flex h-8 overflow-hidden border border-[#eeeeeb] bg-white text-xs font-medium">
+                        {(['draft', 'in_review', 'reviewed', 'approved'] as VideoReviewStatus[]).map((status) => (
+                          <button
+                            key={status}
+                            type="button"
+                            onClick={() => updateReview({ status })}
+                            disabled={savingEdits}
+                            className={`px-2.5 capitalize transition ${reviewStatus === status ? 'bg-[#f0f2fb] text-[#202124]' : 'text-[#777a80] hover:bg-[#f6f6f4]'}`}
+                          >
+                            {status.replace('_', ' ')}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => updateReview({ locked: !isLocked, status: reviewStatus })}
+                        disabled={savingEdits}
+                        className={`inline-flex h-8 items-center gap-1.5 border px-3 text-xs font-medium transition ${
+                          isLocked ? 'border-[#b8dfad] bg-[#f3faf1] text-[#2f6c2f]' : 'border-[#eeeeeb] bg-white text-[#5f6368] hover:bg-[#f6f6f4]'
+                        }`}
+                      >
+                        {isLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+                        {isLocked ? 'Locked' : 'Lock'}
+                      </button>
+                      <label className="inline-flex h-8 items-center gap-2 border border-[#eeeeeb] bg-white px-2 text-xs font-medium text-[#5f6368]">
+                        <input
+                          type="checkbox"
+                          checked={preserveManualEdits}
+                          onChange={(event) => setPreserveManualEdits(event.target.checked)}
+                          className="h-3.5 w-3.5"
+                        />
+                        Regenerate keeps manual edits
+                      </label>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-y border-[#e1e1de] px-4 py-3">
+                    <div className="text-sm font-semibold text-[#25272b]">Manual revision vs AI original</div>
+                    <button type="button" onClick={() => setCompareOriginal((value) => !value)} className="border border-[#eeeeeb] bg-white px-3 py-1.5 text-xs font-medium text-[#5f6368]">
+                      {compareOriginal ? 'Hide compare' : 'Compare'}
+                    </button>
+                  </div>
+                  {editing && (
+                    <div className="divide-y divide-[#e1e1de] border-y border-[#e1e1de]">
+                      {draftChapters.map((chapter, index) => (
+                        <div key={chapter.id} className="px-4 py-3">
+                          <div className="mb-2 text-xs font-semibold text-[rgb(46,113,236)]">{formatVideoTime(chapter.start)}</div>
+                          <input value={chapter.title} onChange={(event) => setDraftChapters((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} className="w-full rounded-lg border border-[#d7d7d2] px-2 py-1.5 text-sm font-semibold outline-none focus:border-[rgb(46,113,236)]" />
+                          <textarea value={chapter.summary} onChange={(event) => setDraftChapters((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, summary: event.target.value } : item))} className="mt-2 min-h-[84px] w-full rounded-lg border border-[#d7d7d2] px-2 py-1.5 text-sm leading-6 outline-none focus:border-[rgb(46,113,236)]" />
+                          <input value={chapter.keyPoints.join('；')} onChange={(event) => setDraftChapters((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, keyPoints: event.target.value.split(/[;；]/).map((value) => value.trim()).filter(Boolean) } : item))} className="mt-2 w-full rounded-lg border border-[#d7d7d2] px-2 py-1.5 text-xs outline-none focus:border-[rgb(46,113,236)]" />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {compareOriginal && analysis.original ? (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="border-y border-[#e1e1de] px-4 py-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#777a80]">AI original</div>
+                        <p className="whitespace-pre-wrap text-sm leading-6 text-[#5f6368]">{analysis.original.summary || 'No original summary snapshot.'}</p>
+                      </div>
+                      <div className="border-y border-[#e1e1de] px-4 py-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#777a80]">Current reviewed version</div>
+                        <p className="whitespace-pre-wrap text-sm leading-6 text-[#34373c]">{analysis.summary || 'No current summary.'}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="border-y border-[#e1e1de] px-4 py-3 text-sm leading-6 text-[#5f6368]">
+                      {analysis.original ? 'Open compare to review the first AI version against the current human-edited version.' : 'The original AI snapshot will be preserved when the first manual revision is saved.'}
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+        )}
+      </div>
     </div>
   );
 }
@@ -725,6 +2158,46 @@ const isTextLikeFile = (file: File) =>
     file.name
   );
 
+const MAX_INLINE_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+
+const inferChatAttachmentKind = (file: File): AiChatAttachment['kind'] => {
+  const mimeType = file.type.toLowerCase();
+  const name = file.name.toLowerCase();
+  if (isTextLikeFile(file)) return 'text';
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.includes('pdf') || name.endsWith('.pdf')) return 'pdf';
+  if (/\.(doc|docx|ppt|pptx|xls|xlsx)$/i.test(file.name)) return 'document';
+  return 'file';
+};
+
+const readFileAsText = (file: File) =>
+  new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').slice(0, 12000));
+    reader.onerror = () => resolve('');
+    reader.readAsText(file);
+  });
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => resolve('');
+    reader.readAsDataURL(file);
+  });
+
+const base64FromDataUrl = (dataUrl: string) => dataUrl.match(/^data:[^;]+;base64,(.+)$/)?.[1] || '';
+
+const fileFromChatAttachment = async (attachment: AiChatAttachment): Promise<File | null> => {
+  if (attachment.textContent) {
+    return new window.File([attachment.textContent], attachment.name, { type: attachment.mimeType || 'text/plain' });
+  }
+  if (!attachment.dataUrl) return null;
+  const response = await fetch(attachment.dataUrl);
+  const blob = await response.blob();
+  return new window.File([blob], attachment.name, { type: attachment.mimeType || blob.type || 'application/octet-stream' });
+};
+
 const normalizePdfHighlightRects = (
   locator: Record<string, any> | undefined,
   page: number,
@@ -747,6 +2220,14 @@ const normalizePdfHighlightRects = (
     }))
     .filter((rect) => rect.width > 0 && rect.height > 0);
 };
+
+type PdfSearchMatch = {
+  page: number;
+  index: number;
+  preview: string;
+};
+
+const normalizePdfSearchText = (value: string) => value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 
 function PdfJsPage({
   pdfDocument,
@@ -818,14 +2299,11 @@ function PdfJsPage({
       data-pdf-page="true"
       data-page={pageNumber}
       data-chunk-index={pageNumber - 1}
-      className={`mx-auto mb-5 overflow-hidden rounded-xl border bg-white shadow-sm transition-all duration-300 ${
-        highlighted ? 'border-[#16833a] ring-4 ring-[#d7e8d2]' : 'border-[#d9d9d5]'
+      className={`mx-auto mb-7 overflow-hidden rounded-[3px] border bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06),0_8px_24px_rgba(15,23,42,0.06)] transition-all duration-300 ${
+        highlighted ? 'border-[rgb(46,113,236)] ring-4 ring-[rgba(46,113,236,0.18)]' : 'border-[#d9d9d5]'
       }`}
       style={size ? { width: size.width, minHeight: size.height } : undefined}
     >
-      <div className="flex items-center justify-between border-b border-[#eeeeeb] px-4 py-2 text-xs text-[#96999d]">
-        <span>Page {pageNumber}</span>
-      </div>
       <div className="relative bg-white" style={size ? { width: size.width, height: size.height } : undefined}>
         <canvas ref={canvasRef} className="absolute inset-0" />
         <div ref={textLayerRef} className="textLayer absolute inset-0" />
@@ -846,6 +2324,80 @@ function PdfJsPage({
   );
 }
 
+function PdfThumbnail({
+  pdfDocument,
+  pageNumber,
+  active,
+  onClick
+}: {
+  pdfDocument: any;
+  pageNumber: number;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let renderTask: any = null;
+
+    void pdfDocument.getPage(pageNumber).then(async (page: any) => {
+      if (cancelled) return;
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = 92 / baseViewport.width;
+      const viewport = page.getViewport({ scale });
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const pixelRatio = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(viewport.width * pixelRatio);
+      canvas.height = Math.floor(viewport.height * pixelRatio);
+      canvas.style.width = `${viewport.width}px`;
+      canvas.style.height = `${viewport.height}px`;
+      setSize({ width: viewport.width, height: viewport.height });
+
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      renderTask = page.render({ canvasContext: context, viewport });
+      await renderTask.promise;
+    });
+
+    return () => {
+      cancelled = true;
+      try {
+        renderTask?.cancel?.();
+      } catch {
+        // Ignore pdf.js cancellation races while the thumbnail rail changes.
+      }
+    };
+  }, [pageNumber, pdfDocument]);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group flex w-full flex-col items-center gap-1.5 rounded-xl p-2.5 text-xs transition ${
+        active
+          ? 'bg-[rgb(46,113,236)] text-white shadow-[0_8px_18px_rgba(46,113,236,0.24)]'
+          : 'text-[#777a80] hover:bg-white'
+      }`}
+      title={`Page ${pageNumber}`}
+    >
+      <div
+        className={`overflow-hidden rounded-md border bg-white shadow-sm ${
+          active ? 'border-white/80' : 'border-[#d2d2d7] group-hover:border-[#b8b8bd]'
+        }`}
+        style={size ? { width: size.width, height: size.height } : { width: 92, height: 120 }}
+      >
+        <canvas ref={canvasRef} />
+      </div>
+      <span className="leading-none">{pageNumber}</span>
+    </button>
+  );
+}
+
 function PdfJsReader({
   sourceUrl,
   fileId,
@@ -858,8 +2410,22 @@ function PdfJsReader({
   onViewportChange: (patch: Record<string, any>) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const viewMenuRef = useRef<HTMLDivElement | null>(null);
   const [pdfDocument, setPdfDocument] = useState<any>(null);
   const [pageNumbers, setPageNumbers] = useState<number[]>([]);
+  const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null);
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [currentPage, setCurrentPage] = useState(1);
+  const [viewMode, setViewMode] = useState<'continuous' | 'single'>('continuous');
+  const [zoomMode, setZoomMode] = useState<'fit-width' | 'fit-page' | 'custom'>('fit-width');
+  const [customScale, setCustomScale] = useState(1.25);
+  const [showThumbnails, setShowThumbnails] = useState(true);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchIndex, setSearchIndex] = useState<Array<{ page: number; text: string }>>([]);
+  const [searching, setSearching] = useState(false);
+  const [activeSearchMatch, setActiveSearchMatch] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectionMenu, setSelectionMenu] = useState<{
@@ -873,7 +2439,39 @@ function PdfJsReader({
     page: number;
     locator?: Record<string, any>;
   } | null>(null);
-  const scale = 1.25;
+  const thumbnailRailWidth = showThumbnails ? 132 : 0;
+  const availableWidth = Math.max(280, viewportSize.width - thumbnailRailWidth - 56);
+  const availableHeight = Math.max(280, viewportSize.height - 44);
+  const fitWidthScale = pageSize ? Math.min(3, Math.max(0.35, availableWidth / pageSize.width)) : 1.25;
+  const fitPageScale = pageSize
+    ? Math.min(3, Math.max(0.25, Math.min(availableWidth / pageSize.width, availableHeight / pageSize.height)))
+    : 1.1;
+  const scale = zoomMode === 'fit-width' ? fitWidthScale : zoomMode === 'fit-page' ? fitPageScale : customScale;
+  const displayedPages = viewMode === 'single' ? [currentPage] : pageNumbers;
+  const scalePercent = Math.round(scale * 100);
+  const searchMatches = useMemo<PdfSearchMatch[]>(() => {
+    const needle = normalizePdfSearchText(searchQuery);
+    if (!needle) return [];
+
+    return searchIndex.flatMap((pageEntry) => {
+      const pageText = normalizePdfSearchText(pageEntry.text);
+      const matches: PdfSearchMatch[] = [];
+      let fromIndex = 0;
+      while (matches.length < 80) {
+        const matchIndex = pageText.indexOf(needle, fromIndex);
+        if (matchIndex < 0) break;
+        const previewStart = Math.max(0, matchIndex - 18);
+        const previewEnd = Math.min(pageText.length, matchIndex + needle.length + 28);
+        matches.push({
+          page: pageEntry.page,
+          index: matchIndex,
+          preview: pageText.slice(previewStart, previewEnd)
+        });
+        fromIndex = matchIndex + Math.max(needle.length, 1);
+      }
+      return matches;
+    });
+  }, [searchIndex, searchQuery]);
 
   useEffect(() => {
     let cancelled = false;
@@ -881,6 +2479,11 @@ function PdfJsReader({
     setError(null);
     setPdfDocument(null);
     setPageNumbers([]);
+    setPageSize(null);
+    setCurrentPage(1);
+    setSearchIndex([]);
+    setSearchQuery('');
+    setActiveSearchMatch(0);
 
     const loadingTask = pdfjsLib.getDocument({
       url: sourceUrl,
@@ -894,6 +2497,11 @@ function PdfJsReader({
         }
         setPdfDocument(pdf);
         setPageNumbers(Array.from({ length: pdf.numPages }, (_, index) => index + 1));
+        void pdf.getPage(1).then((page: any) => {
+          if (cancelled) return;
+          const viewport = page.getViewport({ scale: 1 });
+          setPageSize({ width: viewport.width, height: viewport.height });
+        });
       })
       .catch((loadError: unknown) => {
         if (!cancelled) {
@@ -911,6 +2519,92 @@ function PdfJsReader({
   }, [sourceUrl]);
 
   useEffect(() => {
+    if (!pdfDocument || !pageNumbers.length) return;
+    let cancelled = false;
+    setSearching(true);
+
+    const buildSearchIndex = async () => {
+      const pages = await Promise.all(
+        pageNumbers.map(async (pageNumber) => {
+          const page = await pdfDocument.getPage(pageNumber);
+          const textContent = await page.getTextContent();
+          const text = textContent.items
+            .map((item: any) => ('str' in item ? item.str : ''))
+            .join(' ');
+          return { page: pageNumber, text };
+        })
+      );
+      if (!cancelled) setSearchIndex(pages);
+    };
+
+    void buildSearchIndex()
+      .catch(() => {
+        if (!cancelled) setSearchIndex([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSearching(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pdfDocument, pageNumbers]);
+
+  useEffect(() => {
+    setActiveSearchMatch(0);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (!viewMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!viewMenuRef.current?.contains(event.target as Node)) {
+        setViewMenuOpen(false);
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => window.removeEventListener('pointerdown', handlePointerDown);
+  }, [viewMenuOpen]);
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+
+    const updateSize = () => {
+      setViewportSize({
+        width: element.clientWidth,
+        height: element.clientHeight
+      });
+    };
+    updateSize();
+
+    const resizeObserver = new ResizeObserver(updateSize);
+    resizeObserver.observe(element);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  const scrollToPage = (page: number, behavior: ScrollBehavior = 'smooth') => {
+    const safePage = Math.min(Math.max(1, page), Math.max(1, pageNumbers.length));
+    setCurrentPage(safePage);
+    if (viewMode === 'single') return;
+    const pageElement = containerRef.current?.querySelector<HTMLElement>(`[data-pdf-page="true"][data-page="${safePage}"]`);
+    pageElement?.scrollIntoView({ behavior, block: 'start' });
+  };
+
+  const activateSearchMatch = (matchIndex: number) => {
+    if (!searchMatches.length) return;
+    const safeIndex = ((matchIndex % searchMatches.length) + searchMatches.length) % searchMatches.length;
+    setActiveSearchMatch(safeIndex);
+    const match = searchMatches[safeIndex];
+    scrollToPage(match.page);
+    setJumpHighlight({ page: match.page });
+    window.setTimeout(() => {
+      setJumpHighlight((current) => (current?.page === match.page ? null : current));
+    }, 1600);
+  };
+
+  const activeSearchPreview = searchMatches[activeSearchMatch]?.preview;
+
+  useEffect(() => {
     const handleJump = (event: Event) => {
       const detail = (event as CustomEvent).detail as
         | { fileId?: string; locator?: { page?: number; pageStart?: number; primaryPage?: number } }
@@ -918,16 +2612,14 @@ function PdfJsReader({
       if (!detail?.fileId || detail.fileId !== fileId) return;
       const page = detail.locator?.page || detail.locator?.pageStart || detail.locator?.primaryPage;
       if (!page) return;
-      const pageElement = containerRef.current?.querySelector<HTMLElement>(`[data-pdf-page="true"][data-page="${page}"]`);
-      if (!pageElement) return;
-      pageElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      scrollToPage(page);
       setJumpHighlight({ page, locator: detail.locator as Record<string, any> });
       window.setTimeout(() => setJumpHighlight((current) => (current?.page === page ? null : current)), 2400);
     };
 
     window.addEventListener('workbench:jump-to-citation', handleJump);
     return () => window.removeEventListener('workbench:jump-to-citation', handleJump);
-  }, [fileId]);
+  }, [fileId, pageNumbers.length, viewMode]);
 
   const readSelectionLocator = (element: HTMLDivElement) => {
     const selection = window.getSelection();
@@ -1025,6 +2717,7 @@ function PdfJsReader({
     const selectionLocator = readSelectionLocator(element);
     const selectedText = selectionLocator?.selectedText || '';
     const selectedPage = selectionLocator?.selectedPage;
+    setCurrentPage(selectedPage || primaryPage);
 
     if (selectionLocator) {
       setSelectionMenu({
@@ -1073,7 +2766,7 @@ function PdfJsReader({
   };
 
   return (
-    <div className="relative h-full">
+    <div ref={viewportRef} className="relative flex h-full min-h-0 flex-col bg-white">
       {selectionMenu && (
         <div
           className="fixed z-50 flex items-center gap-1 rounded-full border border-[#d9d9d5] bg-[#202124] px-2 py-1 text-xs font-medium text-white shadow-[0_12px_35px_rgba(0,0,0,0.22)]"
@@ -1109,36 +2802,201 @@ function PdfJsReader({
           </button>
         </div>
       )}
-      <div
-        ref={containerRef}
-        className="h-full overflow-auto bg-white px-5 pb-5"
-        onScroll={reportViewport}
-        onMouseEnter={reportViewport}
-        onMouseUp={reportViewport}
-        onKeyUp={reportViewport}
-      >
-      {loading && (
-        <div className="flex h-80 items-center justify-center text-sm text-[#777a80]">Loading PDF...</div>
-      )}
-      {error && (
-        <div className="mx-auto max-w-3xl rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-          {error}
+      <div className="relative z-30 flex min-h-0 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#eeeeeb] bg-white px-4 py-2 text-xs text-[#5f6368]">
+        <div className="flex min-w-0 items-center gap-3">
+          <div ref={viewMenuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setViewMenuOpen((value) => !value)}
+              className="inline-flex h-9 items-center gap-2 rounded-full border border-[#e5e5e1] bg-white px-3 font-medium text-[#34373c] shadow-sm transition hover:bg-[#fbfbfa] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(46,113,236,0.35)]"
+              title="View options"
+            >
+              <PanelLeft className="h-4 w-4" />
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+            {viewMenuOpen && (
+              <div className="absolute left-0 top-11 z-[200] w-56 overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white p-2 text-[13px] text-[#25272b] shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
+                {[
+                  { label: showThumbnails ? 'Hide Sidebar' : 'Show Sidebar', active: showThumbnails, onClick: () => setShowThumbnails((value) => !value) },
+                  { label: 'Continuous Scroll', active: viewMode === 'continuous', onClick: () => setViewMode('continuous') },
+                  { label: 'Single Page', active: viewMode === 'single', onClick: () => setViewMode('single') }
+                ].map((item) => (
+                  <button
+                    type="button"
+                    key={item.label}
+                    onClick={() => {
+                      item.onClick();
+                      setViewMenuOpen(false);
+                    }}
+                    className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left transition hover:bg-[#f6f6f4]"
+                  >
+                    <span className="flex w-4 justify-center">{item.active ? <Check className="h-4 w-4" /> : null}</span>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="hidden text-sm font-medium text-[#777a80] sm:block">
+            Page {currentPage} of {pageNumbers.length || 1}
+          </div>
         </div>
-      )}
-      {pdfDocument && pageNumbers.map((pageNumber) => (
-        <PdfJsPage
-          key={pageNumber}
-          pdfDocument={pdfDocument}
-          pageNumber={pageNumber}
-          scale={scale}
-          highlighted={jumpHighlight?.page === pageNumber}
-          highlightRects={
-            jumpHighlight?.page === pageNumber
-              ? normalizePdfHighlightRects(jumpHighlight.locator, pageNumber, scale)
-              : []
-          }
-        />
-      ))}
+
+        <div className="flex items-center gap-3">
+          <div className="flex overflow-hidden rounded-full border border-[#e5e5e1] bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => scrollToPage(currentPage - 1)}
+              disabled={currentPage <= 1}
+              className="inline-flex h-9 w-9 items-center justify-center text-[#4b4f55] transition hover:bg-[#f6f6f4] disabled:cursor-not-allowed disabled:opacity-35"
+              title="Previous page"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <input
+              value={currentPage}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                if (Number.isFinite(next)) scrollToPage(next);
+              }}
+              className="h-9 w-14 border-x border-[#eeeeeb] bg-transparent text-center text-xs font-semibold text-[#25272b] outline-none focus:bg-[#fbfbfa]"
+              aria-label="Current PDF page"
+            />
+            <button
+              type="button"
+              onClick={() => scrollToPage(currentPage + 1)}
+              disabled={currentPage >= pageNumbers.length}
+              className="inline-flex h-9 w-9 items-center justify-center text-[#4b4f55] transition hover:bg-[#f6f6f4] disabled:cursor-not-allowed disabled:opacity-35"
+              title="Next page"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="flex overflow-hidden rounded-full border border-[#e5e5e1] bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => {
+                setZoomMode('custom');
+                setCustomScale((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))));
+              }}
+              className="inline-flex h-9 w-10 items-center justify-center text-[#4b4f55] transition hover:bg-[#f6f6f4]"
+              title="Zoom out"
+            >
+              <ZoomOut className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setZoomMode(zoomMode === 'fit-width' ? 'fit-page' : 'fit-width')}
+              className="inline-flex h-9 w-10 items-center justify-center border-x border-[#eeeeeb] text-[#4b4f55] transition hover:bg-[#f6f6f4]"
+              title={zoomMode === 'fit-page' ? 'Fit width' : 'Fit page'}
+            >
+              <Maximize2 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setZoomMode('custom');
+                setCustomScale((value) => Math.min(3, Number((value + 0.1).toFixed(2))));
+              }}
+              className="inline-flex h-9 w-10 items-center justify-center text-[#4b4f55] transition hover:bg-[#f6f6f4]"
+              title="Zoom in"
+            >
+              <ZoomIn className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="flex h-9 min-w-[238px] items-center gap-2 rounded-full border border-[#e5e5e1] bg-white px-3 shadow-sm">
+            <Search className="h-4 w-4 shrink-0 text-[#7b7b80]" />
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') activateSearchMatch(activeSearchMatch + (event.shiftKey ? -1 : 1));
+              }}
+              placeholder="Search"
+              className="min-w-0 flex-1 bg-transparent text-sm text-[#1d1d1f] outline-none placeholder:text-[#8e8e93]"
+            />
+            {searchQuery && (
+              <span className="whitespace-nowrap text-[11px] text-[#7b7b80]">
+                {searching ? '...' : searchMatches.length ? `${activeSearchMatch + 1}/${searchMatches.length}` : '0'}
+              </span>
+            )}
+            {searchMatches.length > 0 && (
+              <div className="flex items-center border-l border-[#eeeeeb] pl-1">
+                <button
+                  type="button"
+                  onClick={() => activateSearchMatch(activeSearchMatch - 1)}
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[#4b4f55] hover:bg-[#f6f6f4]"
+                  title="Previous result"
+                >
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => activateSearchMatch(activeSearchMatch + 1)}
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[#4b4f55] hover:bg-[#f6f6f4]"
+                  title="Next result"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+        {activeSearchPreview && searchQuery && (
+          <div className="basis-full truncate px-1 text-right text-[11px] text-[#7b7b80]">
+            Page {searchMatches[activeSearchMatch]?.page}: {activeSearchPreview}
+          </div>
+        )}
+      </div>
+      <div className="grid min-h-0 flex-1 bg-[#f4f4f1]" style={{ gridTemplateColumns: showThumbnails ? '156px minmax(0,1fr)' : 'minmax(0,1fr)' }}>
+        {showThumbnails && (
+          <aside className="min-h-0 overflow-auto border-r border-[#eeeeeb] bg-[#f8f8f6] p-3">
+            <div className="space-y-3">
+              {pdfDocument && pageNumbers.map((pageNumber) => (
+                <PdfThumbnail
+                  key={`thumb-${pageNumber}`}
+                  pdfDocument={pdfDocument}
+                  pageNumber={pageNumber}
+                  active={pageNumber === currentPage}
+                  onClick={() => scrollToPage(pageNumber, 'auto')}
+                />
+              ))}
+            </div>
+          </aside>
+        )}
+        <div
+          ref={containerRef}
+          className={`min-h-0 overflow-auto px-6 py-7 ${viewMode === 'single' ? 'flex items-start justify-center' : ''}`}
+          onScroll={reportViewport}
+          onMouseEnter={reportViewport}
+          onMouseUp={reportViewport}
+          onKeyUp={reportViewport}
+        >
+          {loading && (
+            <div className="flex h-80 items-center justify-center text-sm text-[#777a80]">Loading PDF...</div>
+          )}
+          {error && (
+            <div className="mx-auto max-w-3xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+              {error}
+            </div>
+          )}
+          {pdfDocument && displayedPages.map((pageNumber) => (
+            <PdfJsPage
+              key={`${pageNumber}-${scale}`}
+              pdfDocument={pdfDocument}
+              pageNumber={pageNumber}
+              scale={scale}
+              highlighted={jumpHighlight?.page === pageNumber}
+              highlightRects={
+                jumpHighlight?.page === pageNumber
+                  ? normalizePdfHighlightRects(jumpHighlight.locator, pageNumber, scale)
+                  : []
+              }
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1149,13 +3007,15 @@ function DocumentPreview({
   workspaceId,
   editorId,
   onUpdateViewState,
-  onExtractedText
+  onExtractedText,
+  onDocumentStructure
 }: {
   resource: ResourceReference;
   workspaceId: string;
   editorId: string;
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
   onExtractedText?: (text: string) => void;
+  onDocumentStructure?: (documentStructure: RenderableDocument | null) => void;
 }) {
   const [previewInfo, setPreviewInfo] = useState<FilePreviewInfo | null>(null);
   const [documentStructure, setDocumentStructure] = useState<RenderableDocument | null>(null);
@@ -1165,6 +3025,19 @@ function DocumentPreview({
 
   useEffect(() => {
     let active = true;
+    const cacheKey = previewCacheKey(workspaceId, resource.id);
+    const cachedPreviewInfo = previewInfoCache.get(cacheKey);
+    const cachedStructure = documentStructureCache.get(cacheKey);
+
+    if (cachedPreviewInfo || cachedStructure) {
+      setPreviewInfo(cachedPreviewInfo ?? null);
+      setDocumentStructure(cachedStructure ?? null);
+      setLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
     setLoading(true);
 
     Promise.allSettled([
@@ -1174,17 +3047,21 @@ function DocumentPreview({
       .then(([previewResult, structureResult]) => {
         if (!active) return;
         if (previewResult.status === 'fulfilled') {
+          previewInfoCache.set(cacheKey, previewResult.value);
           setPreviewInfo(previewResult.value);
         } else {
-          setPreviewInfo({
+          const fallbackPreviewInfo = {
             status: 'unavailable',
             previewKind: 'document',
             sourceUrl: fileSystemApi.downloadUrl(workspaceId, resource.id),
             message: 'Preview is temporarily unavailable for this document.'
-          });
+          } as FilePreviewInfo;
+          previewInfoCache.set(cacheKey, fallbackPreviewInfo);
+          setPreviewInfo(fallbackPreviewInfo);
         }
 
         if (structureResult.status === 'fulfilled') {
+          documentStructureCache.set(cacheKey, structureResult.value);
           setDocumentStructure(structureResult.value);
         } else {
           setDocumentStructure(null);
@@ -1192,12 +3069,14 @@ function DocumentPreview({
       })
       .catch(() => {
         if (active) {
-          setPreviewInfo({
+          const fallbackPreviewInfo = {
             status: 'unavailable',
             previewKind: 'document',
             sourceUrl: fileSystemApi.downloadUrl(workspaceId, resource.id),
             message: 'Preview is temporarily unavailable for this document.'
-          });
+          } as FilePreviewInfo;
+          previewInfoCache.set(cacheKey, fallbackPreviewInfo);
+          setPreviewInfo(fallbackPreviewInfo);
           setDocumentStructure(null);
         }
       })
@@ -1213,7 +3092,8 @@ function DocumentPreview({
   useEffect(() => {
     if (!documentStructure) return;
     onExtractedText?.(getTextFromDocumentStructure(documentStructure));
-  }, [documentStructure, onExtractedText]);
+    onDocumentStructure?.(documentStructure);
+  }, [documentStructure, onDocumentStructure, onExtractedText]);
 
   const reportScroll = (element: HTMLDivElement) => {
     const totalScrollable = Math.max(1, element.scrollHeight - element.clientHeight);
@@ -1321,10 +3201,13 @@ function DocumentPreview({
     );
   };
 
-  if (documentStructure?.kind === 'pdf') {
+  if (
+    documentStructure?.kind === 'pdf' ||
+    (previewInfo?.status === 'ready' && (previewInfo.previewKind === 'pdf' || previewInfo.previewKind === 'document') && previewInfo.previewUrl)
+  ) {
     return (
       <PdfJsReader
-        sourceUrl={fileSystemApi.previewUrl(workspaceId, resource.id)}
+        sourceUrl={previewInfo?.previewUrl || fileSystemApi.previewUrl(workspaceId, resource.id)}
         fileId={resource.id}
         resourceName={resource.name}
         onViewportChange={(patch) => onUpdateViewState?.(editorId, patch)}
@@ -1383,13 +3266,7 @@ function HtmlVisualizationPreview({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white">
-      <div className="flex items-center justify-between border-b border-[#eeeeeb] bg-white px-4 py-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-[#25272b]">{resource.name}</div>
-          <div className="truncate text-xs text-[#96999d]">
-            Interactive visualization
-          </div>
-        </div>
+      <div className="flex items-center justify-end bg-white px-5 py-3">
         <a
           href={previewUrl}
           target="_blank"
@@ -1400,10 +3277,8 @@ function HtmlVisualizationPreview({
           Open Fullscreen
         </a>
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden p-3">
-        <div className="h-full overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white shadow-sm">
-          <iframe title={resource.name} src={previewUrl} className="h-full w-full bg-white" />
-        </div>
+      <div className="min-h-0 flex-1 overflow-hidden px-5 pb-5">
+        <iframe title={resource.name} src={previewUrl} className="h-full w-full bg-white" />
       </div>
     </div>
   );
@@ -1413,21 +3288,31 @@ function WebSourcePreview({
   title,
   url,
   body,
-  workspaceId
+  workspaceId,
+  resource,
+  editorId,
+  onUpdateViewState,
+  onExtractedText
 }: {
   title: string;
   url?: string;
   body?: string;
   workspaceId: string;
+  resource?: ResourceReference;
+  editorId?: string;
+  onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
+  onExtractedText?: (text: string) => void;
 }) {
   const embed = getEmbedInfo(url);
   const [previewData, setPreviewData] = useState<WebPreviewData | null>(null);
   const [activeUrl, setActiveUrl] = useState(url || '');
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractError, setExtractError] = useState('');
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
   const displayedTitle = previewData?.title || title;
   const displayedUrl = previewData?.url || activeUrl || url;
   const richHtml = previewData?.contentHtml || '';
+  const readableText = previewData?.contentMarkdown || body || '';
 
   useEffect(() => {
     setActiveUrl(url || '');
@@ -1435,7 +3320,45 @@ function WebSourcePreview({
   }, [url]);
 
   useEffect(() => {
+    const text = [displayedTitle, displayedUrl, previewData?.excerpt, readableText]
+      .filter(Boolean)
+      .join('\n\n');
+    onExtractedText?.(text);
+  }, [displayedTitle, displayedUrl, onExtractedText, previewData?.excerpt, readableText]);
+
+  useEffect(() => {
+    const handleJump = (event: Event) => {
+      const detail = (event as CustomEvent<CitationJumpDetail>).detail;
+      if (!resource?.id || !detail?.fileId || detail.fileId !== resource.id) return;
+      const element = scrollerRef.current;
+      if (!element) return;
+      const locator = detail.locator || {};
+      const lineStart = Number(locator.lineStart || locator.startLine || 1);
+      const lineCount = Math.max(1, readableText.split('\n').length);
+      const scrollRatio = Number.isFinite(Number(locator.scrollRatio))
+        ? Number(locator.scrollRatio)
+        : Number.isFinite(lineStart)
+          ? Math.min(1, Math.max(0, (lineStart - 1) / lineCount))
+          : 0;
+      const maxScroll = Math.max(0, element.scrollHeight - element.clientHeight);
+      element.scrollTo({ top: maxScroll * scrollRatio, behavior: 'smooth' });
+    };
+
+    window.addEventListener('workbench:jump-to-citation', handleJump);
+    return () => window.removeEventListener('workbench:jump-to-citation', handleJump);
+  }, [readableText, resource?.id]);
+
+  useEffect(() => {
     if (!activeUrl || embed) return;
+
+    const cacheKey = `${workspaceId}:${activeUrl}`;
+    const cachedPreview = webPreviewCache.get(cacheKey);
+    if (cachedPreview) {
+      setPreviewData(cachedPreview);
+      setIsExtracting(false);
+      setExtractError('');
+      return;
+    }
 
     let cancelled = false;
     setIsExtracting(true);
@@ -1445,6 +3368,7 @@ function WebSourcePreview({
     void fileSystemApi
       .extractUrlPreview(workspaceId, { url: activeUrl, title })
       .then((result) => {
+        webPreviewCache.set(cacheKey, result);
         if (!cancelled) setPreviewData(result);
       })
       .catch((error) => {
@@ -1471,11 +3395,20 @@ function WebSourcePreview({
     setActiveUrl(nextUrl);
   };
 
+  if (embed && resource) {
+    return (
+      <EmbeddedVideoSourcePreview
+        sourceUrl={activeUrl || url}
+        title={title}
+      />
+    );
+  }
+
   if (embed) {
     return (
-      <div className="h-full overflow-auto bg-white px-6 py-5">
+      <div ref={scrollerRef} className="h-full overflow-auto bg-white px-6 py-5">
         <div className="mx-auto max-w-5xl">
-          <div className="overflow-hidden rounded-2xl border border-[#e5e5e1] bg-black shadow-sm">
+          <div className="overflow-hidden bg-black">
             <iframe
               title={`${embed.provider} video`}
               src={embed.embedUrl}
@@ -1484,7 +3417,7 @@ function WebSourcePreview({
               allowFullScreen
             />
           </div>
-          <div className="mt-4 rounded-2xl border border-[#eeeeeb] bg-[#fbfbfa] px-4 py-3 text-sm leading-6 text-[#5f6368]">
+          <div className="mt-4 bg-white px-1 py-2 text-sm leading-6 text-[#5f6368]">
             {embed.provider} video source. Use the player above for playback; the original link stays attached for citation and follow-up extraction.
           </div>
         </div>
@@ -1493,12 +3426,12 @@ function WebSourcePreview({
   }
 
   return (
-    <div className="h-full overflow-auto bg-white px-6 py-5">
+    <div ref={scrollerRef} className="h-full overflow-auto bg-white px-6 py-5">
       <div className="mx-auto max-w-5xl">
         <article className="min-w-0 text-[#25272b]">
           {richHtml.trim() ? (
-            <div className="rounded-2xl border border-[#eeeeeb] bg-white px-8 py-8 shadow-sm">
-              <div className="mb-6 border-b border-[#eeeeeb] pb-5">
+            <div className="bg-white px-2 py-4">
+              <div className="mb-6 pb-5">
                 <h1 className="text-4xl font-semibold tracking-normal text-[#202124]">{displayedTitle}</h1>
                 {displayedUrl && <div className="mt-3 break-all text-sm text-[#777a80]">{displayedUrl}</div>}
                 {(previewData?.byline || previewData?.siteName || previewData?.excerpt) && (
@@ -1515,15 +3448,15 @@ function WebSourcePreview({
                 dangerouslySetInnerHTML={{ __html: richHtml }}
               />
             </div>
-          ) : body?.trim() ? (
-            <MarkdownPreview content={`# ${title}\n\n${body}`} variant="document" />
           ) : isExtracting ? (
-            <div className="flex items-center gap-3 rounded-2xl border border-[#eeeeeb] bg-[#fbfbfa] px-5 py-6 text-sm leading-7 text-[#5f6368]">
+            <div className="flex items-center gap-3 bg-white px-2 py-6 text-sm leading-7 text-[#5f6368]">
               <Loader2 className="h-4 w-4 animate-spin" />
               Extracting webpage content...
             </div>
+          ) : body?.trim() ? (
+            <MarkdownPreview content={`# ${title}\n\n${body}`} variant="document" />
           ) : (
-            <div className="rounded-2xl border border-[#eeeeeb] bg-[#fbfbfa] px-5 py-6 text-sm leading-7 text-[#5f6368]">
+            <div className="bg-white px-2 py-6 text-sm leading-7 text-[#5f6368]">
               {extractError || 'No readable webpage content could be extracted from this link.'}
             </div>
           )}
@@ -1533,27 +3466,156 @@ function WebSourcePreview({
   );
 }
 
+function EmbeddedVideoSourcePreview({
+  sourceUrl,
+  title,
+  seekTarget,
+  onTimeChange
+}: {
+  sourceUrl?: string;
+  title?: string;
+  seekTarget?: number;
+  onTimeChange?: (seconds: number) => void;
+}) {
+  const embed = getEmbedInfo(sourceUrl);
+  const [embedStart, setEmbedStart] = useState(0);
+
+  if (!embed) {
+    return null;
+  }
+
+  useEffect(() => {
+    if (typeof seekTarget !== 'number') return;
+    const start = Math.max(0, Math.floor(seekTarget));
+    onTimeChange?.(start);
+    setEmbedStart(start);
+  }, [onTimeChange, seekTarget]);
+
+  const embedUrl = `${embed.embedUrl}${embed.embedUrl.includes('?') ? '&' : '?'}start=${embedStart}&autoplay=${embedStart > 0 ? '1' : '0'}`;
+
+  return (
+    <div className="h-full overflow-auto bg-white px-6 py-5">
+      <div className="mx-auto max-w-5xl">
+        <div className="overflow-hidden bg-black">
+          <iframe
+            key={`${embed.embedUrl}:${embedStart}`}
+            title={title || `${embed.provider} video`}
+            src={embedUrl}
+            className="aspect-video w-full"
+            loading="lazy"
+            referrerPolicy="strict-origin-when-cross-origin"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function VideoFilePreview({
   resource,
-  workspaceId
+  workspaceId,
+  seekTarget,
+  onTimeChange
 }: {
   resource: ResourceReference;
   workspaceId: string;
+  seekTarget?: number;
+  onTimeChange?: (seconds: number) => void;
 }) {
   const sourceUrl = fileSystemApi.downloadUrl(workspaceId, resource.id);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (!videoRef.current || typeof seekTarget !== 'number') return;
+    videoRef.current.currentTime = Math.max(0, seekTarget);
+    onTimeChange?.(Math.max(0, seekTarget));
+    void videoRef.current.play().catch(() => undefined);
+  }, [onTimeChange, seekTarget]);
 
   return (
     <div className="h-full overflow-auto bg-white px-6 py-5">
       <div className="mx-auto max-w-5xl">
         <video
+          ref={videoRef}
           src={sourceUrl}
           controls
-          className="aspect-video w-full rounded-2xl bg-black shadow-sm"
+          className="aspect-video w-full bg-black shadow-sm"
+          onTimeUpdate={(event) => onTimeChange?.(event.currentTarget.currentTime)}
+          onSeeked={(event) => onTimeChange?.(event.currentTarget.currentTime)}
         >
           <track kind="captions" />
         </video>
       </div>
     </div>
+  );
+}
+
+function VideoSourcePanel({
+  editor,
+  resource,
+  workspaceId,
+  sourceUrl,
+  sourceTitle,
+  onUpdateViewState
+}: {
+  editor: EditorState;
+  resource: ResourceReference;
+  workspaceId: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+  onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
+}) {
+  const [currentTime, setCurrentTime] = useState(0);
+  const [seekTarget, setSeekTarget] = useState<number | undefined>(undefined);
+  const externalUrl = sourceUrl || getResourceSourceUrl(resource) || fileSystemApi.downloadUrl(workspaceId, resource.id);
+  const embed = getEmbedInfo(sourceUrl);
+
+  const handleSeek = (seconds: number) => {
+    setCurrentTime(Math.max(0, seconds));
+    setSeekTarget(Math.max(0, seconds));
+  };
+
+  return (
+    <ResourcePanelShell
+      editor={editor}
+      resource={resource}
+      workspaceId={workspaceId}
+      sourceUrl={externalUrl}
+      onUpdateViewState={onUpdateViewState}
+      guidePanel={({ collapsed, onToggleCollapsed }) =>
+        collapsed ? null : (
+          <div className="h-full">
+            <VideoLearningPanel
+              resource={resource}
+              workspaceId={workspaceId}
+              editorId={editor.id}
+              currentTime={currentTime}
+              onSeek={handleSeek}
+              onUpdateViewState={onUpdateViewState}
+              onClose={onToggleCollapsed}
+            />
+          </div>
+        )
+      }
+    >
+      {embed ? (
+        <EmbeddedVideoSourcePreview
+          sourceUrl={sourceUrl}
+          title={sourceTitle || resource.name}
+          seekTarget={seekTarget}
+          onTimeChange={setCurrentTime}
+        />
+      ) : (
+        <VideoFilePreview
+          resource={resource}
+          workspaceId={workspaceId}
+          seekTarget={seekTarget}
+          onTimeChange={setCurrentTime}
+        />
+      )}
+    </ResourcePanelShell>
   );
 }
 
@@ -1581,8 +3643,6 @@ function TextEditingSurface({
   const editable = resourceKind !== 'binary' && resourceKind !== 'document' && resourceKind !== 'pdf';
   const showMarkdownPreview = isMarkdownResource(resource);
   const showStructuredEditor = resourceKind === 'structured' || resourceKind === 'code';
-  const codeOpenMode =
-    (editor.viewState.codeOpenMode as 'blocksuite' | 'plain' | undefined) || 'blocksuite';
 
   useEffect(() => {
     const handleJump = (event: Event) => {
@@ -1638,30 +3698,6 @@ function TextEditingSurface({
       toolbar={
         <div className="flex items-center justify-between border-b border-[#eeeeeb] bg-white px-4 py-3">
           <div className="flex items-center gap-2">
-            {editor.type === 'code' && (
-              <>
-                <button
-                  onClick={() => onUpdateViewState?.(editor.id, { codeOpenMode: 'blocksuite' })}
-                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
-                    codeOpenMode === 'blocksuite'
-                      ? 'bg-[#202124] text-white shadow-sm'
-                      : 'text-[#777a80] hover:bg-[#f1f1ef] hover:text-[#202124]'
-                  }`}
-                >
-                  BlockSuite
-                </button>
-                <button
-                  onClick={() => onUpdateViewState?.(editor.id, { codeOpenMode: 'plain' })}
-                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
-                    codeOpenMode === 'plain'
-                      ? 'bg-[#202124] text-white shadow-sm'
-                      : 'text-[#777a80] hover:bg-[#f1f1ef] hover:text-[#202124]'
-                  }`}
-                >
-                  Plain
-                </button>
-              </>
-            )}
             <button
               onClick={() => onUpdateViewState?.(editor.id, { mode: 'edit' })}
               className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
@@ -1814,52 +3850,217 @@ function ExternalEditorView({
   );
 }
 
-const buildLocalAiSuggestions = (aiContext?: WorkbenchEditorContentProps['aiContext']) => {
+const aiWelcomeCache = new Map<string, AiWelcomeContent>();
+const rememberAiWelcomeContent = (signature: string, content: AiWelcomeContent) => {
+  aiWelcomeCache.set(signature, content);
+  if (aiWelcomeCache.size > 40) {
+    const firstKey = aiWelcomeCache.keys().next().value;
+    if (firstKey) aiWelcomeCache.delete(firstKey);
+  }
+};
+
+const clipWelcomeText = (value?: string | null, length = 180) =>
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, length);
+
+const buildAiWelcomeSignature = (aiContext?: WorkbenchEditorContentProps['aiContext']) => {
   const activePanel =
     aiContext?.openPanels?.find((panel) => panel.panelId === aiContext.activePanelId) ||
     aiContext?.openPanels?.find((panel) => panel.fileId === aiContext.activeFileId) ||
     aiContext?.openPanels?.[0];
-  const fileName = activePanel?.fileName || aiContext?.activeFile?.name;
-  const selectedText = activePanel?.selectedText?.trim() || aiContext?.selectedText?.trim();
-  const openFileCount = new Set((aiContext?.openPanels || []).map((panel) => panel.fileId).filter(Boolean)).size;
-
-  if (selectedText) {
-    return [
-      '解释这段选区的关键意思',
-      '基于选区整理可复习要点',
-      '检查选区里可能遗漏的问题'
-    ];
-  }
-
-  if (fileName) {
-    const name = fileName.length > 24 ? `${fileName.slice(0, 24)}...` : fileName;
-    return [
-      `梳理 ${name} 的核心内容`,
-      '找出当前文件最值得追问的点',
-      '把可见内容转成复习提纲'
-    ];
-  }
-
-  if (openFileCount > 1) {
-    return [
-      `比较当前打开的 ${openFileCount} 个资源`,
-      '生成这个 Workbench 的学习路线',
-      '找出资料之间的关联和缺口'
-    ];
-  }
-
   return [
-    '判断我现在最适合推进的任务',
-    '整理这个 Workbench 的下一步计划',
-    '帮我把现有材料变成复习问题'
-  ];
+    aiContext?.workbenchId || '',
+    aiContext?.workbenchTitle || '',
+    aiContext?.activeFileId || '',
+    activePanel?.panelId || '',
+    activePanel?.fileName || aiContext?.activeFile?.name || '',
+    clipWelcomeText(activePanel?.selectedText || aiContext?.selectedText, 120),
+    clipWelcomeText(activePanel?.visibleContent, 240),
+    (aiContext?.openPanels || []).map((panel) => panel.fileId || panel.panelId).join(',')
+  ].join('|');
 };
+
+const getWelcomeActionIcon = (suggestion: AiWelcomeSuggestion) => {
+  switch (suggestion.icon) {
+    case 'translate':
+      return <Languages className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
+    case 'analysis':
+      return <Brain className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
+    case 'task':
+      return <ClipboardList className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
+    case 'outline':
+      return <ListChecks className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
+    case 'question':
+      return <CircleHelp className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
+    case 'compare':
+      return <GitCompare className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
+    case 'search':
+      return <Search className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
+    case 'practice':
+      return <Check className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
+    case 'plan':
+      return <Route className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
+    case 'summary':
+    default:
+      return <FileText className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
+  }
+};
+
+const NOTE_EDIT_INTENT_PATTERN =
+  /修改|改写|重写|润色|整理|补充|追加|加入|写进|放进|插入|删除|更新|扩写|缩写|合并|应用到|改成|改为|改得|改的|调整|优化|精简|简化|压缩|提炼|浓缩|写成|变成|变得|edit|rewrite|revise|polish|update|append|insert|delete|shorten|simplify|condense|optimize/i;
+const NOTE_EDIT_TARGET_PATTERN = /这段|选区|选中|当前|笔记|note|markdown|md|内容|文本|段落|文章|全文/i;
+const WHOLE_NOTE_EDIT_PATTERN = /全文|整篇|整个笔记|整份笔记|全部内容|通篇|重构整|整理整|rewrite the whole|entire note|whole note/i;
+const NOTE_EDIT_PROPOSAL_MARKER_PREFIX = 'pp1-note-edit-proposal';
+const NOTE_EDIT_PROPOSAL_MARKER_PATTERN = /<!--\s*pp1-note-edit-proposal(?::([^>\s:]+))?(?::([^>\s:]+))?\s*-->/;
+const buildNoteEditProposalMarker = (fileId?: string | null, baseContentHash?: string | null) =>
+  `<!-- ${NOTE_EDIT_PROPOSAL_MARKER_PREFIX}${fileId ? `:${fileId}` : ''}${baseContentHash ? `:${baseContentHash}` : ''} -->`;
+
+const extractMarkdownProposal = (content: string) => {
+  const text = String(content || '');
+  const marker = text.match(NOTE_EDIT_PROPOSAL_MARKER_PATTERN);
+  if (!marker) return null;
+
+  const fences = [...text.matchAll(/```([a-zA-Z0-9_-]*)[ \t]*\n([\s\S]*?)```/g)];
+  const markdownFence =
+    fences.find((match) => /^(markdown|md|note|note-update|updated-note)$/i.test(match[1] || '')) ||
+    fences.find((match) => !(match[1] || '').trim());
+
+  const proposal = markdownFence?.[2]?.trim();
+  return proposal ? { content: proposal, targetFileId: marker[1]?.trim() || null, baseContentHash: marker[2]?.trim() || null, mode: 'whole' as const } : null;
+};
+
+const extractSelectionReplacementProposal = (content: string) => {
+  const text = String(content || '');
+  const marker = text.match(NOTE_EDIT_PROPOSAL_MARKER_PATTERN);
+  if (!marker) return null;
+
+  const fences = [...text.matchAll(/```([a-zA-Z0-9_-]*)[ \t]*\n([\s\S]*?)```/g)];
+  const replacementFence =
+    fences.find((match) => /^(replacement|selection|selected-text|text|markdown|md)$/i.test(match[1] || '')) ||
+    fences.find((match) => !(match[1] || '').trim());
+
+  const replacement = replacementFence?.[2]?.trim();
+  return replacement ? { content: replacement, targetFileId: marker[1]?.trim() || null, baseContentHash: marker[2]?.trim() || null, mode: 'selection' as const } : null;
+};
+
+const replaceUniqueSelectedText = (baseContent: string, selectedText: string, replacement: string) => {
+  const selection = String(selectedText || '').trim();
+  if (!selection) return null;
+
+  const directIndex = baseContent.indexOf(selectedText);
+  if (directIndex >= 0) {
+    if (baseContent.indexOf(selectedText, directIndex + selectedText.length) >= 0) return null;
+    return `${baseContent.slice(0, directIndex)}${replacement}${baseContent.slice(directIndex + selectedText.length)}`;
+  }
+
+  const normalizedIndex = baseContent.indexOf(selection);
+  if (normalizedIndex >= 0) {
+    if (baseContent.indexOf(selection, normalizedIndex + selection.length) >= 0) return null;
+    return `${baseContent.slice(0, normalizedIndex)}${replacement}${baseContent.slice(normalizedIndex + selection.length)}`;
+  }
+
+  return null;
+};
+
+const isUserWorkbenchNote = (file?: AiChatContext['activeFile'] | null, panel?: any) => {
+  const fileCategory = String(file?.fileCategory || panel?.fileCategory || '').toLowerCase();
+  const resourceType = String(file?.resourceType || panel?.resourceType || '').toLowerCase();
+  const scope = String(file?.scope || panel?.scope || '').toLowerCase();
+  const origin = String(file?.origin || panel?.origin || 'user').toLowerCase();
+  const extension = (file?.name || panel?.fileName || '').split('.').pop()?.toLowerCase();
+
+  return (
+    Boolean(file?.id || panel?.fileId) &&
+    (fileCategory.includes('note') || resourceType === 'note' || extension === 'md' || extension === 'markdown') &&
+    scope === 'workbench' &&
+    origin === 'user'
+  );
+};
+
+const buildNoteEditInstruction = (fileName?: string, filePath?: string, selectedText?: string, mode: 'selection' | 'whole' = 'selection') =>
+  [
+    '',
+    '【笔记修改提案模式】',
+    `目标笔记：${fileName || '当前笔记'}`,
+    filePath ? `路径：${filePath}` : '',
+    selectedText?.trim() ? `当前选区（最高优先级）：\n${selectedText.trim().slice(0, 3000)}` : '',
+    '用户希望你修改当前 Workbench 内由用户创建的 markdown 笔记。',
+    '上下文优先级：1）用户当前选中的文本最高；2）选区附近段落和标题；3）当前笔记全文；4）Workbench/Workspace 其它资料。',
+    '如果存在选区，请围绕选区完成用户要求；只有在用户明确要求整理全文、补全全文或更新整篇笔记时，才大幅改动选区之外的内容。',
+    '不要声称你已经写入文件；前端会让用户确认后再保存。',
+    '请先用 1-3 条简短 bullet 说明你准备改什么，然后输出一个且仅一个 fenced code block。',
+    mode === 'whole'
+      ? 'fenced code block 的语言必须是 markdown，内容必须是“修改后的完整笔记 markdown”，不是 diff。'
+      : 'fenced code block 的语言必须是 replacement，内容必须是“可直接替换当前选区的文本”，不是完整笔记，也不是 diff。',
+    '不要把引用标记或“来源”写进 fenced code block 里；如需说明依据，放在 code block 之外。'
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+const hashText = async (value: string) => {
+  const bytes = new TextEncoder().encode(value || '');
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+};
+
+type DiffLine = { type: 'same' | 'add' | 'remove'; text: string };
+
+const buildLineDiff = (before: string, after: string): DiffLine[] => {
+  const beforeLines = String(before || '').split('\n');
+  const afterLines = String(after || '').split('\n');
+  const rows = Array.from({ length: beforeLines.length + 1 }, () => Array(afterLines.length + 1).fill(0));
+
+  for (let left = beforeLines.length - 1; left >= 0; left -= 1) {
+    for (let right = afterLines.length - 1; right >= 0; right -= 1) {
+      rows[left][right] =
+        beforeLines[left] === afterLines[right]
+          ? rows[left + 1][right + 1] + 1
+          : Math.max(rows[left + 1][right], rows[left][right + 1]);
+    }
+  }
+
+  const diff: DiffLine[] = [];
+  let left = 0;
+  let right = 0;
+  while (left < beforeLines.length && right < afterLines.length) {
+    if (beforeLines[left] === afterLines[right]) {
+      diff.push({ type: 'same', text: beforeLines[left] });
+      left += 1;
+      right += 1;
+    } else if (rows[left + 1][right] >= rows[left][right + 1]) {
+      diff.push({ type: 'remove', text: beforeLines[left] });
+      left += 1;
+    } else {
+      diff.push({ type: 'add', text: afterLines[right] });
+      right += 1;
+    }
+  }
+  while (left < beforeLines.length) {
+    diff.push({ type: 'remove', text: beforeLines[left] });
+    left += 1;
+  }
+  while (right < afterLines.length) {
+    diff.push({ type: 'add', text: afterLines[right] });
+    right += 1;
+  }
+  return diff;
+};
+
+const diffStats = (lines: DiffLine[]) => ({
+  added: lines.filter((line) => line.type === 'add').length,
+  removed: lines.filter((line) => line.type === 'remove').length
+});
 
 export function AiEditorView({
   editor,
   workspaceId,
   aiContext,
   onUpdateViewState,
+  onApplyNoteEdit,
   hideHeader = false,
   compactWelcome = false
 }: {
@@ -1867,6 +4068,7 @@ export function AiEditorView({
   workspaceId: string;
   aiContext?: WorkbenchEditorContentProps['aiContext'];
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
+  onApplyNoteEdit?: (resourceId: string, content: string) => void | Promise<boolean | void>;
   hideHeader?: boolean;
   compactWelcome?: boolean;
 }) {
@@ -1877,17 +4079,44 @@ export function AiEditorView({
   const [debugOpen, setDebugOpen] = useState(false);
   const [inspectedChipId, setInspectedChipId] = useState<string | null>(null);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
-  const [temporaryAttachments, setTemporaryAttachments] = useState<TemporaryAttachment[]>([]);
   const [sourceModalSource, setSourceModalSource] = useState<CitationUiSource | null>(null);
   const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
   const [editingMessageContent, setEditingMessageContent] = useState('');
-  const [aiSuggestedPrompts, setAiSuggestedPrompts] = useState<string[]>(() => buildLocalAiSuggestions(aiContext));
+  const [savingAttachmentId, setSavingAttachmentId] = useState<string | null>(null);
+  const [aiWelcomeContent, setAiWelcomeContent] = useState<AiWelcomeContent | null>(() => {
+    const signature = buildAiWelcomeSignature(aiContext);
+    return aiWelcomeCache.get(signature) || null;
+  });
+  const [isWelcomeLoading, setIsWelcomeLoading] = useState(false);
+  const [welcomeError, setWelcomeError] = useState<string | null>(null);
+  const [applyingNoteEditKey, setApplyingNoteEditKey] = useState<string | null>(null);
+  const [appliedNoteEditKey, setAppliedNoteEditKey] = useState<string | null>(null);
+  const [noteEditPreview, setNoteEditPreview] = useState<{
+    messageIndex: number;
+    proposal: { content: string; targetFileId?: string | null; baseContentHash?: string | null; mode?: 'selection' | 'whole' };
+    targetFileId: string;
+    targetFileName: string;
+    baseContent: string;
+    nextContent: string;
+    baseContentHash: string;
+    diffLines: DiffLine[];
+  } | null>(null);
+  const [noteRevisions, setNoteRevisions] = useState<WorkbenchNoteRevision[]>([]);
+  const [isLoadingRevisions, setIsLoadingRevisions] = useState(false);
+  const [isRevertingRevision, setIsRevertingRevision] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messages = useMemo(
     () => (Array.isArray(editor.viewState?.messages) ? editor.viewState.messages : []),
     [editor.viewState?.messages]
+  );
+  const chatSessionAttachments = useMemo(
+    () =>
+      Array.isArray(editor.viewState?.chatSessionAttachments)
+        ? ((editor.viewState.chatSessionAttachments as any[]) as AiChatAttachment[])
+        : [],
+    [editor.viewState?.chatSessionAttachments]
   );
   const contextMode = ((editor.viewState?.contextMode as AiContextMode | undefined) || 'auto');
   const hiddenChipIds = useMemo(
@@ -1935,16 +4164,64 @@ export function AiEditorView({
       aiContext?.openPanels?.[0],
     [aiContext?.activeFileId, aiContext?.activePanelId, aiContext?.liveContextVersion, aiContext?.openPanels]
   );
+  const canApplyNoteEdit = useMemo(
+    () => Boolean(onApplyNoteEdit && isUserWorkbenchNote(aiContext?.activeFile, activePanelContext)),
+    [activePanelContext, aiContext?.activeFile, onApplyNoteEdit]
+  );
+
+  const activeNoteFileId = aiContext?.activeFile?.id || activePanelContext?.fileId || '';
+
+  const aiWelcomeSignature = useMemo(
+    () => buildAiWelcomeSignature(aiContext),
+    [
+      aiContext?.activeFileId,
+      aiContext?.activePanelId,
+      aiContext?.workbenchId,
+      aiContext?.workbenchTitle,
+      activePanelContext?.panelId,
+      activePanelContext?.fileName,
+      activePanelContext?.selectedText,
+      activePanelContext?.visibleContent,
+      aiContext?.openPanels?.length
+    ]
+  );
 
   useEffect(() => {
-    setAiSuggestedPrompts(buildLocalAiSuggestions(aiContext));
-  }, [
-    aiContext?.activeFileId,
-    aiContext?.activePanelId,
-    aiContext?.workbenchId,
-    activePanelContext?.selectedText,
-    aiContext?.openPanels?.length
-  ]);
+    if (messages.length > 0) return;
+    const cached = aiWelcomeCache.get(aiWelcomeSignature);
+    if (cached) {
+      setAiWelcomeContent(cached);
+      setWelcomeError(null);
+      setIsWelcomeLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsWelcomeLoading(true);
+    setWelcomeError(null);
+    setAiWelcomeContent(null);
+    const timer = window.setTimeout(() => {
+      void aiApi
+        .chatWelcome({ context: aiContext })
+        .then((content) => {
+          if (cancelled) return;
+          rememberAiWelcomeContent(aiWelcomeSignature, content);
+          setAiWelcomeContent(content);
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          setWelcomeError(error instanceof Error ? error.message : 'AI 起始建议生成失败');
+        })
+        .finally(() => {
+          if (!cancelled) setIsWelcomeLoading(false);
+        });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [aiContext, aiWelcomeSignature, messages.length]);
   useEffect(() => {
     const handlePdfSelectionAction = (event: Event) => {
       const detail = (event as CustomEvent).detail as
@@ -2252,72 +4529,144 @@ export function AiEditorView({
     if (selectedFiles.length === 0) return;
 
     const nextAttachments = await Promise.all(
-      selectedFiles.map(
-        (file) =>
-          new Promise<TemporaryAttachment>((resolve) => {
-            const baseAttachment: TemporaryAttachment = {
-              id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID?.() || Date.now()}`,
-              name: file.name,
-              type: file.type || 'application/octet-stream',
-              size: file.size,
-              kind: file.type.startsWith('image/') ? 'image' : 'file'
-            };
+      selectedFiles.map(async (file): Promise<AiChatAttachment> => {
+        const kind = inferChatAttachmentKind(file);
+        const baseAttachment: AiChatAttachment = {
+          id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID?.() || Date.now()}`,
+          name: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          size: file.size,
+          kind,
+          createdAt: new Date().toISOString(),
+          status: 'ready'
+        };
 
-            if (!isTextLikeFile(file)) {
-              resolve(baseAttachment);
-              return;
-            }
+        if (kind === 'text') {
+          const textContent = await readFileAsText(file);
+          return {
+            ...baseAttachment,
+            textContent,
+            status: textContent ? 'ready' : 'metadata_only'
+          };
+        }
 
-            const reader = new FileReader();
-            reader.onload = () => {
-              resolve({
-                ...baseAttachment,
-                textContent: String(reader.result || '').slice(0, 12000)
-              });
-            };
-            reader.onerror = () => resolve(baseAttachment);
-            reader.readAsText(file);
-          })
-      )
+        if (kind === 'image' && file.size <= MAX_INLINE_IMAGE_ATTACHMENT_BYTES) {
+          const dataUrl = await readFileAsDataUrl(file);
+          return {
+            ...baseAttachment,
+            dataUrl,
+            base64Data: base64FromDataUrl(dataUrl),
+            status: dataUrl ? 'ready' : 'metadata_only'
+          };
+        }
+
+        return {
+          ...baseAttachment,
+          status: 'metadata_only',
+          error:
+            kind === 'image'
+              ? '图片超过 4MB，当前仅保留附件元数据。'
+              : '该文件类型尚未在 Chat 附件中提取正文；可保存到 Workbench 后走资源索引。'
+        };
+      })
     );
 
-    setTemporaryAttachments((current) => [...current, ...nextAttachments].slice(-8));
+    onUpdateViewState?.(editor.id, {
+      chatSessionAttachments: [...chatSessionAttachments, ...nextAttachments].slice(-8)
+    });
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
   const removeAttachment = (attachmentId: string) => {
-    setTemporaryAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));
+    onUpdateViewState?.(editor.id, {
+      chatSessionAttachments: chatSessionAttachments.filter((attachment) => attachment.id !== attachmentId)
+    });
   };
+
+  const saveAttachmentToWorkbench = async (attachment: AiChatAttachment) => {
+    if (!aiContext?.workbenchId || savingAttachmentId) return;
+    setSavingAttachmentId(attachment.id);
+    try {
+      const file = await fileFromChatAttachment(attachment);
+      if (!file) {
+        setError('这个附件当前只有元数据，无法直接保存。请从资源面板重新上传原文件。');
+        return;
+      }
+      const result = await fileSystemApi.upload(workspaceId, [file], undefined, undefined, {
+        workbenchId: aiContext.workbenchId,
+        resourceRole: 'source',
+        scope: 'workbench',
+        origin: 'chat_attachment',
+        metadata: {
+          source: 'ai_chat_attachment',
+          chatSessionId: editor.id,
+          attachmentId: attachment.id
+        }
+      });
+      const createdFile = Array.isArray(result?.results)
+        ? result.results.find((item: any) => item?.success)?.file
+        : result?.file || result;
+      onUpdateViewState?.(editor.id, {
+        chatSessionAttachments: chatSessionAttachments.map((item) =>
+          item.id === attachment.id
+            ? {
+                ...item,
+                savedToWorkbench: true,
+                fileObjectId: createdFile?.id || item.fileObjectId
+              }
+            : item
+        )
+      });
+    } catch (saveError: any) {
+      setError(saveError?.response?.data?.error || saveError?.message || '保存附件到 Workbench 失败。');
+    } finally {
+      setSavingAttachmentId(null);
+    }
+  };
+
+  const refreshNoteRevisions = async (fileId = activeNoteFileId) => {
+    if (!fileId || !canApplyNoteEdit) return;
+    setIsLoadingRevisions(true);
+    try {
+      const result = await fileSystemApi.listNoteRevisions(workspaceId, fileId, 8);
+      setNoteRevisions(result.revisions || []);
+    } catch {
+      setNoteRevisions([]);
+    } finally {
+      setIsLoadingRevisions(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!activeNoteFileId || !canApplyNoteEdit) {
+      setNoteRevisions([]);
+      return;
+    }
+    void refreshNoteRevisions(activeNoteFileId);
+  }, [activeNoteFileId, canApplyNoteEdit, workspaceId]);
 
   const submitMessages = async ({
     prompt,
-    baseMessages,
-    attachments = []
+    baseMessages
   }: {
     prompt: string;
     baseMessages: AiChatMessage[];
-    attachments?: TemporaryAttachment[];
   }) => {
     const trimmedInput = prompt.trim();
-    if ((!trimmedInput && attachments.length === 0) || isSending) return;
+    if ((!trimmedInput && chatSessionAttachments.length === 0) || isSending) return;
 
-    const attachmentContext = attachments
-      .map((attachment) =>
-        [
-          `临时附件：${attachment.name}`,
-          `类型：${attachment.type || attachment.kind}`,
-          `大小：${formatBytes(attachment.size)}`,
-          attachment.textContent ? `内容预览：\n${attachment.textContent}` : ''
-        ]
-          .filter(Boolean)
-          .join('\n')
-      )
-      .join('\n\n');
-    const userContent = [trimmedInput, attachmentContext ? `【本轮临时附件】\n${attachmentContext}` : '']
-      .filter(Boolean)
-      .join('\n\n');
+    const userContent = trimmedInput || '请分析当前 Chat 附件。';
+    const selectedNoteText = activePanelContext?.selectedText?.trim() || aiContext?.selectedText?.trim() || '';
+    const hasSelectedNoteText = Boolean(selectedNoteText);
+    const shouldRequestNoteEditProposal =
+      canApplyNoteEdit &&
+      NOTE_EDIT_INTENT_PATTERN.test(userContent) &&
+      (NOTE_EDIT_TARGET_PATTERN.test(userContent) || hasSelectedNoteText) &&
+      Boolean(aiContext?.activeFile?.id || activePanelContext?.fileId);
+    const noteEditProposalMode: 'selection' | 'whole' =
+      shouldRequestNoteEditProposal && hasSelectedNoteText && !WHOLE_NOTE_EDIT_PATTERN.test(userContent) ? 'selection' : 'whole';
     const createdAt = new Date().toISOString();
 
     const previousMessages = [...baseMessages] as AiChatMessage[];
@@ -2328,7 +4677,6 @@ export function AiEditorView({
 
     onUpdateViewState?.(editor.id, { messages: nextMessages });
     setInput('');
-    setTemporaryAttachments([]);
     setError(null);
     setIsSending(true);
 
@@ -2342,9 +4690,31 @@ export function AiEditorView({
             : /@Workbench/i.test(trimmedInput)
               ? 'workbench'
               : contextMode;
-      let assistantContent = '';
       const assistantCreatedAt = new Date().toISOString();
-      const streamMessages: AiChatMessage[] = [...nextMessages, { role: 'assistant', content: '', createdAt: assistantCreatedAt }];
+      const targetNoteFileId = aiContext?.activeFile?.id || activePanelContext?.fileId;
+      const baseContentHash = shouldRequestNoteEditProposal
+        ? await hashText(aiContext?.activeFileContent || '')
+        : null;
+      const initialAssistantContent = shouldRequestNoteEditProposal
+        ? `${buildNoteEditProposalMarker(targetNoteFileId, baseContentHash)}\n`
+        : '';
+      let assistantContent = initialAssistantContent;
+      const streamMessages: AiChatMessage[] = [...nextMessages, { role: 'assistant', content: initialAssistantContent, createdAt: assistantCreatedAt }];
+      const requestMessages = shouldRequestNoteEditProposal
+        ? nextMessages.map((message, messageIndex) =>
+            messageIndex === nextMessages.length - 1
+              ? {
+                  ...message,
+                  content: `${message.content}${buildNoteEditInstruction(
+                    aiContext?.activeFile?.name || activePanelContext?.fileName,
+                    aiContext?.activeFile?.path || activePanelContext?.filePath,
+                    selectedNoteText,
+                    noteEditProposalMode
+                  )}`
+                }
+              : message
+          )
+        : nextMessages;
       const contextPayload = {
         userId: aiContext?.userId,
         sessionId: editor.id,
@@ -2372,6 +4742,7 @@ export function AiEditorView({
           : null,
         activeExternal: aiContext?.activeExternal || null,
         openPanels: aiContext?.openPanels || [],
+        chatSessionAttachments,
         selectedText:
           window.getSelection()?.toString().trim() ||
           activePanelContext?.selectedText ||
@@ -2384,7 +4755,7 @@ export function AiEditorView({
 
       const response = await aiApi.chatStream(
         {
-          messages: nextMessages,
+          messages: requestMessages,
           context: contextPayload
         },
         {
@@ -2398,7 +4769,7 @@ export function AiEditorView({
             onUpdateViewState?.(editor.id, { messages: [...streamMessages] });
           },
           onReplace: (content) => {
-            assistantContent = content;
+            assistantContent = `${initialAssistantContent}${content}`;
             streamMessages[streamMessages.length - 1] = {
               role: 'assistant',
               content: assistantContent,
@@ -2423,7 +4794,7 @@ export function AiEditorView({
       setTimeline(response.timeline || []);
       streamMessages[streamMessages.length - 1] = {
         role: 'assistant',
-        content: response.reply,
+        content: `${initialAssistantContent}${response.reply}`,
         createdAt: assistantCreatedAt
       };
       onUpdateViewState?.(editor.id, {
@@ -2454,8 +4825,7 @@ export function AiEditorView({
   const handleSend = async () => {
     await submitMessages({
       prompt: input,
-      baseMessages: [...messages] as AiChatMessage[],
-      attachments: temporaryAttachments
+      baseMessages: [...messages] as AiChatMessage[]
     });
   };
 
@@ -2496,9 +4866,107 @@ export function AiEditorView({
     const userPrompt = history[userIndex].content.split('\n\n【本轮临时附件】')[0];
     await submitMessages({
       prompt: userPrompt,
-      baseMessages: history.slice(0, userIndex),
-      attachments: []
+      baseMessages: history.slice(0, userIndex)
     });
+  };
+
+  const openNoteEditPreview = async (
+    messageIndex: number,
+    proposal: { content: string; targetFileId?: string | null; baseContentHash?: string | null; mode?: 'selection' | 'whole' }
+  ) => {
+    const targetFileId = proposal.targetFileId || aiContext?.activeFile?.id || activePanelContext?.fileId;
+    const targetFileName = aiContext?.activeFile?.name || activePanelContext?.fileName || '当前笔记';
+    if (!targetFileId || !onApplyNoteEdit) return;
+    const baseContent = aiContext?.activeFileContent || '';
+    const baseContentHash = proposal.baseContentHash || await hashText(baseContent);
+    const selectedText = activePanelContext?.selectedText?.trim() || aiContext?.selectedText?.trim() || '';
+    const mode = proposal.mode || 'whole';
+    const nextContent =
+      mode === 'selection'
+        ? replaceUniqueSelectedText(baseContent, selectedText, proposal.content)
+        : proposal.content;
+    if (!nextContent) {
+      setError('AI 已生成修改，但无法在当前 markdown 中精确定位选区。请重新选择一段连续文本，或让 AI 输出整篇笔记版本。');
+      return;
+    }
+    setNoteEditPreview({
+      messageIndex,
+      proposal: { ...proposal, mode },
+      targetFileId,
+      targetFileName,
+      baseContent,
+      nextContent,
+      baseContentHash,
+      diffLines: buildLineDiff(baseContent, nextContent)
+    });
+  };
+
+  const applyNoteEditProposal = async () => {
+    if (!noteEditPreview || !onApplyNoteEdit) return;
+
+    const { messageIndex, targetFileId, baseContentHash, nextContent } = noteEditPreview;
+    const key = `${messageIndex}:${targetFileId}`;
+    setApplyingNoteEditKey(key);
+    setError(null);
+    try {
+      await fileSystemApi.saveContentWithRevision(workspaceId, {
+        id: targetFileId,
+        content: nextContent,
+        baseContentHash,
+        revisionSummary: 'AI note edit applied from chat',
+        actionType: 'ai_note_edit',
+        actor: 'ai'
+      });
+      await onApplyNoteEdit(targetFileId, nextContent);
+      setNoteEditPreview(null);
+      setAppliedNoteEditKey(key);
+      void refreshNoteRevisions(targetFileId);
+      window.setTimeout(() => setAppliedNoteEditKey((current) => (current === key ? null : current)), 1800);
+    } catch (applyError: any) {
+      const rawError = applyError?.response?.data?.error || applyError?.message || '应用笔记修改失败。';
+      try {
+        const parsed = JSON.parse(rawError);
+        setError(parsed?.message || rawError);
+        if (parsed?.currentContent) {
+          setNoteEditPreview((current) =>
+            current
+              ? {
+                  ...current,
+                  baseContent: parsed.currentContent,
+                  baseContentHash: parsed.currentContentHash || current.baseContentHash,
+                  diffLines: buildLineDiff(parsed.currentContent, current.nextContent)
+                }
+              : current
+          );
+        }
+      } catch {
+        setError(rawError);
+      }
+    } finally {
+      setApplyingNoteEditKey(null);
+    }
+  };
+
+  const revertLatestNoteRevision = async () => {
+    if (!activeNoteFileId || noteRevisions.length === 0 || !onApplyNoteEdit) return;
+    const latest = noteRevisions[0];
+    const confirmed = window.confirm(`撤销最近一次笔记修改（Revision ${latest.revisionNumber}）？`);
+    if (!confirmed) return;
+
+    setIsRevertingRevision(true);
+    setError(null);
+    try {
+      const result = await fileSystemApi.revertNoteRevision(workspaceId, activeNoteFileId, {
+        revisionId: latest.id,
+        actor: 'user'
+      });
+      await onApplyNoteEdit(activeNoteFileId, result.afterContent);
+      void refreshNoteRevisions(activeNoteFileId);
+    } catch (revertError: any) {
+      setError(revertError?.response?.data?.error || revertError?.message || '撤销笔记修改失败。');
+    } finally {
+      setIsRevertingRevision(false);
+    }
   };
 
   return (
@@ -2515,7 +4983,7 @@ export function AiEditorView({
       {!hideHeader && (
         <div className="border-b border-[#eeeeeb] bg-white px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
-            <Sparkles className="h-4 w-4 shrink-0 text-[#16833a]" />
+            <Bot className="h-4 w-4 shrink-0 text-[#16833a]" />
             <div className="truncate text-sm font-medium text-[#25272b]">
               {editor.title || 'AI Assistant'}
             </div>
@@ -2570,45 +5038,62 @@ export function AiEditorView({
             </div>
           )}
           {messages.length === 0 && (
-            <div className={`ai-message-in mx-auto flex w-full max-w-2xl flex-col ${compactWelcome ? 'pt-8' : 'pt-16'}`}>
-              <div className="mb-7 flex justify-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#e5e5e1] bg-white text-[#202124] shadow-[0_18px_45px_rgba(15,23,42,0.12)] transition-transform duration-300 hover:scale-[1.03]">
-                  <Sparkles className="h-7 w-7" />
-                </div>
+            <div className={`ai-message-in mr-auto flex w-full max-w-2xl flex-col items-start ${compactWelcome ? 'pt-5' : 'pt-12'}`}>
+              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#e5e5e1] bg-white text-[#202124] shadow-[0_14px_34px_rgba(15,23,42,0.1)] transition-transform duration-300 hover:scale-[1.03]">
+                <Bot className="h-7 w-7" />
               </div>
-              <h2 className="text-center text-2xl font-bold tracking-0 text-[#25272b]">
-                随时待命，我能帮上什么忙吗？
+              <h2 className="max-w-xl text-left text-2xl font-bold tracking-0 text-[#25272b]">
+                {aiWelcomeContent?.greeting || (isWelcomeLoading ? '正在结合上下文准备建议...' : 'AI 建议暂时没有生成成功')}
               </h2>
-              <div className="mx-auto mt-7 grid w-full max-w-xl gap-2">
-                {aiSuggestedPrompts.map((suggestion) => (
+              <div className="mt-7 grid w-full max-w-xl gap-2">
+                {aiWelcomeContent?.actions.map((suggestion) => (
                   <button
-                    key={suggestion}
+                    key={`${suggestion.icon}-${suggestion.label}`}
                     type="button"
                     onClick={() => {
-                      setInput(suggestion);
+                      setInput(suggestion.label);
                       window.setTimeout(() => inputRef.current?.focus(), 0);
                     }}
                     className="ai-soft-button flex items-center gap-3 rounded-xl px-4 py-2.5 text-left text-[15px] font-medium text-[#34373c] hover:bg-[#f6f6f4]"
                   >
-                    <Sparkles className="h-4 w-4 shrink-0 text-[#5f6368]" />
-                    <span className="truncate">{suggestion}</span>
+                    {getWelcomeActionIcon(suggestion)}
+                    <span className="min-w-0 flex-1 truncate">{suggestion.label}</span>
                   </button>
                 ))}
+                {isWelcomeLoading && (
+                  <div className="flex items-center gap-3 rounded-xl px-4 py-2.5 text-left text-[15px] font-medium text-[#777a80]">
+                    <Loader2 className="h-4.5 w-4.5 shrink-0 animate-spin" />
+                    <span>正在生成适合当前内容的开场建议</span>
+                  </div>
+                )}
+                {!isWelcomeLoading && welcomeError && !aiWelcomeContent && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-800">
+                    暂时没能生成 AI 建议，你仍然可以直接输入想做的事。
+                  </div>
+                )}
               </div>
             </div>
           )}
           {messages.map((message: AiChatMessage, index: number) => {
             const isAssistant = message.role === 'assistant';
-            const displayContent = message.content.split('\n\n【本轮临时附件】')[0];
+            const cleanMessageContent = message.content.replace(NOTE_EDIT_PROPOSAL_MARKER_PATTERN, '').trimStart();
+            const displayContent = cleanMessageContent.split('\n\n【本轮临时附件】')[0];
             const messageTime = formatMessageTime(message.createdAt);
+            const noteEditProposal =
+              isAssistant && canApplyNoteEdit && !(isSending && index === messages.length - 1)
+                ? extractSelectionReplacementProposal(message.content) || extractMarkdownProposal(message.content)
+                : null;
+            const currentTargetFileId = aiContext?.activeFile?.id || activePanelContext?.fileId || '';
+            const noteEditTargetMatches = !noteEditProposal?.targetFileId || noteEditProposal.targetFileId === currentTargetFileId;
+            const noteEditKey = `${index}:${noteEditProposal?.targetFileId || currentTargetFileId}`;
             return (
               <div
                 key={`${message.role}-${index}`}
                 className={`ai-message-in group flex w-full ${isAssistant ? 'items-start gap-4' : 'justify-end'}`}
               >
                 {isAssistant && (
-                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#eeeeeb] bg-white text-xs font-bold text-[#111827]">
-                    AI
+                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#eeeeeb] bg-white text-[#111827]">
+                    <Bot className="h-4.5 w-4.5" />
                   </div>
                 )}
                 <div className={isAssistant ? 'min-w-0 flex-1 border-b border-[#eeeeeb] pb-7' : 'flex max-w-[78%] flex-col items-end'}>
@@ -2621,7 +5106,7 @@ export function AiEditorView({
                         </span>
                       </div>
                       <MarkdownPreview
-                        content={message.content || ''}
+                        content={cleanMessageContent || ''}
                         variant="message"
                         citationSources={sourceInspectorItems}
                         onCitationJump={jumpToCitation}
@@ -2636,11 +5121,34 @@ export function AiEditorView({
                           />
                         </div>
                       )}
+                      {noteEditProposal && noteEditTargetMatches && (
+                        <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-[#d7e8d2] bg-[#f7fbf6] px-3 py-2">
+                          <div className="min-w-0 flex-1 text-xs text-[#4f5f4a]">
+                            可应用到当前用户笔记：{aiContext?.activeFile?.name || activePanelContext?.fileName || '当前笔记'}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void openNoteEditPreview(index, noteEditProposal)}
+                            disabled={applyingNoteEditKey === noteEditKey}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#202124] px-3 text-xs font-semibold text-white hover:bg-[#34373c] disabled:cursor-not-allowed disabled:bg-[#c9cbc7]"
+                            title="确认后写入当前笔记"
+                          >
+                            {applyingNoteEditKey === noteEditKey ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : appliedNoteEditKey === noteEditKey ? (
+                              <Check className="h-3.5 w-3.5" />
+                            ) : (
+                              <PencilLine className="h-3.5 w-3.5" />
+                            )}
+                            {appliedNoteEditKey === noteEditKey ? '已应用' : '应用到笔记'}
+                          </button>
+                        </div>
+                      )}
                       <div className="mt-3 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                        <button onClick={() => startEditMessage(index, message.content)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Edit">
+                        <button onClick={() => startEditMessage(index, cleanMessageContent)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Edit">
                           <Edit3 className="h-4 w-4" />
                         </button>
-                        <button onClick={() => void copyMessage(message.content, index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Copy">
+                        <button onClick={() => void copyMessage(cleanMessageContent, index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Copy">
                           {copiedMessageIndex === index ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                         </button>
                         <button className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Read aloud">
@@ -2709,10 +5217,104 @@ export function AiEditorView({
         </div>
       </div>
 
+      {canApplyNoteEdit && activeNoteFileId && (
+        <div className="border-t border-[#eeeeeb] bg-[#fafafa] px-5 py-2">
+          <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 text-xs text-[#6b7280]">
+            <div className="min-w-0 truncate">
+              {isLoadingRevisions
+                ? '正在读取笔记修改历史...'
+                : noteRevisions.length
+                  ? `最近修改：Revision ${noteRevisions[0].revisionNumber} · ${new Date(noteRevisions[0].createdAt).toLocaleString()}`
+                  : '暂无 AI 笔记修改历史'}
+            </div>
+            <button
+              type="button"
+              onClick={() => void revertLatestNoteRevision()}
+              disabled={noteRevisions.length === 0 || isRevertingRevision}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[#e5e7eb] bg-white px-3 font-semibold text-[#374151] hover:bg-[#f4f4f5] disabled:cursor-not-allowed disabled:text-[#a1a1aa]"
+              title="撤销最近一次 AI 应用到笔记的修改"
+            >
+              {isRevertingRevision ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+              撤销最近修改
+            </button>
+          </div>
+        </div>
+      )}
+
+      {noteEditPreview && (() => {
+        const stats = diffStats(noteEditPreview.diffLines);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-6">
+            <div className="flex max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-[0_28px_90px_rgba(15,23,42,0.28)]">
+              <div className="flex items-center justify-between gap-3 border-b border-[#eeeeeb] px-5 py-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-[#111827]">预览 AI 笔记修改</div>
+                  <div className="mt-1 truncate text-xs text-[#6b7280]">
+                    {noteEditPreview.targetFileName} · +{stats.added} / -{stats.removed} · base {noteEditPreview.baseContentHash.slice(0, 10)}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setNoteEditPreview(null)}
+                  className="rounded-lg p-2 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]"
+                  title="关闭"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto bg-[#fbfbfa] p-4">
+                <div className="overflow-hidden rounded-xl border border-[#e5e7eb] bg-white font-mono text-xs leading-5">
+                  {noteEditPreview.diffLines.map((line, index) => (
+                    <div
+                      key={`${line.type}-${index}-${line.text}`}
+                      className={`grid grid-cols-[42px_1fr] gap-3 border-b border-white/60 px-3 py-1 ${
+                        line.type === 'add'
+                          ? 'bg-emerald-50 text-emerald-900'
+                          : line.type === 'remove'
+                            ? 'bg-rose-50 text-rose-900'
+                            : 'bg-white text-[#4b5563]'
+                      }`}
+                    >
+                      <span className="select-none text-right text-[#9ca3af]">
+                        {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ''}
+                      </span>
+                      <span className="whitespace-pre-wrap break-words">{line.text || ' '}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#eeeeeb] px-5 py-4">
+                <div className="text-xs text-[#6b7280]">
+                  应用前会再次校验 baseContentHash；如果笔记已变化，会停止覆盖并刷新对比。
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNoteEditPreview(null)}
+                    className="h-9 rounded-lg border border-[#e5e7eb] bg-white px-4 text-sm font-semibold text-[#374151] hover:bg-[#f4f4f5]"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void applyNoteEditProposal()}
+                    disabled={Boolean(applyingNoteEditKey)}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#202124] px-4 text-sm font-semibold text-white hover:bg-[#34373c] disabled:cursor-not-allowed disabled:bg-[#c9cbc7]"
+                  >
+                    {applyingNoteEditKey ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                    确认应用
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <div className="bg-white px-5 py-4">
         <div className="mx-auto max-w-4xl">
           <div className="ai-composer-lift relative rounded-[28px] border border-[#e5e7eb] bg-white p-3 shadow-[0_14px_45px_rgba(15,23,42,0.08)]">
-            {(pinnedContextChips.length > 0 || persistentCitations.length > 0 || temporaryAttachments.length > 0) && (
+            {(pinnedContextChips.length > 0 || persistentCitations.length > 0 || chatSessionAttachments.length > 0) && (
               <div className="mb-2 flex flex-wrap gap-2">
                 {pinnedContextChips.slice(0, 2).map((chip) => (
                   <span
@@ -2775,18 +5377,37 @@ export function AiEditorView({
                     </button>
                   </div>
                 )}
-                {temporaryAttachments.map((attachment) => (
+                {chatSessionAttachments.map((attachment) => (
                   <span
                     key={attachment.id}
                     className="inline-flex max-w-full items-center gap-1 rounded-full bg-[#f4f4f5] px-2.5 py-1 text-xs font-medium text-[#71717a]"
-                    title={`${attachment.name} · ${formatBytes(attachment.size)}`}
+                    title={`${attachment.name} · ${attachment.mimeType} · ${formatBytes(attachment.size)}`}
                   >
                     {attachment.kind === 'image' ? <Image className="h-3.5 w-3.5" /> : <File className="h-3.5 w-3.5" />}
                     <span className="max-w-[220px] truncate">{attachment.name}</span>
+                    {attachment.status === 'metadata_only' && (
+                      <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700" title={attachment.error || '仅保留元数据'}>
+                        元数据
+                      </span>
+                    )}
+                    {attachment.savedToWorkbench ? (
+                      <span className="rounded-full bg-[#f3faf1] px-1.5 py-0.5 text-[10px] text-[#16833a]">
+                        已保存
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => void saveAttachmentToWorkbench(attachment)}
+                        disabled={savingAttachmentId === attachment.id}
+                        className="rounded-full px-1.5 py-0.5 text-[10px] text-[#16833a] hover:bg-[#f3faf1] disabled:text-[#a6a8ab]"
+                        title="保存到 Workbench，供其他 Chat 和资源索引使用"
+                      >
+                        {savingAttachmentId === attachment.id ? '保存中' : '保存'}
+                      </button>
+                    )}
                     <button
                       onClick={() => removeAttachment(attachment.id)}
                       className="rounded-full p-0.5 text-[#a6a8ab] hover:bg-[#eeeeeb] hover:text-[#34373c]"
-                      title="移除附件"
+                      title="从当前 Chat 移除附件"
                     >
                       <X className="h-3 w-3" />
                     </button>
@@ -2855,7 +5476,7 @@ export function AiEditorView({
                 </select>
                 <button
                   onClick={() => void handleSend()}
-                  disabled={isSending || (!input.trim() && temporaryAttachments.length === 0)}
+                  disabled={isSending || (!input.trim() && chatSessionAttachments.length === 0)}
                   className="ai-soft-button inline-flex h-10 w-10 items-center justify-center rounded-full bg-[#202124] text-white hover:bg-[#34373c] disabled:cursor-not-allowed disabled:bg-[#f1f1ef] disabled:text-[#c2c3c5]"
                   title="Send"
                 >
@@ -3168,14 +5789,20 @@ export default function WorkbenchEditorContent({
   resource,
   workspaceId,
   content,
+  isDirty = false,
+  saveStatus = 'idle',
+  savedAt,
+  saveError,
   isLoading = false,
   onChangeContent,
+  onSaveContent,
+  onApplyAiNoteEdit,
   onUpdateViewState,
   onBindResource,
-  aiContext
+  aiContext,
+  resources = []
 }: WorkbenchEditorContentProps) {
   const detectedResourceKind = getResourceKind(resource);
-  const [resourceGuideText, setResourceGuideText] = useState('');
   const [sourceFileContent, setSourceFileContent] = useState('');
   const effectiveContent =
     detectedResourceKind === 'web' && (content == null || content === '')
@@ -3208,9 +5835,16 @@ export default function WorkbenchEditorContent({
       <BlockSuiteNotesEditor
         editor={editor}
         resource={resource}
+        workspaceId={workspaceId}
         content={content ?? ''}
+        isDirty={isDirty}
+        saveStatus={saveStatus}
+        savedAt={savedAt}
+        saveError={saveError}
         isLoading={Boolean(isLoading)}
         onChangeContent={onChangeContent}
+        onSaveContent={onSaveContent}
+        onApplyAiNoteEdit={onApplyAiNoteEdit}
         onUpdateViewState={onUpdateViewState}
         onBindResource={onBindResource}
       />
@@ -3218,11 +5852,27 @@ export default function WorkbenchEditorContent({
   }
 
   if (editor.type === 'ai') {
-    return <AiEditorView editor={editor} workspaceId={workspaceId} aiContext={aiContext} onUpdateViewState={onUpdateViewState} />;
+    return (
+      <AiEditorView
+        editor={editor}
+        workspaceId={workspaceId}
+        aiContext={aiContext}
+        onUpdateViewState={onUpdateViewState}
+        onApplyNoteEdit={onApplyAiNoteEdit}
+      />
+    );
   }
 
   if (editor.type === 'studio') {
-    return <AIStudioPanel editor={editor} workspaceId={workspaceId} aiContext={aiContext} onUpdateViewState={onUpdateViewState} />;
+    return (
+      <AIStudioPanel
+        editor={editor}
+        workspaceId={workspaceId}
+        aiContext={aiContext}
+        resources={resources}
+        onUpdateViewState={onUpdateViewState}
+      />
+    );
   }
 
   if (editor.type === 'external') {
@@ -3253,18 +5903,16 @@ export default function WorkbenchEditorContent({
   }
 
   const resourceKind = getResourceKind(resource);
+  const resourceSourceUrl = getResourceSourceUrl(resource);
+  const sourceUrl = sourceMetadata.url || resourceSourceUrl;
   const sourceTitle = sourceMetadata.title || resource.name.replace(/\.source$/i, '');
-  const sourceText = resourceKind === 'web'
-    ? [sourceTitle, sourceMetadata.url, sourceMetadata.body].filter(Boolean).join('\n\n')
-    : resourceGuideText || effectiveContent;
-
   if (resourceKind === 'html') {
     return (
       <ResourcePanelShell
         editor={editor}
         resource={resource}
         workspaceId={workspaceId}
-        sourceText={effectiveContent}
+        guideKind="html"
         sourceUrl={fileSystemApi.downloadUrl(workspaceId, resource.id)}
         onUpdateViewState={onUpdateViewState}
       >
@@ -3279,32 +5927,34 @@ export default function WorkbenchEditorContent({
         editor={editor}
         resource={{ ...resource, name: sourceTitle }}
         workspaceId={workspaceId}
-        sourceText={sourceText}
-        sourceUrl={sourceMetadata.url}
+        guideKind="web"
+        sourceUrl={sourceUrl}
         onUpdateViewState={onUpdateViewState}
       >
         <WebSourcePreview
           title={sourceTitle}
-          url={sourceMetadata.url}
-          body={sourceMetadata.body}
+          url={sourceUrl}
+          body={sourceMetadata.body || effectiveContent}
           workspaceId={workspaceId}
+          resource={resource}
+          editorId={editor.id}
+          onUpdateViewState={onUpdateViewState}
         />
       </ResourcePanelShell>
     );
   }
 
   if (editor.type === 'video' || resourceKind === 'video') {
+    const videoSourceUrl = sourceUrl || resourceSourceUrl;
     return (
-      <ResourcePanelShell
+      <VideoSourcePanel
         editor={editor}
         resource={resource}
         workspaceId={workspaceId}
-        sourceText={`${resource.name}\n${resource.path}`}
-        sourceUrl={fileSystemApi.downloadUrl(workspaceId, resource.id)}
+        sourceUrl={videoSourceUrl}
+        sourceTitle={sourceTitle}
         onUpdateViewState={onUpdateViewState}
-      >
-        <VideoFilePreview resource={resource} workspaceId={workspaceId} />
-      </ResourcePanelShell>
+      />
     );
   }
 
@@ -3314,7 +5964,7 @@ export default function WorkbenchEditorContent({
         editor={editor}
         resource={resource}
         workspaceId={workspaceId}
-        sourceText={sourceText}
+        guideKind="document"
         sourceUrl={fileSystemApi.downloadUrl(workspaceId, resource.id)}
         onUpdateViewState={onUpdateViewState}
       >
@@ -3323,20 +5973,48 @@ export default function WorkbenchEditorContent({
           workspaceId={workspaceId}
           editorId={editor.id}
           onUpdateViewState={onUpdateViewState}
-          onExtractedText={setResourceGuideText}
         />
       </ResourcePanelShell>
     );
   }
 
-  if (
-    editor.type === 'code' &&
-    (resourceKind === 'code' || resourceKind === 'structured') &&
-    ((editor.viewState.codeOpenMode as 'blocksuite' | 'plain' | undefined) || 'blocksuite') ===
-      'blocksuite'
-  ) {
+  if (editor.type === 'code' && (resourceKind === 'code' || resourceKind === 'structured')) {
     return (
-      <BlockSuiteCodeEditor
+      <ResourcePanelShell
+        editor={editor}
+        resource={resource}
+        workspaceId={workspaceId}
+        guideKind="code"
+        sourceUrl={fileSystemApi.downloadUrl(workspaceId, resource.id)}
+        onUpdateViewState={onUpdateViewState}
+      >
+        <BlockSuiteCodeEditor
+          editor={editor}
+          resource={resource}
+          content={String(content ?? '')}
+          isDirty={isDirty}
+          saveStatus={saveStatus}
+          savedAt={savedAt}
+          saveError={saveError}
+          isLoading={isLoading}
+          onChangeContent={onChangeContent}
+          onSaveContent={onSaveContent}
+          onUpdateViewState={onUpdateViewState}
+        />
+      </ResourcePanelShell>
+    );
+  }
+
+  return (
+    <ResourcePanelShell
+      editor={editor}
+      resource={resource}
+      workspaceId={workspaceId}
+      guideKind={resourceKind === 'code' || resourceKind === 'structured' ? 'code' : 'text'}
+      sourceUrl={fileSystemApi.downloadUrl(workspaceId, resource.id)}
+      onUpdateViewState={onUpdateViewState}
+    >
+      <TextEditingSurface
         editor={editor}
         resource={resource}
         content={String(content ?? '')}
@@ -3344,17 +6022,6 @@ export default function WorkbenchEditorContent({
         onChangeContent={onChangeContent}
         onUpdateViewState={onUpdateViewState}
       />
-    );
-  }
-
-  return (
-    <TextEditingSurface
-      editor={editor}
-      resource={resource}
-      content={String(content ?? '')}
-      isLoading={isLoading}
-      onChangeContent={onChangeContent}
-      onUpdateViewState={onUpdateViewState}
-    />
+    </ResourcePanelShell>
   );
 }

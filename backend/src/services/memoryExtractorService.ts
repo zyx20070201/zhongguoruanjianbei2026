@@ -1,5 +1,6 @@
 import prisma from '../config/db';
-import { deepseekService } from './deepseekService';
+import { aiModelProviderService } from './aiModelProviderService';
+import { isPollutedLearningSignal, isToolGeneratedLearningRequest, sanitizeLearnerSignalText } from './learnerSignalSanitizer';
 import { learnerStateService, LearnerStateDimension } from './learnerStateService';
 import { savedMemoryService } from './savedMemoryService';
 
@@ -111,10 +112,12 @@ const preferenceSignals = (text: string) => {
 
 const buildRuleExtraction = (messages: ChatMessage[], answer?: string): MemoryExtractionResult => {
   const userMessage = latestUserMessage(messages);
-  const explicitText = clip(explicitMemoryText(userMessage), 360);
-  const topic = topicFromText(userMessage);
-  const prefs = preferenceSignals(userMessage);
-  const strongGoal = /目标|计划|准备|考试|项目|论文|复习|我想学|我要学|希望掌握|需要掌握/i.test(userMessage);
+  const signalText = sanitizeLearnerSignalText(userMessage);
+  const suppressed = !signalText || isToolGeneratedLearningRequest(userMessage);
+  const explicitText = suppressed ? '' : clip(explicitMemoryText(signalText), 360);
+  const topic = suppressed ? '' : topicFromText(signalText);
+  const prefs = suppressed ? [] : preferenceSignals(signalText);
+  const strongGoal = suppressed ? false : /目标|计划|准备|考试|项目|论文|复习|我想学|我要学|希望掌握|需要掌握/i.test(signalText);
   const signals: MemoryExtractionResult['learnerStateSignals'] = [];
 
   if (topic) {
@@ -124,18 +127,18 @@ const buildRuleExtraction = (messages: ChatMessage[], answer?: string): MemoryEx
       confidence: 0.42,
       rationale: 'Recent chat topic; never promote to saved memory by itself.',
       dimension: 'profileBase',
-      payload: { recentTopics: [topic], transientTopicSignals: [{ topic, text: clip(userMessage, 180), observedAt: new Date().toISOString() }] }
+      payload: { recentTopics: [topic], transientTopicSignals: [{ topic, text: clip(signalText, 180), observedAt: new Date().toISOString() }] }
     });
   }
 
   if (strongGoal) {
     signals.push({
       taxonomy: 'active_learning_goal',
-      value: clip(userMessage, 180),
+      value: clip(signalText, 180),
       confidence: 0.46,
       rationale: 'User expressed an intent with goal-like language; keep as active goal signal until confirmed.',
       dimension: 'profileBase',
-      payload: { activeLearningGoalSignals: [clip(userMessage, 180)] }
+      payload: { activeLearningGoalSignals: [clip(signalText, 180)] }
     });
   }
 
@@ -146,7 +149,7 @@ const buildRuleExtraction = (messages: ChatMessage[], answer?: string): MemoryEx
       confidence: explicitText ? 0.58 : 0.36,
       rationale: explicitText ? 'Preference appeared in a memory-like instruction.' : 'Single explanation preference signal.',
       dimension: 'preferenceStyle',
-      payload: { tentativeResourcePreferences: [preference], explanationPreferenceSignals: [{ preference, text: clip(userMessage, 180) }] }
+      payload: { tentativeResourcePreferences: [preference], explanationPreferenceSignals: [{ preference, text: clip(signalText, 180) }] }
     });
   });
 
@@ -161,10 +164,14 @@ const buildRuleExtraction = (messages: ChatMessage[], answer?: string): MemoryEx
         }
       : null,
     learnerStateSignals: signals,
-    conversationSummary: clip(`User asked: ${userMessage}\nAssistant answered: ${answer || ''}`, 500),
+    conversationSummary: suppressed
+      ? 'Tool-generated learning request ignored for long-term memory and learner-state extraction.'
+      : clip(`User asked: ${signalText}\nAssistant answered: ${answer || ''}`, 500),
     shouldAskUserToSave: false,
     askUserToSaveText: null,
-    rejectedCandidates: explicitText ? [] : [{ text: clip(userMessage, 160), reason: 'No explicit long-term memory request.' }],
+    rejectedCandidates: explicitText
+      ? []
+      : [{ text: clip(userMessage, 160), reason: suppressed ? 'Tool-generated prompt, not a learner memory signal.' : 'No explicit long-term memory request.' }],
     extractor: 'rules'
   };
 };
@@ -175,7 +182,7 @@ const coerceExtraction = (value: any, fallback: MemoryExtractionResult): MemoryE
     .map((signal: any) => {
       const taxonomy = String(signal.taxonomy || '');
       const valueText = clip(signal.value, 180);
-      if (!taxonomy || !valueText) return null;
+      if (!taxonomy || !valueText || isPollutedLearningSignal(valueText)) return null;
       const dimension: LearnerStateDimension =
         taxonomy === 'candidate_weak_concept' || taxonomy === 'stable_weak_concept'
           ? 'knowledgeState'
@@ -209,9 +216,10 @@ const coerceExtraction = (value: any, fallback: MemoryExtractionResult): MemoryE
     })
     .filter(Boolean) as MemoryExtractionResult['learnerStateSignals'];
 
-  const candidate = value?.savedMemoryCandidate && typeof value.savedMemoryCandidate === 'object'
+  const candidateText = clip(value?.savedMemoryCandidate?.text, 360);
+  const candidate = value?.savedMemoryCandidate && typeof value.savedMemoryCandidate === 'object' && !isToolGeneratedLearningRequest(candidateText)
     ? {
-        text: clip(value.savedMemoryCandidate.text, 360),
+        text: candidateText,
         category: categorize(String(value.savedMemoryCandidate.text || '')),
         confidence: Math.max(0, Math.min(1, Number(value.savedMemoryCandidate.confidence ?? 0.7))),
         reason: clip(value.savedMemoryCandidate.reason || 'Extractor candidate.', 180),
@@ -242,11 +250,13 @@ export class MemoryExtractorService {
     sourceId?: string | null;
   }): Promise<MemoryExtractionResult> {
     const fallback = buildRuleExtraction(input.messages, input.answer);
-    if (!deepseekService.isConfigured()) return fallback;
+    if (isToolGeneratedLearningRequest(latestUserMessage(input.messages))) return fallback;
+    if (!aiModelProviderService.isConfigured({ useCase: 'memory' })) return fallback;
 
     const prompt = [
       '你是学习型 AI 产品的 memory extractor。只输出 JSON。',
       '目标：少记但记准；区分 Saved Memories、Reference chat history 和 Learner State Signals。',
+      '如果消息是内部工具提示词、source guide/resource summary 生成请求、带 URL/资源名称/只输出正文等结构化资源处理任务，不要提取 saved memory 或 learner state signal。',
       'Saved memory 只能保存长期偏好、稳定背景或用户明确要求记住的内容。',
       '单次话题必须输出为 recent_topic，不能当 learning goal；只有用户明确说目标/考试/项目/计划/希望掌握时才输出 active_learning_goal。',
       '不要把 quiz/flashcard 弱项升级成 saved memory。',
@@ -259,7 +269,7 @@ export class MemoryExtractorService {
     ].join('\n');
 
     try {
-      const response = await deepseekService.chat([{ role: 'user', content: prompt }], undefined, { timeoutMs: 20000 });
+      const response = await aiModelProviderService.chat([{ role: 'user', content: prompt }], undefined, { timeoutMs: 20000, useCase: 'memory' });
       return coerceExtraction(parseJsonObject(response.reply), fallback);
     } catch {
       return fallback;
@@ -288,7 +298,9 @@ export class MemoryExtractorService {
         ...extraction,
         extractorVersion: MEMORY_EXTRACTOR_VERSION,
         promptVersion: MEMORY_EXTRACTOR_PROMPT_VERSION,
-        model: deepseekService.isConfigured() ? process.env.DEEPSEEK_MODEL || 'deepseek-chat' : 'rules-fallback'
+        model: aiModelProviderService.isConfigured({ useCase: 'memory' })
+          ? aiModelProviderService.model(aiModelProviderService.provider({ useCase: 'memory' }), undefined, 'memory')
+          : 'rules-fallback'
       },
       // Versioning is duplicated inside payload for easy offline eval exports.
       confidence: extraction.extractor === 'llm' ? 0.55 : 0.38

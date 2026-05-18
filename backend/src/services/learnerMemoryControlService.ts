@@ -1,6 +1,9 @@
 import prisma from '../config/db';
 import { learnerStateContextAdapter } from './learnerStateContextAdapter';
 import { buildLearnerMemoryKey } from './learnerMemoryKeys';
+import { isPollutedLearningSignal } from './learnerSignalSanitizer';
+import { learnerStateService } from './learnerStateService';
+import type { LearnerSignalRecord } from './learnerStateModel';
 
 export type MemoryControlAction = 'correct' | 'delete' | 'freeze' | 'downrank' | 'restore';
 
@@ -39,6 +42,11 @@ const parsePayload = (value: string) => {
   }
 };
 
+const isoDate = (value?: Date | string | null) => {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+};
+
 const friendlyPreference = (value: string) => {
   const labels: Record<string, string> = {
     examples: '更适合先用现实案例进入抽象概念。',
@@ -59,12 +67,15 @@ export class LearnerMemoryControlService {
       workbenchId: input.workbenchId || null,
       audience: 'general'
     });
+    const state = await learnerStateService.ensureState({
+      workspaceId: input.workspaceId,
+      workbenchId: input.workbenchId || null
+    });
     const controls = await prisma.learnerMemoryControl.findMany({
       where: { workspaceId: input.workspaceId, status: 'active' },
       orderBy: { updatedAt: 'desc' }
     });
     const controlByKey = new Map(controls.map((control) => [control.memoryKey, control]));
-    const sourceCounts = await this.sourceCounts(input.workspaceId);
     const items: KeyMemoryItem[] = [];
 
     const push = (params: {
@@ -76,7 +87,9 @@ export class LearnerMemoryControlService {
       baseConfidence: number;
       sources: string[];
       evidenceCount?: number;
+      explanation?: string;
     }) => {
+      if (isPollutedLearningSignal(params.value)) return;
       const key = buildLearnerMemoryKey(params.dimension, params.value);
       const control = controlByKey.get(key);
       if (control?.action === 'delete') return;
@@ -104,6 +117,7 @@ export class LearnerMemoryControlService {
         sources: params.sources,
         status,
         explanation: [
+          params.explanation,
           `Based on ${params.sources.join(', ') || 'learner state'} signals.`,
           params.evidenceCount ? `${params.evidenceCount} supporting signal(s).` : '',
           control?.reason ? `User control: ${control.reason}` : ''
@@ -112,76 +126,110 @@ export class LearnerMemoryControlService {
       });
     };
 
-    context.learningSignals.recentTopics.slice(0, 4).forEach((value) =>
-      push({
+    const pushSignal = (signal: LearnerSignalRecord, params: {
+      dimension: string;
+      label: string;
+      userFacingLabel: string;
+      signalType: string;
+      value?: string;
+      explanation: string;
+    }) => push({
+      dimension: params.dimension,
+      label: params.label,
+      userFacingLabel: params.userFacingLabel,
+      signalType: params.signalType,
+      value: params.value || signal.value,
+      baseConfidence: signal.confidence,
+      sources: signal.sources.length ? signal.sources : ['learner_state_core'],
+      evidenceCount: signal.evidenceIds.length || signal.sources.length || 1,
+      explanation: params.explanation
+    });
+
+    state.coreState.stableProfile.learningGoals.slice(0, 4).forEach((signal) =>
+      pushSignal(signal, {
         dimension: 'profileBase',
-        label: 'Recent topic',
-        userFacingLabel: '最近聊到的主题',
-        signalType: 'recent_topic',
-        value,
-        baseConfidence: 0.4,
-        sources: ['chat'],
-        evidenceCount: sourceCounts.profileBase
+        label: 'Stable learning goal',
+        userFacingLabel: '长期学习目标',
+        signalType: 'stable_profile.learning_goal',
+        explanation: 'Long-term learner profile: stable goal signal after governed consolidation.'
       })
     );
-    context.learningSignals.activeGoals.slice(0, 3).forEach((value) =>
-      push({
+    state.coreState.workingState.currentCourseState.activeGoals.slice(0, 3).forEach((signal) =>
+      pushSignal(signal, {
         dimension: 'profileBase',
-        label: 'Active learning goal',
-        userFacingLabel: '正在形成的学习目标',
-        signalType: 'active_learning_goal',
-        value,
-        baseConfidence: Math.max(0.45, context.provenance.confidence),
-        sources: ['goals', 'chat'],
-        evidenceCount: sourceCounts.profileBase
+        label: 'Working learning goal',
+        userFacingLabel: '当前学习目标',
+        signalType: 'working_state.active_goal',
+        explanation: 'Working learner state: goal active in the current course/workbench context.'
       })
     );
-    context.learningSignals.stableWeaknesses.slice(0, 4).forEach((value) =>
-      push({
+    state.coreState.stableProfile.weakKnowledge.slice(0, 5).forEach((signal) =>
+      pushSignal(signal, {
         dimension: 'knowledgeState',
-        label: 'Repeated weak signal',
-        userFacingLabel: '多次证据指向的薄弱概念',
-        signalType: 'stable_weak_concept',
-        value,
-        baseConfidence: 0.72,
-        sources: ['quiz', 'flashcard', 'trace'],
-        evidenceCount: sourceCounts.knowledgeState
+        label: 'Stable weak knowledge',
+        userFacingLabel: '长期薄弱知识',
+        signalType: 'stable_profile.weak_knowledge',
+        explanation: 'Stable profile: repeated evidence has made this more durable than a single observation.'
       })
     );
-    context.learningSignals.candidateWeaknesses.slice(0, 4).forEach((value) =>
-      push({
+    state.coreState.stableProfile.masteredKnowledge.slice(0, 4).forEach((signal) =>
+      pushSignal(signal, {
         dimension: 'knowledgeState',
-        label: 'Candidate weak signal',
-        userFacingLabel: '可能需要补强的概念',
-        signalType: 'candidate_weak_concept',
-        value,
-        baseConfidence: 0.42,
-        sources: ['chat', 'quiz', 'trace'],
-        evidenceCount: sourceCounts.knowledgeState
+        label: 'Mastered knowledge',
+        userFacingLabel: '已掌握知识',
+        signalType: 'stable_profile.mastered_knowledge',
+        explanation: 'Stable profile: stronger mastery evidence available for this knowledge point.'
       })
     );
-    context.learningSignals.preferredResourceForms.slice(0, 4).forEach((value) =>
-      push({
+    state.coreState.stableProfile.learningPreferences.slice(0, 5).forEach((signal) =>
+      pushSignal(signal, {
         dimension: 'preferenceStyle',
-        label: 'Resource preference',
-        userFacingLabel: '讲解方式偏好',
-        signalType: 'explanation_preference',
-        value: friendlyPreference(value),
-        baseConfidence: 0.55,
-        sources: ['chat', 'generation choices'],
-        evidenceCount: sourceCounts.preferenceStyle
+        label: 'Stable learning preference',
+        userFacingLabel: '长期学习偏好',
+        signalType: 'stable_profile.learning_preference',
+        value: friendlyPreference(signal.value),
+        explanation: 'Stable profile: this preference is treated as durable personalization.'
       })
     );
-    context.learningSignals.reviewPressure.slice(0, 4).forEach((value) =>
-      push({
+    state.coreState.stableProfile.commonErrors.slice(0, 4).forEach((signal) =>
+      pushSignal(signal, {
+        dimension: 'misconceptionState',
+        label: 'Common error',
+        userFacingLabel: '常见错误模式',
+        signalType: 'stable_profile.common_error',
+        explanation: 'Stable profile: candidate recurring error or misconception.'
+      })
+    );
+    state.coreState.workingState.currentCourseState.focusKnowledge.slice(0, 5).forEach((signal) =>
+      pushSignal(signal, {
+        dimension: 'knowledgeState',
+        label: 'Current focus knowledge',
+        userFacingLabel: '当前学习位置/焦点',
+        signalType: 'working_state.focus_knowledge',
+        explanation: 'Working state: current focus, not necessarily a long-term learner trait.'
+      })
+    );
+    state.coreState.workingState.recentBehaviorSummary.reviewPressure.slice(0, 4).forEach((signal) =>
+      pushSignal(signal, {
         dimension: 'reviewPlanning',
         label: 'Review pressure',
-        userFacingLabel: '复习压力',
-        signalType: 'review_pressure',
-        value,
-        baseConfidence: 0.62,
-        sources: ['flashcard review'],
-        evidenceCount: sourceCounts.reviewPlanning
+        userFacingLabel: '当前复习压力',
+        signalType: 'working_state.review_pressure',
+        explanation: 'Working state: recent review signal that can shape immediate next actions.'
+      })
+    );
+    state.coreState.observationMemory.observations.slice(0, 8).forEach((signal) =>
+      pushSignal(signal, {
+        dimension:
+          signal.id.includes(':knowledgeState:') ? 'knowledgeState' :
+            signal.id.includes(':preferenceStyle:') ? 'preferenceStyle' :
+              signal.id.includes(':reviewPlanning:') ? 'reviewPlanning' :
+                signal.id.includes(':misconceptionState:') ? 'misconceptionState' :
+                  signal.id.includes(':behaviorEngagement:') ? 'behaviorEngagement' : 'profileBase',
+        label: 'Short-term observation',
+        userFacingLabel: signal.id.includes(':behaviorEngagement:') ? '短期行为观察' : '短期观察',
+        signalType: 'observation_memory.short_term',
+        explanation: 'Observation memory: short-term signal. It should not be treated as stable profile until repeated evidence promotes it.'
       })
     );
     controls
@@ -226,11 +274,23 @@ export class LearnerMemoryControlService {
       orderBy: { observedAt: 'desc' },
       take: 8
     });
-    const recentPatches = await prisma.learnerStatePatch.findMany({
-      where: { workspaceId: input.workspaceId, targetDimension: dimension },
-      orderBy: { createdAt: 'desc' },
-      take: 8
-    });
+    const recentPatches = await prisma.$queryRawUnsafe<Array<{
+      id: string;
+      status: string;
+      operation: string;
+      confidence: number;
+      rationale: string;
+      createdAt: Date | string;
+      appliedAt?: Date | string | null;
+    }>>(
+      `SELECT "id","status","operation","confidence","rationale","createdAt","appliedAt"
+       FROM "LearnerStateTransition"
+       WHERE "workspaceId" = ? AND "targetDimension" = ?
+       ORDER BY "createdAt" DESC
+       LIMIT 8`,
+      input.workspaceId,
+      dimension
+    );
     return {
       memoryKey: input.memoryKey,
       dimension,
@@ -251,8 +311,8 @@ export class LearnerMemoryControlService {
         operation: patch.operation,
         confidence: patch.confidence,
         rationale: patch.rationale,
-        createdAt: patch.createdAt.toISOString(),
-        appliedAt: patch.appliedAt?.toISOString() || null
+        createdAt: isoDate(patch.createdAt) || '',
+        appliedAt: isoDate(patch.appliedAt)
       }))
     };
   }
@@ -289,28 +349,31 @@ export class LearnerMemoryControlService {
     });
     const control = await prisma.learnerMemoryControl.create({ data });
     if (input.action === 'delete' || input.action === 'downrank' || input.action === 'correct') {
-      await prisma.learnerStatePatch.create({
-        data: {
-          workspaceId: input.workspaceId,
-          workbenchId: input.workbenchId || null,
-          targetDimension: input.dimension,
-          operation: 'merge',
-          proposedBy: 'LearnerMemoryControl',
-          payloadJson: JSON.stringify({
-            userControls: [
-              {
-                memoryKey: input.memoryKey,
-                action: input.action,
-                correctedText: input.correctedText || null,
-                reason: input.reason || null,
-                createdAt: new Date().toISOString()
-              }
-            ]
-          }),
-          rationale: 'User memory control should influence future learner context.',
-          confidence: input.action === 'correct' ? 0.9 : 0.75
-        }
-      });
+      const state = await learnerStateService.ensureState({ workspaceId: input.workspaceId, workbenchId: input.workbenchId || null });
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "LearnerStateTransition" ("id","status","proposedBy","targetDimension","operation","confidence","payloadJson","rationale","workspaceId","workbenchId","learnerStateCoreId")
+         VALUES (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),?,?,?,?,?,?,?,?,?,?)`,
+        'pending',
+        'LearnerMemoryControl',
+        input.dimension,
+        'merge',
+        input.action === 'correct' ? 0.9 : 0.75,
+        JSON.stringify({
+          userControls: [
+            {
+              memoryKey: input.memoryKey,
+              action: input.action,
+              correctedText: input.correctedText || null,
+              reason: input.reason || null,
+              createdAt: new Date().toISOString()
+            }
+          ]
+        }),
+        'User memory control should influence future learner context.',
+        input.workspaceId,
+        input.workbenchId || null,
+        state.id
+      );
     }
     return control;
   }
@@ -320,9 +383,11 @@ export class LearnerMemoryControlService {
     const staleEvidenceCount = await prisma.learnerEvidence.count({
       where: { workspaceId: input.workspaceId, observedAt: { lt: staleSince } }
     });
-    const pendingPatchCount = await prisma.learnerStatePatch.count({
-      where: { workspaceId: input.workspaceId, status: 'pending', createdAt: { lt: staleSince } }
-    });
+    const pendingPatchCount = Number((await prisma.$queryRawUnsafe<Array<{ count: number }>>(
+      `SELECT COUNT(*) as count FROM "LearnerStateTransition" WHERE "workspaceId" = ? AND "status" = 'pending' AND "createdAt" < ?`,
+      input.workspaceId,
+      staleSince.toISOString()
+    ))[0]?.count || 0);
     return {
       staleEvidenceCount,
       pendingPatchCount,
@@ -335,12 +400,12 @@ export class LearnerMemoryControlService {
   }
 
   async evaluate(input: { workspaceId: string }) {
-    const [evidenceCount, patchCount, appliedPatchCount, controlCount, state] = await Promise.all([
+    const [evidenceCount, transitionRows, appliedTransitionRows, controlCount, state] = await Promise.all([
       prisma.learnerEvidence.count({ where: { workspaceId: input.workspaceId } }),
-      prisma.learnerStatePatch.count({ where: { workspaceId: input.workspaceId } }),
-      prisma.learnerStatePatch.count({ where: { workspaceId: input.workspaceId, status: 'applied' } }),
+      prisma.$queryRawUnsafe<Array<{ count: number }>>(`SELECT COUNT(*) as count FROM "LearnerStateTransition" WHERE "workspaceId" = ?`, input.workspaceId),
+      prisma.$queryRawUnsafe<Array<{ count: number }>>(`SELECT COUNT(*) as count FROM "LearnerStateTransition" WHERE "workspaceId" = ? AND "status" = 'applied'`, input.workspaceId),
       prisma.learnerMemoryControl.count({ where: { workspaceId: input.workspaceId, status: 'active' } }),
-      prisma.learnerState.findFirst({ where: { workspaceId: input.workspaceId, scope: 'workspace' } })
+      learnerStateService.ensureState({ workspaceId: input.workspaceId }).catch(() => null)
     ]);
     const sourceGroups = await prisma.learnerEvidence.groupBy({
       by: ['sourceType'],
@@ -348,8 +413,10 @@ export class LearnerMemoryControlService {
       _count: { sourceType: true }
     });
     const coverageScore = Math.min(1, sourceGroups.length / 4);
+    const patchCount = Number(transitionRows[0]?.count || 0);
+    const appliedPatchCount = Number(appliedTransitionRows[0]?.count || 0);
     const applicationRate = patchCount ? appliedPatchCount / patchCount : 0;
-    const confidence = state ? Number(parsePayload(state.confidenceJson).confidence || parsePayload(state.confidenceJson).lastPatchConfidence || 0.45) : 0;
+    const confidence = state ? Number(state.state.confidence.confidence || state.state.confidence.lastPatchConfidence || 0.45) : 0;
     return {
       metrics: {
         evidenceCount,
@@ -378,20 +445,6 @@ export class LearnerMemoryControlService {
     };
   }
 
-  private async sourceCounts(workspaceId: string) {
-    const patches = await prisma.learnerStatePatch.groupBy({
-      by: ['targetDimension'],
-      where: { workspaceId },
-      _count: { targetDimension: true }
-    });
-    const counts = new Map(patches.map((patch) => [patch.targetDimension, patch._count.targetDimension]));
-    return {
-      profileBase: counts.get('profileBase') || 0,
-      knowledgeState: counts.get('knowledgeState') || 0,
-      preferenceStyle: counts.get('preferenceStyle') || 0,
-      reviewPlanning: counts.get('reviewPlanning') || 0
-    };
-  }
 }
 
 export const learnerMemoryControlService = new LearnerMemoryControlService();

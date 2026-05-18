@@ -1,4 +1,16 @@
 import prisma from '../config/db';
+import { courseKnowledgeGraphService } from './courseKnowledgeGraphService';
+import { filterCleanLearningSignals, filterKnowledgeConcepts, isPollutedLearningSignal, isProbablyKnowledgeConcept } from './learnerSignalSanitizer';
+import {
+  blankLearnerStateV2,
+  buildReadableSummary,
+  CentralLearnerStateV2,
+  LearnerSignalRecord,
+  makeSignal,
+  mergeSignals,
+  snapshotToStateV2,
+  stateV2ToSnapshot
+} from './learnerStateModel';
 
 export type LearnerStateDimension =
   | 'profileBase'
@@ -27,6 +39,7 @@ export interface CentralLearnerState {
   version: number;
   summary: string;
   state: LearnerStateSnapshot;
+  coreState: CentralLearnerStateV2;
   lastEvidenceAt?: string | null;
   updatedAt: string;
 }
@@ -72,6 +85,56 @@ interface ProposePatchInput {
   evidenceId?: string | null;
 }
 
+type CoreRow = {
+  id: string;
+  scope: string;
+  version: number;
+  summary: string;
+  governanceJson: string;
+  currentPositionJson: string;
+  lastEvidenceAt?: Date | string | null;
+  updatedAt: Date | string;
+  workspaceId: string;
+  userId: string;
+};
+
+type SignalRow = {
+  id: string;
+  signalKey?: string;
+  observationKey?: string;
+  layer?: string;
+  dimension: string;
+  label: string;
+  value: string;
+  confidence: number;
+  status: LearnerSignalRecord['status'] | string;
+  evidenceIdsJson: string;
+  sourcesJson: string;
+  rationale: string;
+  firstObservedAt?: Date | string | null;
+  lastObservedAt?: Date | string | null;
+  observedAt?: Date | string | null;
+};
+
+type TransitionRow = {
+  id: string;
+  status: string;
+  proposedBy: string;
+  targetDimension: string;
+  operation: string;
+  confidence: number;
+  payloadJson: string;
+  rationale: string;
+  appliedVersion?: number | null;
+  createdAt: Date | string;
+  appliedAt?: Date | string | null;
+  workspaceId: string;
+  workbenchId?: string | null;
+  learnerStateCoreId?: string | null;
+  evidenceId?: string | null;
+  observedAt?: Date | string | null;
+};
+
 const dimensions: LearnerStateDimension[] = [
   'profileBase',
   'knowledgeState',
@@ -92,16 +155,6 @@ const parseJson = <T>(value: string | null | undefined, fallback: T): T => {
   }
 };
 
-const optionalCount = async (countPromise: Promise<number>) => {
-  try {
-    return await countPromise;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/does not exist|no such table|P2021/i.test(message)) return 0;
-    throw error;
-  }
-};
-
 const stringify = (value: unknown, fallback = '{}') => {
   try {
     return JSON.stringify(value ?? JSON.parse(fallback));
@@ -116,39 +169,9 @@ const clampConfidence = (value: number | undefined, fallback = 0.6) => {
   return Math.max(0, Math.min(1, num));
 };
 
-const appendUnique = (left: unknown, right: unknown) => {
-  const base = Array.isArray(left) ? left : [];
-  const incoming = Array.isArray(right) ? right : [right].filter(Boolean);
-  const seen = new Set<string>();
-  return [...base, ...incoming].filter((item) => {
-    const key = typeof item === 'string' ? item : JSON.stringify(item);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-};
-
-const mergeValue = (current: unknown, patch: unknown): unknown => {
-  if (Array.isArray(current) || Array.isArray(patch)) return appendUnique(current, patch);
-  if (
-    current &&
-    patch &&
-    typeof current === 'object' &&
-    typeof patch === 'object' &&
-    !Array.isArray(current) &&
-    !Array.isArray(patch)
-  ) {
-    return mergeObjects(current as Record<string, unknown>, patch as Record<string, unknown>);
-  }
-  return patch ?? current;
-};
-
-const mergeObjects = (current: Record<string, unknown>, patch: Record<string, unknown>) => {
-  const next = { ...current };
-  Object.entries(patch).forEach(([key, value]) => {
-    next[key] = mergeValue(next[key], value);
-  });
-  return next;
+const toIso = (value?: Date | string | null) => {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 };
 
 const asArray = (value: unknown) => (Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean) : []);
@@ -156,23 +179,24 @@ const asArray = (value: unknown) => (Array.isArray(value) ? value.map((item) => 
 const asRecordArray = (value: unknown) =>
   Array.isArray(value) ? value.filter((item) => item && typeof item === 'object') as Record<string, unknown>[] : [];
 
-const uniqueStrings = (items: string[], limit = 20) => Array.from(new Set(items.map((item) => item.trim()).filter(Boolean))).slice(0, limit);
-
-const observedTime = (value: unknown) => {
-  if (!value || typeof value !== 'object') return 0;
-  const raw = (value as Record<string, unknown>).observedAt || (value as Record<string, unknown>).createdAt || (value as Record<string, unknown>).updatedAt;
-  if (typeof raw !== 'string') return 0;
-  const time = new Date(raw).getTime();
-  return Number.isFinite(time) ? time : 0;
+const optionalCount = async (countPromise: Promise<number>) => {
+  try {
+    return await countPromise;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/does not exist|no such table|P2021/i.test(message)) return 0;
+    throw error;
+  }
 };
 
-const conceptFromSignal = (value: unknown) => {
-  if (!value || typeof value !== 'object') return '';
+const signalValue = (value: unknown) => {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return String(value || '');
   const record = value as Record<string, unknown>;
-  return String(record.concept || record.skill || record.targetSkill || '').trim();
+  return String(record.value || record.concept || record.skill || record.targetSkill || record.topic || record.preference || record.text || '').trim();
 };
 
-const scoreFromSignal = (value: unknown) => {
+const signalScore = (value: unknown) => {
   if (!value || typeof value !== 'object') return 0.5;
   const record = value as Record<string, unknown>;
   if (typeof record.score === 'number') return Math.max(0, Math.min(1, record.score));
@@ -185,100 +209,386 @@ const scoreFromSignal = (value: unknown) => {
   return 0.5;
 };
 
-const blankSnapshot = (): LearnerStateSnapshot => ({
-  profileBase: {},
-  knowledgeState: {},
-  misconceptionState: {},
-  preferenceStyle: {},
-  behaviorEngagement: {},
-  cognitiveState: {},
-  reviewPlanning: {},
-  confidence: {}
+const buildSummary = (state: CentralLearnerStateV2) => buildReadableSummary(state);
+
+const sqlDate = (value?: string | Date | null) => value ? new Date(value).toISOString() : null;
+
+const signalFromRow = (row: SignalRow): LearnerSignalRecord => ({
+  id: row.signalKey || row.observationKey || row.id,
+  label: row.label,
+  value: row.value,
+  confidence: row.confidence,
+  evidenceIds: parseJson<string[]>(row.evidenceIdsJson, []),
+  sources: parseJson<string[]>(row.sourcesJson, []),
+  firstObservedAt: toIso(row.firstObservedAt || row.observedAt),
+  lastObservedAt: toIso(row.lastObservedAt || row.observedAt),
+  status: (row.status as LearnerSignalRecord['status']) || 'candidate',
+  rationale: row.rationale
 });
 
-const buildSummary = (state: LearnerStateSnapshot) => {
-  const goals = Array.isArray(state.profileBase.goals) ? state.profileBase.goals.slice(0, 2).join('、') : '未明确';
-  const weakSkills = Array.isArray(state.knowledgeState.weakSkills)
-    ? state.knowledgeState.weakSkills.slice(0, 3).join('、')
-    : '暂无稳定证据';
-  const level = String(state.cognitiveState.learnerLevel || 'unknown');
-  const load = String(state.cognitiveState.cognitiveLoadTolerance || 'unknown');
-  const next = Array.isArray(state.reviewPlanning.nextActions)
-    ? state.reviewPlanning.nextActions.slice(0, 2).join('、')
-    : '等待下一步诊断';
+const rowsToCoreState = (core: CoreRow, signals: SignalRow[], observations: SignalRow[]): CentralLearnerStateV2 => {
+  const state = blankLearnerStateV2();
+  const cleanSignals = signals.filter((row) => row.dimension === 'knowledgeState' ? isProbablyKnowledgeConcept(row.value) : !isPollutedLearningSignal(row.value));
+  const cleanObservations = observations.filter((row) => row.dimension === 'knowledgeState' ? isProbablyKnowledgeConcept(row.value) : !isPollutedLearningSignal(row.value));
+  state.governance = {
+    ...state.governance,
+    ...parseJson<Record<string, unknown>>(core.governanceJson, {})
+  } as CentralLearnerStateV2['governance'];
+  state.workingState.currentLearningPosition = parseJson(core.currentPositionJson, {});
 
-  return [`目标: ${goals}`, `水平: ${level}`, `负荷: ${load}`, `薄弱点: ${weakSkills}`, `下一步: ${next}`].join('\n');
+  const byLayer = (layer: string, dimension?: string, label?: string) =>
+    cleanSignals
+      .filter((row) => row.layer === layer && (!dimension || row.dimension === dimension) && (!label || row.label === label))
+      .map(signalFromRow);
+
+  state.stableProfile.learningGoals = byLayer('stable_profile', 'profileBase', 'Learning goal');
+  state.stableProfile.masteredKnowledge = byLayer('stable_profile', 'knowledgeState', 'Mastered knowledge');
+  state.stableProfile.weakKnowledge = byLayer('stable_profile', 'knowledgeState', 'Weak knowledge');
+  state.stableProfile.learningPreferences = byLayer('stable_profile', 'preferenceStyle', 'Learning preference');
+  state.stableProfile.commonErrors = byLayer('stable_profile', 'misconceptionState', 'Common error');
+  state.stableProfile.learnerTraits = byLayer('stable_profile', 'cognitiveState', 'Learner trait');
+  state.workingState.currentCourseState.activeGoals = byLayer('working_state', 'profileBase', 'Active goal');
+  state.workingState.currentCourseState.focusKnowledge = byLayer('working_state', 'knowledgeState', 'Focus knowledge');
+  state.workingState.currentCourseState.nextActions = byLayer('working_state', 'reviewPlanning', 'Next action');
+  state.workingState.recentBehaviorSummary.recentTopics = byLayer('working_state', 'profileBase', 'Recent topic');
+  state.workingState.recentBehaviorSummary.engagementSignals = byLayer('working_state', 'behaviorEngagement');
+  state.workingState.recentBehaviorSummary.reviewPressure = byLayer('working_state', 'reviewPlanning', 'Review pressure');
+  state.observationMemory.observations = cleanObservations.map(signalFromRow);
+  state.observationMemory.candidatePromotions = cleanObservations.filter((row) => row.confidence >= 0.5).map(signalFromRow);
+  state.observationMemory.window.oldestObservedAt = state.observationMemory.observations[state.observationMemory.observations.length - 1]?.lastObservedAt || null;
+  state.observationMemory.window.newestObservedAt = state.observationMemory.observations[0]?.lastObservedAt || null;
+  state.workingState.recentBehaviorSummary.summary = buildSummary(state);
+  return state;
 };
 
-const mapRecord = (record: any): CentralLearnerState => {
-  const fromStateJson = parseJson<Partial<LearnerStateSnapshot>>(record.stateJson, {});
-  const state: LearnerStateSnapshot = {
-    profileBase: parseJson(record.profileBaseJson, fromStateJson.profileBase || {}),
-    knowledgeState: parseJson(record.knowledgeStateJson, fromStateJson.knowledgeState || {}),
-    misconceptionState: parseJson(record.misconceptionStateJson, fromStateJson.misconceptionState || {}),
-    preferenceStyle: parseJson(record.preferenceStyleJson, fromStateJson.preferenceStyle || {}),
-    behaviorEngagement: parseJson(record.behaviorEngagementJson, fromStateJson.behaviorEngagement || {}),
-    cognitiveState: parseJson(record.cognitiveStateJson, fromStateJson.cognitiveState || {}),
-    reviewPlanning: parseJson(record.reviewPlanningJson, fromStateJson.reviewPlanning || {}),
-    confidence: parseJson(record.confidenceJson, fromStateJson.confidence || {})
-  };
+const stableSignalsFromDimension = (dimension: LearnerStateDimension, payload: Record<string, unknown>, transition: TransitionRow): Partial<CentralLearnerStateV2['stableProfile']> => {
+  const observedAt = toIso(transition.observedAt) || new Date().toISOString();
+  const evidenceIds = transition.evidenceId ? [transition.evidenceId] : [];
+  const source = transition.proposedBy || 'agent';
+  const confidence = clampConfidence(transition.confidence);
 
-  return {
-    id: record.id,
-    scope: record.scope,
-    version: record.version,
-    summary: record.summary || buildSummary(state),
-    state,
-    lastEvidenceAt: record.lastEvidenceAt?.toISOString?.() || null,
-    updatedAt: record.updatedAt.toISOString()
-  };
+  if (dimension === 'profileBase') {
+    const learningGoals = filterCleanLearningSignals([...asArray(payload.goals), ...asArray(payload.activeLearningGoalSignals)], 12);
+    return {
+      learningGoals: learningGoals.map((value) =>
+        makeSignal({ layer: 'stable_profile', dimension, label: 'Learning goal', value, confidence, evidenceIds, sources: [source], observedAt, status: confidence >= 0.58 ? 'active' : 'candidate', rationale: transition.rationale })
+      )
+    };
+  }
+  if (dimension === 'knowledgeState') {
+    const masterySignals = asRecordArray(payload.masterySignals);
+    const mastered = filterKnowledgeConcepts([...asArray(payload.emergingStrengths), ...masterySignals.filter((item) => signalScore(item) >= 0.75).map(signalValue)], 20);
+    const weak = filterKnowledgeConcepts([
+      ...asArray(payload.weakSkills),
+      ...asArray(payload.candidateWeakSkills).filter(() => confidence >= 0.62),
+      ...masterySignals.filter((item) => signalScore(item) < 0.55 && confidence >= 0.6).map(signalValue)
+    ], 20);
+    return {
+      masteredKnowledge: mastered.map((value) =>
+        makeSignal({ layer: 'stable_profile', dimension, label: 'Mastered knowledge', value, confidence, evidenceIds, sources: [source], observedAt, status: confidence >= 0.62 ? 'active' : 'candidate', rationale: transition.rationale })
+      ),
+      weakKnowledge: weak.map((value) =>
+        makeSignal({ layer: 'stable_profile', dimension, label: 'Weak knowledge', value, confidence, evidenceIds, sources: [source], observedAt, status: confidence >= 0.62 ? 'active' : 'candidate', rationale: transition.rationale })
+      )
+    };
+  }
+  if (dimension === 'preferenceStyle') {
+    return {
+      learningPreferences: [
+        ...asArray(payload.resourcePreference),
+        ...asArray(payload.preferredResourceForms),
+        ...asArray(payload.tentativeResourcePreferences).filter(() => confidence >= 0.58)
+      ].map((value) =>
+        makeSignal({ layer: 'stable_profile', dimension, label: 'Learning preference', value, confidence, evidenceIds, sources: [source], observedAt, status: confidence >= 0.58 ? 'active' : 'candidate', rationale: transition.rationale })
+      )
+    };
+  }
+  if (dimension === 'misconceptionState') {
+    return {
+      commonErrors: [...asArray(payload.candidates), ...asArray(payload.candidateMisconceptions)].filter(() => confidence >= 0.5).map((value) =>
+        makeSignal({ layer: 'stable_profile', dimension, label: 'Common error', value, confidence, evidenceIds, sources: [source], observedAt, status: confidence >= 0.62 ? 'active' : 'candidate', rationale: transition.rationale })
+      )
+    };
+  }
+  if (dimension === 'cognitiveState') {
+    return {
+      learnerTraits: [...asArray(payload.learnerTraits), ...asArray(payload.recurringQuestionPatterns)].map((value) =>
+        makeSignal({ layer: 'stable_profile', dimension, label: 'Learner trait', value, confidence, evidenceIds, sources: [source], observedAt, status: confidence >= 0.58 ? 'active' : 'candidate', rationale: transition.rationale })
+      )
+    };
+  }
+  return {};
+};
+
+const observationSignalsFromTransition = (dimension: LearnerStateDimension, payload: Record<string, unknown>, transition: TransitionRow): LearnerSignalRecord[] => {
+  const observedAt = toIso(transition.observedAt) || new Date().toISOString();
+  const evidenceIds = transition.evidenceId ? [transition.evidenceId] : [];
+  const source = transition.proposedBy || 'agent';
+  const confidence = Math.min(clampConfidence(transition.confidence), 0.58);
+  const make = (label: string, value: string) =>
+    makeSignal({ layer: 'observation_memory', dimension, label, value, confidence, evidenceIds, sources: [source], observedAt, status: 'candidate', rationale: transition.rationale });
+
+  if (dimension === 'profileBase') {
+    return [
+      ...filterCleanLearningSignals(asArray(payload.recentTopics), 12).map((value) => make('Recent topic observation', value)),
+      ...filterCleanLearningSignals(asRecordArray(payload.transientTopicSignals).map(signalValue).filter(Boolean), 12).map((value) => make('Recent topic observation', value)),
+      ...filterCleanLearningSignals(asArray(payload.activeLearningGoalSignals), 8).map((value) => make('Goal observation', value))
+    ];
+  }
+  if (dimension === 'knowledgeState') {
+    return [
+      ...filterKnowledgeConcepts(asArray(payload.candidateWeakSkills), 12).map((value) => make('Candidate weak knowledge', value)),
+      ...filterKnowledgeConcepts(asRecordArray(payload.weakSkillSignals).map(signalValue).filter(Boolean), 12).map((value) => make('Candidate weak knowledge', value)),
+      ...filterKnowledgeConcepts(asRecordArray(payload.masterySignals).map(signalValue).filter(Boolean), 12).map((value) => make('Mastery observation', value))
+    ];
+  }
+  if (dimension === 'preferenceStyle') {
+    return [
+      ...asArray(payload.tentativeResourcePreferences).map((value) => make('Preference observation', value)),
+      ...asRecordArray(payload.explanationPreferenceSignals).map(signalValue).filter(Boolean).map((value) => make('Preference observation', value))
+    ];
+  }
+  if (dimension === 'behaviorEngagement') {
+    return [...asArray(payload.questionPatterns), ...asArray(payload.recurringQuestionPatterns)].map((value) => make('Engagement observation', value));
+  }
+  if (dimension === 'reviewPlanning') {
+    return [
+      ...asArray(payload.reviewPressureSignals).map((value) => make('Review pressure observation', value)),
+      ...asRecordArray(payload.recentFlashcardReviews).map(signalValue).filter(Boolean).map((value) => make('Review pressure observation', value))
+    ];
+  }
+  if (dimension === 'misconceptionState') {
+    return [...asArray(payload.candidateMisconceptions), ...asArray(payload.candidates)].map((value) => make('Misconception observation', value));
+  }
+  return [];
+};
+
+const applyCoreTransition = (state: CentralLearnerStateV2, transition: TransitionRow) => {
+  if (!dimensions.includes(transition.targetDimension as LearnerStateDimension)) return state;
+  const dimension = transition.targetDimension as LearnerStateDimension;
+  const payload = parseJson<Record<string, unknown>>(transition.payloadJson, {});
+  const next: CentralLearnerStateV2 = JSON.parse(JSON.stringify(state));
+  const stable = stableSignalsFromDimension(dimension, payload, transition);
+  next.stableProfile.learningGoals = mergeSignals(next.stableProfile.learningGoals, stable.learningGoals || [], 20);
+  next.stableProfile.masteredKnowledge = mergeSignals(next.stableProfile.masteredKnowledge, stable.masteredKnowledge || [], 30);
+  next.stableProfile.weakKnowledge = mergeSignals(next.stableProfile.weakKnowledge, stable.weakKnowledge || [], 30);
+  next.stableProfile.learningPreferences = mergeSignals(next.stableProfile.learningPreferences, stable.learningPreferences || [], 20);
+  next.stableProfile.commonErrors = mergeSignals(next.stableProfile.commonErrors, stable.commonErrors || [], 20);
+  next.stableProfile.learnerTraits = mergeSignals(next.stableProfile.learnerTraits, stable.learnerTraits || [], 20);
+
+  const observations = observationSignalsFromTransition(dimension, payload, transition);
+  next.observationMemory.observations = mergeSignals(next.observationMemory.observations, observations, next.observationMemory.window.maxItems || 40);
+  next.observationMemory.candidatePromotions = mergeSignals(next.observationMemory.candidatePromotions, observations.filter((item) => item.confidence >= 0.5), 20);
+
+  const observedAt = toIso(transition.observedAt) || new Date().toISOString();
+  const evidenceIds = transition.evidenceId ? [transition.evidenceId] : [];
+  if (dimension === 'profileBase') {
+    next.workingState.currentCourseState.activeGoals = mergeSignals(
+      next.workingState.currentCourseState.activeGoals,
+      filterCleanLearningSignals([...asArray(payload.goals), ...asArray(payload.activeLearningGoalSignals)], 8).map((value) =>
+        makeSignal({ layer: 'working_state', dimension, label: 'Active goal', value, confidence: transition.confidence, evidenceIds, sources: [transition.proposedBy], observedAt })
+      ),
+      8
+    );
+    next.workingState.recentBehaviorSummary.recentTopics = mergeSignals(
+      next.workingState.recentBehaviorSummary.recentTopics,
+      observations.filter((item) => item.label === 'Recent topic observation').map((item) => ({ ...item, id: item.id.replace('observation_memory', 'working_state'), label: 'Recent topic' })),
+      12
+    );
+  }
+  if (dimension === 'knowledgeState') {
+    next.workingState.currentCourseState.focusKnowledge = mergeSignals(
+      next.workingState.currentCourseState.focusKnowledge,
+      filterKnowledgeConcepts([...asArray(payload.targetSkills), ...asArray(payload.candidateWeakSkills), ...asRecordArray(payload.masterySignals).map(signalValue)].filter(Boolean), 16).map((value) =>
+        makeSignal({ layer: 'working_state', dimension, label: 'Focus knowledge', value, confidence: transition.confidence, evidenceIds, sources: [transition.proposedBy], observedAt })
+      ),
+      16
+    );
+  }
+  if (dimension === 'behaviorEngagement') {
+    next.workingState.recentBehaviorSummary.engagementSignals = mergeSignals(next.workingState.recentBehaviorSummary.engagementSignals, observations, 16);
+  }
+  if (dimension === 'reviewPlanning') {
+    next.workingState.currentCourseState.nextActions = mergeSignals(
+      next.workingState.currentCourseState.nextActions,
+      asArray(payload.nextActions).map((value) =>
+        makeSignal({ layer: 'working_state', dimension, label: 'Next action', value, confidence: transition.confidence, evidenceIds, sources: [transition.proposedBy], observedAt })
+      ),
+      12
+    );
+    next.workingState.recentBehaviorSummary.reviewPressure = mergeSignals(
+      next.workingState.recentBehaviorSummary.reviewPressure,
+      observations.map((item) => ({ ...item, id: item.id.replace('observation_memory', 'working_state'), label: 'Review pressure' })),
+      16
+    );
+  }
+  next.observationMemory.window.oldestObservedAt = next.observationMemory.observations[next.observationMemory.observations.length - 1]?.lastObservedAt || null;
+  next.observationMemory.window.newestObservedAt = next.observationMemory.observations[0]?.lastObservedAt || null;
+  next.workingState.recentBehaviorSummary.summary = buildSummary(next);
+  return next;
 };
 
 export class LearnerStateService {
+  private async loadCoreRow(workspaceId: string, scope = 'workspace') {
+    const rows = await prisma.$queryRawUnsafe<CoreRow[]>(
+      `SELECT * FROM "LearnerStateCore" WHERE "workspaceId" = ? AND "scope" = ? LIMIT 1`,
+      workspaceId,
+      scope
+    );
+    return rows[0] || null;
+  }
+
+  private async loadState(core: CoreRow): Promise<CentralLearnerState> {
+    const [signals, observations] = await Promise.all([
+      prisma.$queryRawUnsafe<SignalRow[]>(`SELECT * FROM "LearnerStateSignal" WHERE "learnerStateCoreId" = ? ORDER BY "updatedAt" DESC`, core.id),
+      prisma.$queryRawUnsafe<SignalRow[]>(`SELECT * FROM "LearnerObservation" WHERE "learnerStateCoreId" = ? AND "status" = 'active' ORDER BY "observedAt" DESC`, core.id)
+    ]);
+    const coreState = rowsToCoreState(core, signals, observations);
+    const state = stateV2ToSnapshot(coreState);
+    return {
+      id: core.id,
+      scope: core.scope,
+      version: core.version,
+      summary: core.summary || buildSummary(coreState),
+      state,
+      coreState,
+      lastEvidenceAt: toIso(core.lastEvidenceAt),
+      updatedAt: toIso(core.updatedAt) || new Date().toISOString()
+    };
+  }
+
+  private async saveSignals(tx: any, coreId: string, workspaceId: string, state: CentralLearnerStateV2) {
+    const stableSignals = [
+      ...state.stableProfile.learningGoals.map((signal) => ({ ...signal, layer: 'stable_profile', dimension: 'profileBase' })),
+      ...state.stableProfile.masteredKnowledge.map((signal) => ({ ...signal, layer: 'stable_profile', dimension: 'knowledgeState' })),
+      ...state.stableProfile.weakKnowledge.map((signal) => ({ ...signal, layer: 'stable_profile', dimension: 'knowledgeState' })),
+      ...state.stableProfile.learningPreferences.map((signal) => ({ ...signal, layer: 'stable_profile', dimension: 'preferenceStyle' })),
+      ...state.stableProfile.commonErrors.map((signal) => ({ ...signal, layer: 'stable_profile', dimension: 'misconceptionState' })),
+      ...state.stableProfile.learnerTraits.map((signal) => ({ ...signal, layer: 'stable_profile', dimension: 'cognitiveState' })),
+      ...state.workingState.currentCourseState.activeGoals.map((signal) => ({ ...signal, layer: 'working_state', dimension: 'profileBase' })),
+      ...state.workingState.currentCourseState.focusKnowledge.map((signal) => ({ ...signal, layer: 'working_state', dimension: 'knowledgeState' })),
+      ...state.workingState.currentCourseState.nextActions.map((signal) => ({ ...signal, layer: 'working_state', dimension: 'reviewPlanning' })),
+      ...state.workingState.recentBehaviorSummary.recentTopics.map((signal) => ({ ...signal, layer: 'working_state', dimension: 'profileBase' })),
+      ...state.workingState.recentBehaviorSummary.engagementSignals.map((signal) => ({ ...signal, layer: 'working_state', dimension: 'behaviorEngagement' })),
+      ...state.workingState.recentBehaviorSummary.reviewPressure.map((signal) => ({ ...signal, layer: 'working_state', dimension: 'reviewPlanning' }))
+    ];
+    for (const signal of stableSignals) {
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "LearnerStateSignal" ("id","signalKey","layer","dimension","label","value","confidence","status","evidenceIdsJson","sourcesJson","rationale","firstObservedAt","lastObservedAt","workspaceId","learnerStateCoreId","updatedAt")
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+         ON CONFLICT("learnerStateCoreId","signalKey") DO UPDATE SET
+           "layer"=excluded."layer","dimension"=excluded."dimension","label"=excluded."label","value"=excluded."value","confidence"=excluded."confidence","status"=excluded."status",
+           "evidenceIdsJson"=excluded."evidenceIdsJson","sourcesJson"=excluded."sourcesJson","rationale"=excluded."rationale","firstObservedAt"=excluded."firstObservedAt","lastObservedAt"=excluded."lastObservedAt","updatedAt"=CURRENT_TIMESTAMP`,
+        signal.id,
+        signal.id,
+        signal.layer,
+        signal.dimension,
+        signal.label,
+        signal.value,
+        signal.confidence,
+        signal.status,
+        stringify(signal.evidenceIds, '[]'),
+        stringify(signal.sources, '[]'),
+        signal.rationale || '',
+        sqlDate(signal.firstObservedAt),
+        sqlDate(signal.lastObservedAt),
+        workspaceId,
+        coreId
+      );
+    }
+    for (const observation of state.observationMemory.observations) {
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "LearnerObservation" ("id","observationKey","dimension","label","value","confidence","status","evidenceIdsJson","sourcesJson","rationale","observedAt","workspaceId","learnerStateCoreId","updatedAt")
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+         ON CONFLICT("learnerStateCoreId","observationKey") DO UPDATE SET
+           "dimension"=excluded."dimension","label"=excluded."label","value"=excluded."value","confidence"=excluded."confidence","status"=excluded."status",
+           "evidenceIdsJson"=excluded."evidenceIdsJson","sourcesJson"=excluded."sourcesJson","rationale"=excluded."rationale","observedAt"=excluded."observedAt","updatedAt"=CURRENT_TIMESTAMP`,
+        observation.id,
+        observation.id,
+        observation.id.includes(':knowledgeState:') ? 'knowledgeState' :
+          observation.id.includes(':preferenceStyle:') ? 'preferenceStyle' :
+            observation.id.includes(':reviewPlanning:') ? 'reviewPlanning' :
+              observation.id.includes(':misconceptionState:') ? 'misconceptionState' :
+                observation.id.includes(':behaviorEngagement:') ? 'behaviorEngagement' : 'profileBase',
+        observation.label,
+        observation.value,
+        observation.confidence,
+        'active',
+        stringify(observation.evidenceIds, '[]'),
+        stringify(observation.sources, '[]'),
+        observation.rationale || '',
+        sqlDate(observation.lastObservedAt || observation.firstObservedAt),
+        workspaceId,
+        coreId
+      );
+    }
+  }
+
+  private async createSnapshotVersion(tx: any, input: {
+    workspaceId: string;
+    coreId: string;
+    version: number;
+    state: CentralLearnerStateV2;
+    changedBy: string;
+    reason: string;
+    transitionIds?: string[];
+    evidenceIds?: string[];
+  }) {
+    const projected = stateV2ToSnapshot(input.state);
+    await tx.$executeRawUnsafe(
+      `INSERT INTO "LearnerStateSnapshotVersion" ("id","version","snapshotJson","summary","changedBy","changeReason","transitionIdsJson","evidenceIdsJson","confidenceJson","workspaceId","learnerStateCoreId")
+       VALUES (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),?,?,?,?,?,?,?,?,?,?)`,
+      input.version,
+      stringify(input.state),
+      buildSummary(input.state),
+      input.changedBy,
+      input.reason,
+      stringify(input.transitionIds || [], '[]'),
+      stringify(input.evidenceIds || [], '[]'),
+      stringify(projected.confidence),
+      input.workspaceId,
+      input.coreId
+    );
+  }
+
   async ensureState(input: EnsureStateInput): Promise<CentralLearnerState> {
     const workspace = await prisma.workspace.findUnique({ where: { id: input.workspaceId } });
     if (!workspace) throw new Error('Workspace not found');
+    const scope = input.scope || 'workspace';
+    const existing = await this.loadCoreRow(input.workspaceId, scope);
+    if (existing) return this.loadState(existing);
 
-    const existing = await prisma.learnerState.findFirst({
-      where: { workspaceId: input.workspaceId, scope: input.scope || 'workspace' }
-    });
-    if (existing) return mapRecord(existing);
-
-    const initial = await this.buildInitialSnapshot(input.workspaceId, input.workbenchId || null, input.goalId || null);
-    const summary = buildSummary(initial);
-    const created = await prisma.learnerState.create({
-      data: {
-        workspaceId: input.workspaceId,
-        userId: workspace.userId,
-        scope: input.scope || 'workspace',
-        version: 1,
-        stateJson: stringify(initial),
+    const initialSnapshot = await this.buildInitialSnapshot(input.workspaceId, input.workbenchId || null, input.goalId || null);
+    const coreState = snapshotToStateV2(initialSnapshot, { workbenchId: input.workbenchId || null, goalId: input.goalId || null });
+    const summary = buildSummary(coreState);
+    const coreId = await prisma.$transaction(async (tx) => {
+      const inserted = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+        `INSERT INTO "LearnerStateCore" ("id","scope","version","summary","governanceJson","currentPositionJson","workspaceId","userId")
+         VALUES (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),?,?,?,?,?,?,?)
+         RETURNING "id"`,
+        scope,
+        1,
         summary,
-        profileBaseJson: stringify(initial.profileBase),
-        knowledgeStateJson: stringify(initial.knowledgeState),
-        misconceptionStateJson: stringify(initial.misconceptionState),
-        preferenceStyleJson: stringify(initial.preferenceStyle),
-        behaviorEngagementJson: stringify(initial.behaviorEngagement),
-        cognitiveStateJson: stringify(initial.cognitiveState),
-        reviewPlanningJson: stringify(initial.reviewPlanning),
-        confidenceJson: stringify(initial.confidence)
-      }
-    });
-
-    await prisma.learnerStateVersion.create({
-      data: {
+        stringify(coreState.governance),
+        stringify(coreState.workingState.currentLearningPosition),
+        input.workspaceId,
+        workspace.userId
+      );
+      const id = inserted[0].id;
+      await this.saveSignals(tx, id, input.workspaceId, coreState);
+      await this.createSnapshotVersion(tx, {
         workspaceId: input.workspaceId,
-        learnerStateId: created.id,
+        coreId: id,
         version: 1,
-        stateJson: stringify(initial),
-        summary,
+        state: coreState,
         changedBy: 'system',
-        changeReason: 'Initial learner state seeded from existing profile, goals, traces and plans.',
-        confidenceJson: stringify(initial.confidence)
-      }
+        reason: 'Initial learner state core created with normalized profile, working-state, and observation tables.'
+      });
+      return id;
     });
-
-    return mapRecord(created);
+    const row = await this.loadCoreRow(input.workspaceId, scope);
+    if (!row || row.id !== coreId) throw new Error('Failed to initialize learner state core');
+    return this.loadState(row);
   }
 
   async recordEvidence(input: RecordEvidenceInput) {
@@ -302,111 +612,142 @@ export class LearnerStateService {
 
   async proposePatch(input: ProposePatchInput) {
     const state = await this.ensureState({ workspaceId: input.workspaceId, workbenchId: input.workbenchId || null });
-    return prisma.learnerStatePatch.create({
-      data: {
-        workspaceId: input.workspaceId,
-        workbenchId: input.workbenchId || null,
-        learnerStateId: state.id,
-        evidenceId: input.evidenceId || null,
-        targetDimension: input.targetDimension,
-        operation: input.operation || 'merge',
-        proposedBy: input.proposedBy || 'agent',
-        payloadJson: stringify(input.payload),
-        rationale: input.rationale || '',
-        confidence: clampConfidence(input.confidence)
-      }
-    });
+    const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      `INSERT INTO "LearnerStateTransition" ("id","status","proposedBy","targetDimension","operation","confidence","payloadJson","rationale","workspaceId","workbenchId","learnerStateCoreId","evidenceId")
+       VALUES (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),?,?,?,?,?,?,?,?,?,?,?)
+       RETURNING *`,
+      'pending',
+      input.proposedBy || 'agent',
+      input.targetDimension,
+      input.operation || 'merge',
+      clampConfidence(input.confidence),
+      stringify(input.payload),
+      input.rationale || '',
+      input.workspaceId,
+      input.workbenchId || null,
+      state.id,
+      input.evidenceId || null
+    );
+    return rows[0] as any;
   }
 
   async applyPendingPatches(workspaceId: string, options: { limit?: number; changedBy?: string } = {}) {
     const current = await this.ensureState({ workspaceId });
-    const patches = await prisma.learnerStatePatch.findMany({
-      where: { workspaceId, status: 'pending', learnerStateId: current.id },
-      orderBy: { createdAt: 'asc' },
-      take: Math.min(Math.max(options.limit || 20, 1), 100)
-    });
+    const transitions = await prisma.$queryRawUnsafe<TransitionRow[]>(
+      `SELECT t.*, e."observedAt" as "observedAt"
+       FROM "LearnerStateTransition" t
+       LEFT JOIN "LearnerEvidence" e ON e."id" = t."evidenceId"
+       WHERE t."workspaceId" = ? AND t."status" = 'pending' AND t."learnerStateCoreId" = ?
+       ORDER BY t."createdAt" ASC
+       LIMIT ?`,
+      workspaceId,
+      current.id,
+      Math.min(Math.max(options.limit || 20, 1), 100)
+    );
+    if (!transitions.length) return current;
 
-    if (!patches.length) return current;
-
-    const nextState = patches.reduce((state, patch) => {
-      if (!dimensions.includes(patch.targetDimension as LearnerStateDimension)) return state;
-      const dimension = patch.targetDimension as LearnerStateDimension;
-      const payload = parseJson<Record<string, unknown>>(patch.payloadJson, {});
-      const nextDimension =
-        patch.operation === 'replace'
-          ? payload
-          : mergeObjects(state[dimension] as Record<string, unknown>, payload);
-      return { ...state, [dimension]: nextDimension };
-    }, current.state);
-    nextState.confidence = mergeObjects(nextState.confidence, {
-      lastPatchConfidence: Number(
-        (patches.reduce((sum, patch) => sum + patch.confidence, 0) / Math.max(patches.length, 1)).toFixed(2)
-      ),
-      evidenceCount: (Number(nextState.confidence.evidenceCount) || 0) + patches.filter((patch) => patch.evidenceId).length,
-      updatedBy: options.changedBy || 'LearnerStateUpdateManager'
-    });
-
+    const nextCore = transitions.reduce((state, transition) => applyCoreTransition(state, transition), current.coreState);
+    nextCore.governance.lastConsolidatedAt = new Date().toISOString();
+    nextCore.workingState.recentBehaviorSummary.summary = buildSummary(nextCore);
     const nextVersion = current.version + 1;
-    const summary = buildSummary(nextState);
-    const updated = await prisma.$transaction(async (tx) => {
-      const saved = await tx.learnerState.update({
-        where: { id: current.id },
-        data: {
-          version: nextVersion,
-          stateJson: stringify(nextState),
-          summary,
-          profileBaseJson: stringify(nextState.profileBase),
-          knowledgeStateJson: stringify(nextState.knowledgeState),
-          misconceptionStateJson: stringify(nextState.misconceptionState),
-          preferenceStyleJson: stringify(nextState.preferenceStyle),
-          behaviorEngagementJson: stringify(nextState.behaviorEngagement),
-          cognitiveStateJson: stringify(nextState.cognitiveState),
-          reviewPlanningJson: stringify(nextState.reviewPlanning),
-          confidenceJson: stringify(nextState.confidence),
-          lastEvidenceAt: new Date()
-        }
+    const summary = buildSummary(nextCore);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `UPDATE "LearnerStateCore" SET "version" = ?, "summary" = ?, "governanceJson" = ?, "currentPositionJson" = ?, "lastEvidenceAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ?`,
+        nextVersion,
+        summary,
+        stringify(nextCore.governance),
+        stringify(nextCore.workingState.currentLearningPosition),
+        current.id
+      );
+      await this.saveSignals(tx, current.id, workspaceId, nextCore);
+      await this.createSnapshotVersion(tx, {
+        workspaceId,
+        coreId: current.id,
+        version: nextVersion,
+        state: nextCore,
+        changedBy: options.changedBy || 'LearnerStateUpdateManager',
+        reason: `Applied ${transitions.length} learner-state transition(s) into normalized learner state tables.`,
+        transitionIds: transitions.map((transition) => transition.id),
+        evidenceIds: transitions.map((transition) => transition.evidenceId).filter(Boolean) as string[]
       });
-      await tx.learnerStateVersion.create({
-        data: {
-          workspaceId,
-          learnerStateId: current.id,
-          version: nextVersion,
-          stateJson: stringify(nextState),
-          summary,
-          changedBy: options.changedBy || 'LearnerStateUpdateManager',
-          changeReason: `Applied ${patches.length} pending learner state patch(es).`,
-          patchIdsJson: stringify(patches.map((patch) => patch.id), '[]'),
-          evidenceIdsJson: stringify(patches.map((patch) => patch.evidenceId).filter(Boolean), '[]'),
-          confidenceJson: stringify(nextState.confidence)
-        }
-      });
-      await tx.learnerStatePatch.updateMany({
-        where: { id: { in: patches.map((patch) => patch.id) } },
-        data: {
-          status: 'applied',
-          appliedVersion: nextVersion,
-          appliedAt: new Date()
-        }
-      });
-      return saved;
+      await tx.$executeRawUnsafe(
+        `UPDATE "LearnerStateTransition" SET "status" = 'applied', "appliedVersion" = ?, "appliedAt" = CURRENT_TIMESTAMP WHERE "id" IN (${transitions.map(() => '?').join(',')})`,
+        nextVersion,
+        ...transitions.map((transition) => transition.id)
+      );
     });
 
-    return mapRecord(updated);
+    const row = await this.loadCoreRow(workspaceId);
+    if (!row) throw new Error('Learner state core disappeared after transition application');
+    const applied = await this.loadState(row);
+    await this.syncCourseKnowledgeLearnerState(workspaceId, applied.coreState).catch((error) => {
+      console.warn('Failed to sync course KG learner state:', error);
+    });
+    return applied;
+  }
+
+  private async syncCourseKnowledgeLearnerState(workspaceId: string, state: CentralLearnerStateV2) {
+    const updates = [
+      ...state.stableProfile.masteredKnowledge.map((signal) => ({ signal, layer: 'stable' as const, masteryDelta: 0.12, weaknessDelta: -0.08, readinessDelta: 0.1 })),
+      ...state.stableProfile.weakKnowledge.map((signal) => ({ signal, layer: 'stable' as const, masteryDelta: -0.04, weaknessDelta: 0.14, readinessDelta: -0.08 })),
+      ...state.workingState.currentCourseState.focusKnowledge.map((signal) => ({ signal, layer: 'working' as const, masteryDelta: 0.02, weaknessDelta: 0.02, readinessDelta: 0.04 }))
+    ].filter((update) => this.shouldSyncSignalToCourseKnowledgeGraph(update.signal, update.layer));
+    for (const update of updates.slice(0, 40)) {
+      const title = String(update.signal.value || '').trim();
+      if (!isProbablyKnowledgeConcept(title)) continue;
+      const concept = await courseKnowledgeGraphService.upsertConcept({
+        workspaceId,
+        title,
+        source: 'learner_state_sync',
+        evidence: {
+          signalId: update.signal.id,
+          label: update.signal.label,
+          confidence: update.signal.confidence,
+          sources: update.signal.sources
+        }
+      });
+      await courseKnowledgeGraphService.updateLearnerConceptState({
+        workspaceId,
+        conceptId: concept.id,
+        masteryDelta: update.masteryDelta * (update.signal.confidence || 0.5),
+        weaknessDelta: update.weaknessDelta * (update.signal.confidence || 0.5),
+        readinessDelta: update.readinessDelta * (update.signal.confidence || 0.5),
+        sourceSignalId: update.signal.id,
+        evidence: {
+          source: 'learner_state_signal',
+          label: update.signal.label,
+          value: update.signal.value,
+          confidence: update.signal.confidence
+        }
+      });
+    }
+  }
+
+  private shouldSyncSignalToCourseKnowledgeGraph(signal: LearnerSignalRecord, layer: 'stable' | 'working') {
+    const title = String(signal.value || '').trim();
+    if (!isProbablyKnowledgeConcept(title)) return false;
+    const confidence = Number(signal.confidence || 0);
+    const sources = (signal.sources || []).join(' ');
+    const rawConversationSource = /LearnerStateAnalyzer\.chat|MemoryExtractor\.(recent_topic|active_learning_goal|candidate_weak_concept)/i.test(sources);
+    if (layer === 'stable') return signal.status === 'active' && confidence >= 0.58 && !rawConversationSource;
+    if (rawConversationSource) return false;
+    return confidence >= 0.58;
   }
 
   async refreshFromExistingEvidence(input: EnsureStateInput) {
-    const state = await this.ensureState(input);
     const snapshot = await this.buildInitialSnapshot(input.workspaceId, input.workbenchId || null, input.goalId || null);
     const evidence = await this.recordEvidence({
       workspaceId: input.workspaceId,
       workbenchId: input.workbenchId || null,
       goalId: input.goalId || null,
-      evidenceType: 'consolidation',
+      evidenceType: 'centralized_learner_state_refresh',
       sourceType: 'existing_learning_memory',
-      title: 'Existing learning memory consolidation',
-      summary: 'Consolidated current profile, goals, traces, plans and spaced-repetition signals.',
+      title: 'Learner state core refresh',
+      summary: 'Reseeded normalized learner state tables from existing goals, traces, plans and reviews.',
       payload: snapshot,
-      confidence: 0.7
+      confidence: 0.68
     });
     for (const dimension of dimensions) {
       await this.proposePatch({
@@ -414,155 +755,19 @@ export class LearnerStateService {
         workbenchId: input.workbenchId || null,
         targetDimension: dimension,
         operation: 'merge',
-        proposedBy: 'LearnerStateConsolidator',
+        proposedBy: 'LearnerStateCoreRefresh',
         payload: snapshot[dimension],
         evidenceId: evidence.id,
-        confidence: 0.7,
-        rationale: 'Confidence-weighted consolidation from existing learning memory.'
+        confidence: 0.68,
+        rationale: 'Refresh existing learning records into normalized learner state as governed transition proposals.'
       });
     }
-    return this.applyPendingPatches(input.workspaceId, { changedBy: 'LearnerStateConsolidator' });
+    return this.applyPendingPatches(input.workspaceId, { changedBy: 'LearnerStateCoreRefresh' });
   }
 
   async governLifecycle(input: GovernLifecycleInput) {
     const current = await this.ensureState({ workspaceId: input.workspaceId, workbenchId: input.workbenchId || null });
-    const staleSince = Date.now() - (input.staleTopicDays || 21) * 24 * 60 * 60 * 1000;
-    const nowIso = new Date().toISOString();
-    const lifecycleEvents: string[] = [];
-
-    const topicSignals = asRecordArray(current.state.profileBase.transientTopicSignals);
-    const activeTopicSignals = topicSignals.filter((signal) => {
-      const time = observedTime(signal);
-      return !time || time >= staleSince;
-    });
-    const expiredTopicSignals = topicSignals.filter((signal) => {
-      const time = observedTime(signal);
-      return time && time < staleSince;
-    });
-    if (expiredTopicSignals.length) lifecycleEvents.push(`Expired ${expiredTopicSignals.length} stale recent topic signal(s).`);
-
-    const profileBase = {
-      ...current.state.profileBase,
-      recentTopics: uniqueStrings(activeTopicSignals.map((signal) => String(signal.topic || '')).filter(Boolean), 8),
-      transientTopicSignals: activeTopicSignals.slice(-16),
-      expiredTopicSignals: [
-        ...asRecordArray(current.state.profileBase.expiredTopicSignals),
-        ...expiredTopicSignals.map((signal) => ({ ...signal, expiredAt: nowIso, reason: 'recent_topic_decay' }))
-      ].slice(-20)
-    };
-
-    const masterySignals = asRecordArray(current.state.knowledgeState.masterySignals);
-    const candidateWeakSkills = asArray(current.state.knowledgeState.candidateWeakSkills);
-    const weakSkills = asArray(current.state.knowledgeState.weakSkills);
-    const byConcept = new Map<string, { weak: number; strong: number; recentStrong: number; latest: number }>();
-    masterySignals.forEach((signal) => {
-      const concept = conceptFromSignal(signal);
-      if (!concept) return;
-      const score = scoreFromSignal(signal);
-      const time = observedTime(signal);
-      const currentStats = byConcept.get(concept) || { weak: 0, strong: 0, recentStrong: 0, latest: 0 };
-      if (score < 0.55) currentStats.weak += 1;
-      if (score >= 0.75) currentStats.strong += 1;
-      if (score >= 0.78 && (!time || time >= staleSince)) currentStats.recentStrong += 1;
-      currentStats.latest = Math.max(currentStats.latest, time || 0);
-      byConcept.set(concept, currentStats);
-    });
-
-    const promotedWeak = candidateWeakSkills.filter((concept) => (byConcept.get(concept)?.weak || 0) >= 2);
-    if (promotedWeak.length) lifecycleEvents.push(`Promoted ${promotedWeak.length} candidate weak concept(s) after repeated evidence.`);
-    const resolvedWeak = weakSkills.filter((concept) => (byConcept.get(concept)?.recentStrong || 0) >= 2);
-    if (resolvedWeak.length) lifecycleEvents.push(`Marked ${resolvedWeak.length} weak concept(s) as resolving after recent strong evidence.`);
-
-    const nextWeakSkills = uniqueStrings([...weakSkills.filter((concept) => !resolvedWeak.includes(concept)), ...promotedWeak], 16);
-    const nextCandidateWeakSkills = uniqueStrings(candidateWeakSkills.filter((concept) => !promotedWeak.includes(concept) && !resolvedWeak.includes(concept)), 16);
-    const knowledgeState = {
-      ...current.state.knowledgeState,
-      weakSkills: nextWeakSkills,
-      candidateWeakSkills: nextCandidateWeakSkills,
-      resolvedWeakSkills: uniqueStrings([...asArray(current.state.knowledgeState.resolvedWeakSkills), ...resolvedWeak], 16),
-      lifecycleEvidence: [
-        ...asRecordArray(current.state.knowledgeState.lifecycleEvidence),
-        ...promotedWeak.map((concept) => ({ concept, action: 'promoted_to_stable_weak', at: nowIso })),
-        ...resolvedWeak.map((concept) => ({ concept, action: 'marked_resolving', at: nowIso }))
-      ].slice(-30)
-    };
-
-    const reviewPressure = asArray(current.state.reviewPlanning.reviewPressureSignals);
-    const reviewPlanning = {
-      ...current.state.reviewPlanning,
-      reviewPressureSignals: reviewPressure.filter((concept) => !resolvedWeak.includes(concept)),
-      resolvedReviewPressure: uniqueStrings([...asArray(current.state.reviewPlanning.resolvedReviewPressure), ...resolvedWeak], 16)
-    };
-
-    const confidence = {
-      ...current.state.confidence,
-      lifecycleLastRunAt: nowIso,
-      lifecycleEvents,
-      lifecycleStatus: lifecycleEvents.length ? 'updated' : 'no_change'
-    };
-
-    if (!lifecycleEvents.length) {
-      return { state: current, lifecycleEvents, changed: false };
-    }
-
-    const evidence = await this.recordEvidence({
-      workspaceId: input.workspaceId,
-      workbenchId: input.workbenchId || null,
-      evidenceType: 'learner_state_lifecycle_governance',
-      sourceType: 'learner_state_governor',
-      title: 'Learner state lifecycle governance',
-      summary: lifecycleEvents.join(' '),
-      payload: { lifecycleEvents, expiredTopicCount: expiredTopicSignals.length, promotedWeak, resolvedWeak },
-      confidence: 0.72
-    });
-
-    await this.proposePatch({
-      workspaceId: input.workspaceId,
-      workbenchId: input.workbenchId || null,
-      targetDimension: 'profileBase',
-      operation: 'replace',
-      proposedBy: 'LearnerStateLifecycleGovernor',
-      payload: profileBase,
-      evidenceId: evidence.id,
-      confidence: 0.72,
-      rationale: 'Decay stale recent topics so single old topics do not shape future personalization.'
-    });
-    await this.proposePatch({
-      workspaceId: input.workspaceId,
-      workbenchId: input.workbenchId || null,
-      targetDimension: 'knowledgeState',
-      operation: 'replace',
-      proposedBy: 'LearnerStateLifecycleGovernor',
-      payload: knowledgeState,
-      evidenceId: evidence.id,
-      confidence: 0.74,
-      rationale: 'Promote repeated weak concepts and mark resolving concepts based on recent strong evidence.'
-    });
-    await this.proposePatch({
-      workspaceId: input.workspaceId,
-      workbenchId: input.workbenchId || null,
-      targetDimension: 'reviewPlanning',
-      operation: 'replace',
-      proposedBy: 'LearnerStateLifecycleGovernor',
-      payload: reviewPlanning,
-      evidenceId: evidence.id,
-      confidence: 0.7,
-      rationale: 'Remove resolved concepts from active review pressure.'
-    });
-    await this.proposePatch({
-      workspaceId: input.workspaceId,
-      workbenchId: input.workbenchId || null,
-      targetDimension: 'confidence',
-      operation: 'merge',
-      proposedBy: 'LearnerStateLifecycleGovernor',
-      payload: confidence,
-      evidenceId: evidence.id,
-      confidence: 0.7,
-      rationale: 'Record lifecycle governance metadata.'
-    });
-
-    const state = await this.applyPendingPatches(input.workspaceId, { changedBy: input.changedBy || 'LearnerStateLifecycleGovernor' });
-    return { state, lifecycleEvents, changed: true };
+    return { state: current, lifecycleEvents: ['Lifecycle promotion is intentionally deferred while the normalized learner-state foundation is stabilized.'], changed: false };
   }
 
   private async buildInitialSnapshot(
@@ -602,27 +807,26 @@ export class LearnerStateService {
 
     return {
       profileBase: {
-        workspace: {
-          id: workspace.id,
-          name: workspace.name,
-          description: workspace.description,
-          major: workspace.major
-        },
+        workspace: { id: workspace.id, name: workspace.name, description: workspace.description, major: workspace.major },
         goals: goals.map((goal) => goal.goalText).slice(0, 5),
         background: preferences.background || preferences.knowledgeLevel || null,
-        priorKnowledge: preferences.priorKnowledge || preferences.knowledgeLevel || null
+        priorKnowledge: preferences.priorKnowledge || preferences.knowledgeLevel || null,
+        currentLearningPosition: {
+          courseTitle: workspace.name,
+          workbenchId,
+          goalId: goalId || activePlan?.goalId || goals[0]?.id || null,
+          updatedAt: new Date().toISOString()
+        }
       },
       knowledgeState: {
-        targetSkills: appendUnique(goalSkills, planTargetSkills),
-        weakSkills: appendUnique(goalWeaknesses, planWeakSkills),
+        targetSkills: Array.from(new Set([...goalSkills, ...planTargetSkills])),
+        weakSkills: Array.from(new Set([...goalWeaknesses, ...planWeakSkills])),
         masterySignals: traceMastery.slice(0, 6),
         activePlanId: activePlan?.id || null
       },
       misconceptionState: {
         candidates: misconceptionCandidates.slice(0, 8),
-        repairStrategies: Array.isArray(diagnostic.prerequisiteGaps)
-          ? ['插入前置讲解', '降低练习难度', '增加错因复盘']
-          : []
+        repairStrategies: Array.isArray(diagnostic.prerequisiteGaps) ? ['插入前置讲解', '降低练习难度', '增加错因复盘'] : []
       },
       preferenceStyle: {
         learningPreference: preferences.learningPreference || null,
@@ -633,19 +837,13 @@ export class LearnerStateService {
         eventCount,
         traceCount: traces.length,
         recentTraceSummaries: traces.map((trace) => trace.summary).slice(0, 5),
-        engagementSignals: {
-          hasRepeatedReviews: reviewCount > 0,
-          hasRecentTrace: traces.length > 0
-        }
+        engagementSignals: { hasRepeatedReviews: reviewCount > 0, hasRecentTrace: traces.length > 0 }
       },
       cognitiveState: {
         learnerLevel: diagnostic.learnerLevel || preferences.knowledgeLevel || 'unknown',
         cognitiveLoadTolerance: diagnostic.cognitiveLoadTolerance || null,
         recommendedDifficultyBand: diagnostic.recommendedDifficultyBand || null,
-        zpdSignals: {
-          prerequisiteGaps: diagnostic.prerequisiteGaps || [],
-          strengths: diagnostic.strengths || []
-        }
+        zpdSignals: { prerequisiteGaps: diagnostic.prerequisiteGaps || [], strengths: diagnostic.strengths || [] }
       },
       reviewPlanning: {
         dueFlashcards: dueCards,

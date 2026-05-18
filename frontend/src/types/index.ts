@@ -3,6 +3,7 @@ export interface Workspace {
   name: string;
   description?: string;
   major?: string;
+  aiTerminalConfig?: string;
   createdAt: string;
   updatedAt: string;
   fileObjects?: FileSystemObject[];
@@ -52,6 +53,7 @@ export interface Workbench {
   updatedAt: string;
   lastOpenedAt: string;
   panelCount?: number;
+  resourceCount?: number;
   state?: WorkbenchState;
   name?: string;
   layout?: string;
@@ -76,6 +78,12 @@ export interface ResourceReference {
   mimeType?: string;
   fileCategory?: string;
   isBinary?: boolean;
+}
+
+export interface WorkbenchResourceGroups {
+  sources: ResourceReference[];
+  files: ResourceReference[];
+  generated: ResourceReference[];
 }
 
 export interface EditorState {
@@ -127,10 +135,7 @@ export interface WorkbenchState {
   aiAssistant?: {
     id: string;
     title: string;
-    mode: 'floating' | 'sidebar' | 'fullscreen';
-    isOpen: boolean;
     activeSessionId?: string;
-    sidebarWidth?: number;
     sessions?: Array<{
       id: string;
       title: string;
@@ -139,6 +144,18 @@ export interface WorkbenchState {
       viewState: Record<string, any>;
     }>;
     viewState: Record<string, any>;
+  };
+  aiStudio?: {
+    id: string;
+    title: string;
+    viewState: Record<string, any>;
+  };
+  aiToolPanel?: {
+    id: string;
+    activeTool: 'chat' | 'studio';
+    mode: 'floating' | 'sidebar' | 'fullscreen';
+    isOpen: boolean;
+    sidebarWidth?: number;
   };
   version: number;
 }
@@ -182,6 +199,7 @@ export interface User {
   id: string;
   username: string;
   email?: string | null;
+  emailVerified?: boolean;
 }
 
 export type WorkspaceStatus = 'active' | 'review' | 'idle' | 'archived';
@@ -212,6 +230,7 @@ export interface WorkbenchItem {
   title: string;
   updatedAt: string;
   panelCount: number;
+  resourceCount?: number;
   description?: string;
 }
 
@@ -238,6 +257,91 @@ export interface LearningTerminalMessage {
   } | null;
 }
 
+export interface PersonalizedWorkspaceIntegration {
+  schema: string;
+  workspaceId: string;
+  workbenchId?: string | null;
+  learnerState: {
+    summary: string;
+    strengths: string[];
+    weakSkills: string[];
+    preferences: string[];
+    currentNeeds: string[];
+  };
+  terminalGuidance: {
+    tutorStyle: string;
+    responseRules: string[];
+    suggestedPrompts: string[];
+  };
+  activePlan?: {
+    id: string;
+    workspaceId?: string;
+    workbenchId?: string | null;
+    goalId?: string | null;
+    scope?: string;
+    status?: string;
+    objective: string;
+    rationale?: string;
+    version?: number;
+    nextStepId?: string | null;
+    assumptions?: string[];
+    constraints?: string[];
+    milestones?: unknown[];
+    steps?: unknown[];
+    targetSkills?: string[];
+    weakSkills?: string[];
+    adaptationPolicy?: Record<string, unknown>;
+    evidence?: Record<string, unknown>;
+    diagnosticReport?: Record<string, unknown>;
+    candidateResources?: unknown[];
+    knowledgeGraphSnapshot?: Record<string, unknown>;
+    reflectionHistory?: unknown[];
+    constraintScores?: Record<string, unknown>;
+    revisionCount?: number;
+    previousPlanId?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  } | null;
+  continueLearning: {
+    workbenchId?: string | null;
+    workbenchTitle?: string | null;
+    planId?: string | null;
+    nextStepId?: string | null;
+    nextStepTitle: string;
+    prompt: string;
+    updatedAt?: string | null;
+  };
+  resourceRecommendations: Array<{
+    id: string;
+    title: string;
+    type: string;
+    sourceId?: string;
+    summary: string;
+    relevanceScore: number;
+    reason: string;
+    explanation: string;
+  }>;
+  taskRecommendations: Array<{
+    id: string;
+    title: string;
+    type: string;
+    targetSkills: string[];
+    estimatedLoad: string;
+    expectedEvidence: string[];
+    status: string;
+    reason: string;
+  }>;
+  pathPreview?: {
+    objective: string;
+    milestones: unknown[];
+    steps: unknown[];
+    constraintScores: Record<string, unknown>;
+    planningTrace?: Record<string, unknown>;
+  } | null;
+  recommendationExplanations: string[];
+  evidence: Record<string, unknown>;
+}
+
 export interface LearningTerminalAction {
   id: string;
   label: string;
@@ -259,6 +363,7 @@ export interface LearningTerminalResponse {
         reason: string;
       } | null;
     } | null;
+    workspaceIntegration?: PersonalizedWorkspaceIntegration | null;
   };
 }
 

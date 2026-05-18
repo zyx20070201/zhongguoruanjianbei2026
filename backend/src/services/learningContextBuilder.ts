@@ -1,6 +1,10 @@
 import prisma from '../config/db';
 import { FileSystemService } from './fileSystemService';
 import { knowledgeSearchService, KnowledgeSearchResult } from './knowledgeSearchService';
+import { buildWorkbenchResourceWhere, getWorkbenchResourceFileIds } from './workbenchResourceScope';
+import { learningEventDiagnosticsService } from './learningEventDiagnosticsService';
+import { courseKnowledgeGraphService } from './courseKnowledgeGraphService';
+import { courseKnowledgeReasoningService } from './courseKnowledgeReasoningService';
 
 export interface LearningContext {
   workspace: {
@@ -13,7 +17,6 @@ export interface LearningContext {
     id: string;
     title: string;
     description: string;
-    rootPath?: string | null;
   } | null;
   goal?: {
     id: string;
@@ -25,10 +28,22 @@ export interface LearningContext {
     status: string;
     plan: Record<string, unknown>;
   } | null;
-  recentEvents: Array<{ eventType: string; actor: string; payload: Record<string, unknown>; createdAt: string }>;
+  recentEvents: Array<{
+    eventType: string;
+    eventFamily: string;
+    actor: string;
+    payload: Record<string, unknown>;
+    cognitiveSignals: unknown[];
+    diagnosticFeatures: Record<string, unknown>;
+    quality: Record<string, unknown>;
+    observedAt: string;
+    createdAt: string;
+  }>;
   traces: Array<{ summary: string; mastery: Record<string, unknown>; nextActions: string[]; updatedAt: string }>;
   activeFile?: { id: string; name: string; path: string; content?: string | null } | null;
   knowledge: KnowledgeSearchResult[];
+  eventDiagnostics?: Record<string, unknown>;
+  courseKnowledgeGraph?: Record<string, unknown>;
 }
 
 const parseJson = <T>(value: string | null | undefined, fallback: T): T => {
@@ -98,11 +113,21 @@ export class LearningContextBuilder {
 
     const activeFileRecord = input.activeFileId
       ? await prisma.fileSystemObject.findFirst({
-          where: {
-            id: input.activeFileId,
-            workspaceId: input.workspaceId,
-            nodeType: 'file'
-          }
+          where: input.workbenchId
+            ? {
+                AND: [
+                  { id: input.activeFileId },
+                  buildWorkbenchResourceWhere({
+                    workspaceId: input.workspaceId,
+                    workbenchId: input.workbenchId
+                  }) as any
+                ]
+              }
+            : {
+                id: input.activeFileId,
+                workspaceId: input.workspaceId,
+                nodeType: 'file'
+              }
         })
       : null;
 
@@ -121,13 +146,35 @@ export class LearningContextBuilder {
       activeFile?.content?.slice(0, 160) ||
       '';
 
-    const knowledge = query
+    const workbenchFileIds = input.workbenchId
+      ? await getWorkbenchResourceFileIds({
+          workspaceId: input.workspaceId,
+          workbenchId: input.workbenchId
+        })
+      : undefined;
+
+    const [knowledge, eventDiagnostics, courseKnowledgeGraphBase, courseKnowledgeReasoning] = await Promise.all([
+      query
       ? await knowledgeSearchService.search({
           workspaceId: input.workspaceId,
           query,
+          fileIds: workbenchFileIds,
           limit: 6
         })
-      : [];
+      : [],
+      learningEventDiagnosticsService.summarize({
+        workspaceId: input.workspaceId,
+        workbenchId: input.workbenchId || null,
+        goalId,
+        days: 30,
+        limit: 120
+      }).catch(() => undefined),
+      courseKnowledgeGraphService.getGraph({ workspaceId: input.workspaceId, limit: 80 }).catch(() => undefined),
+      Promise.all([
+        courseKnowledgeReasoningService.getPrerequisiteGaps({ workspaceId: input.workspaceId }).catch(() => []),
+        courseKnowledgeReasoningService.expandWeakNeighborhood({ workspaceId: input.workspaceId, limit: 30 }).catch(() => ({ seeds: [], neighbors: [] }))
+      ]).then(([prerequisiteGaps, weakNeighborhood]) => ({ prerequisiteGaps, weakNeighborhood })).catch(() => undefined)
+    ]);
 
     return {
       workspace: {
@@ -140,8 +187,7 @@ export class LearningContextBuilder {
         ? {
             id: workbench.id,
             title: workbench.title || workbench.name,
-            description: workbench.description || '',
-            rootPath: workbench.rootPath
+            description: workbench.description || ''
           }
         : null,
       goal: goal
@@ -158,8 +204,13 @@ export class LearningContextBuilder {
         : null,
       recentEvents: events.map((event) => ({
         eventType: event.eventType,
+        eventFamily: event.eventFamily,
         actor: event.actor,
         payload: parseJson<Record<string, unknown>>(event.payloadJson, {}),
+        cognitiveSignals: parseJson<unknown[]>(event.cognitiveSignalsJson, []),
+        diagnosticFeatures: parseJson<Record<string, unknown>>(event.diagnosticFeaturesJson, {}),
+        quality: parseJson<Record<string, unknown>>(event.qualityJson, {}),
+        observedAt: event.observedAt.toISOString(),
         createdAt: event.createdAt.toISOString()
       })),
       traces: traces.map((trace) => ({
@@ -169,7 +220,11 @@ export class LearningContextBuilder {
         updatedAt: trace.updatedAt.toISOString()
       })),
       activeFile,
-      knowledge
+      knowledge,
+      eventDiagnostics,
+      courseKnowledgeGraph: courseKnowledgeGraphBase
+        ? { ...courseKnowledgeGraphBase, reasoning: courseKnowledgeReasoning }
+        : undefined
     };
   }
 }

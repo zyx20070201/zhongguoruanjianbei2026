@@ -172,7 +172,9 @@ export class MclOrchestrator {
       });
       stateStepCompleted = true;
 
-      const previous = input.previousPlan || this.extractPreviousPlan(stateBundle);
+      const previous = input.options?.revisePreviousPlan
+        ? input.previousPlan || this.extractPreviousPlan(stateBundle)
+        : input.previousPlan || null;
       const plan = await mclPlannerService.planOrRevise({
         stateBundle,
         userInput,
@@ -189,19 +191,24 @@ export class MclOrchestrator {
         summary: 'Save plan, event and learning trace.',
         planId: plan.id
       });
+      let persistedPlan = plan;
 
       try {
-        if (previous?.id) {
-          await learningMemoryService.supersedeLearningPlan(previous.id);
-        }
-
-        await learningMemoryService.saveLearningPlan({
+        const savedPlan = await learningMemoryService.saveLearningPlan({
           workspaceId: input.workspaceId,
           workbenchId: input.workbenchId || input.context?.workbenchId || null,
           goalId: stateBundle.state.activeGoal?.id || input.goalId || null,
           scope: plan.scope,
-          plan
+          plan,
+          supersedePrevious: Boolean(input.options?.revisePreviousPlan)
         });
+        persistedPlan = {
+          ...plan,
+          version: savedPlan.version,
+          previousPlanId: savedPlan.previousPlanId || plan.previousPlanId,
+          createdAt: savedPlan.createdAt.toISOString(),
+          updatedAt: savedPlan.updatedAt.toISOString()
+        };
 
         await learningMemoryService.recordEvent({
           workspaceId: input.workspaceId,
@@ -210,10 +217,10 @@ export class MclOrchestrator {
           eventType: previous ? 'mcl.plan_revised' : 'mcl.plan_created',
           actor: 'agent',
           payload: {
-            planId: plan.id,
-            version: plan.version,
-            nextStepId: plan.nextStepId,
-            stepCount: plan.steps.length
+            planId: persistedPlan.id,
+            version: persistedPlan.version,
+            nextStepId: persistedPlan.nextStepId,
+            stepCount: persistedPlan.steps.length
           }
         });
 
@@ -221,21 +228,21 @@ export class MclOrchestrator {
           workspaceId: input.workspaceId,
           workbenchId: input.workbenchId || input.context?.workbenchId || null,
           goalId: stateBundle.state.activeGoal?.id || input.goalId || null,
-          summary: `MCL Planner 输出 v${plan.version} 计划：${plan.objective}`,
+          summary: `围绕「${persistedPlan.objective}」整理了下一步学习计划。`,
           mastery: {
             planning: {
-              planId: plan.id,
-              version: plan.version,
-              nextStepId: plan.nextStepId
+              planId: persistedPlan.id,
+              version: persistedPlan.version,
+              nextStepId: persistedPlan.nextStepId
             }
           },
-          nextActions: plan.steps.slice(0, 3).map((step) => step.title)
+          nextActions: persistedPlan.steps.slice(0, 3).map((step) => step.title)
         });
 
         await learningRunService.completeStep(saveStep.id, {
-          summary: `Saved plan v${plan.version} with ${plan.steps.length} steps.`,
-          planId: plan.id,
-          version: plan.version
+          summary: `Saved plan v${persistedPlan.version} with ${persistedPlan.steps.length} steps.`,
+          planId: persistedPlan.id,
+          version: persistedPlan.version
         });
       } catch (error) {
         await learningRunService.failStep(saveStep.id, error);
@@ -244,12 +251,12 @@ export class MclOrchestrator {
 
       await learningRunService.completeRun(runId, {
         intent: 'planning',
-        plan,
+        plan: persistedPlan,
         learningState: stateBundle.state,
         contextCapsule: stateBundle.capsule,
         contextPolicy: stateBundle.contextPolicy,
         timeline: [...summarizeTimeline(stateBundle), ...buildTimelineFromRunStages(stageEvents)],
-        actions: this.suggestActions(stateBundle, plan)
+        actions: this.suggestActions(stateBundle, persistedPlan)
       });
     } catch (error) {
       if (!stateStepCompleted && stateStep && Date.now() - stateStartedAt > 0) {
@@ -308,30 +315,37 @@ export class MclOrchestrator {
         intent: 'mcl:planning',
         input: {
           userInput,
-          previousPlanVersion: input.previousPlan?.version || null,
-          capsuleId: stateBundle.capsule.capsuleId
-        }
-      });
+            previousPlanVersion: input.previousPlan?.version || null,
+            mode: input.options?.revisePreviousPlan ? 'revise' : 'new_plan',
+            capsuleId: stateBundle.capsule.capsuleId
+          }
+        });
 
       try {
-        const previous = input.previousPlan || this.extractPreviousPlan(stateBundle);
+        const previous = input.options?.revisePreviousPlan
+          ? input.previousPlan || this.extractPreviousPlan(stateBundle)
+          : input.previousPlan || null;
         const plan = await mclPlannerService.planOrRevise({
           stateBundle,
           userInput,
           previousPlan: previous
         });
 
-        if (previous?.id) {
-          await learningMemoryService.supersedeLearningPlan(previous.id);
-        }
-
-        await learningMemoryService.saveLearningPlan({
+        const savedPlan = await learningMemoryService.saveLearningPlan({
           workspaceId: input.workspaceId,
           workbenchId: input.workbenchId || input.context?.workbenchId || null,
           goalId: stateBundle.state.activeGoal?.id || input.goalId || null,
           scope: plan.scope,
-          plan
+          plan,
+          supersedePrevious: Boolean(input.options?.revisePreviousPlan)
         });
+        const persistedPlan = {
+          ...plan,
+          version: savedPlan.version,
+          previousPlanId: savedPlan.previousPlanId || plan.previousPlanId,
+          createdAt: savedPlan.createdAt.toISOString(),
+          updatedAt: savedPlan.updatedAt.toISOString()
+        };
 
         await learningMemoryService.recordEvent({
           workspaceId: input.workspaceId,
@@ -340,10 +354,10 @@ export class MclOrchestrator {
           eventType: previous ? 'mcl.plan_revised' : 'mcl.plan_created',
           actor: 'agent',
           payload: {
-            planId: plan.id,
-            version: plan.version,
-            nextStepId: plan.nextStepId,
-            stepCount: plan.steps.length
+            planId: persistedPlan.id,
+            version: persistedPlan.version,
+            nextStepId: persistedPlan.nextStepId,
+            stepCount: persistedPlan.steps.length
           }
         });
 
@@ -351,33 +365,41 @@ export class MclOrchestrator {
           workspaceId: input.workspaceId,
           workbenchId: input.workbenchId || input.context?.workbenchId || null,
           goalId: stateBundle.state.activeGoal?.id || input.goalId || null,
-          summary: `MCL Planner 输出 v${plan.version} 计划：${plan.objective}`,
+          summary: `围绕「${persistedPlan.objective}」整理了下一步学习计划。`,
           mastery: {
             planning: {
-              planId: plan.id,
-              version: plan.version,
-              nextStepId: plan.nextStepId
+              planId: persistedPlan.id,
+              version: persistedPlan.version,
+              nextStepId: persistedPlan.nextStepId
             }
           },
-          nextActions: plan.steps.slice(0, 3).map((step) => step.title)
+          nextActions: persistedPlan.steps.slice(0, 3).map((step) => step.title)
         });
 
         await learningRunService.completeRun(run.id, {
           intent,
-          planId: plan.id,
-          version: plan.version,
-          nextStepId: plan.nextStepId
+          planId: persistedPlan.id,
+          version: persistedPlan.version,
+          nextStepId: persistedPlan.nextStepId
         });
 
         return {
           intent,
           runId: run.id,
           learningState: stateBundle.state,
-          plan,
+          plan: persistedPlan,
+          savedPlan: {
+            id: savedPlan.id,
+            version: savedPlan.version,
+            status: savedPlan.status,
+            previousPlanId: savedPlan.previousPlanId,
+            createdAt: savedPlan.createdAt.toISOString(),
+            updatedAt: savedPlan.updatedAt.toISOString()
+          },
           contextCapsule: stateBundle.capsule,
           contextPolicy: stateBundle.contextPolicy,
           timeline: summarizeTimeline(stateBundle),
-          actions: this.suggestActions(stateBundle, plan)
+          actions: this.suggestActions(stateBundle, persistedPlan)
         };
       } catch (error) {
         await learningRunService.failRun(run.id, error);

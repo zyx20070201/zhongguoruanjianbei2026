@@ -13,10 +13,8 @@ import {
   EditorLayoutNode,
   EditorLeafNode,
   EditorState,
-  FileSystemObject,
   ResourceReference
 } from '../../types';
-import { useFileTreeStore } from '../../store/fileTreeStore';
 import { AiChatContext } from '../../services/aiApi';
 import {
   collectLeafIds,
@@ -28,12 +26,17 @@ import {
 import WorkbenchEditorContent from './WorkbenchEditorContent';
 import { getLanguageLabel } from './editorResource';
 
-type WorkbenchTreeDragItem = { id: string; dragIds?: string[] };
 type WorkbenchEditorTabDragItem = { editorId: string; sourcePaneId: string };
-type WorkbenchDropItem = WorkbenchTreeDragItem | WorkbenchEditorTabDragItem;
+type WorkbenchResourceDragItem = {
+  type: 'WORKBENCH_RESOURCE';
+  resourceId: string;
+  resource: ResourceReference;
+};
+type DocumentStateByResourceId = Record<string, { content: string; savedContent: string; loading?: boolean }>;
+type DocumentSaveStateByResourceId = Record<string, { status: 'idle' | 'saving' | 'saved' | 'error'; savedAt?: string; error?: string }>;
 
-const FILE_TREE_ITEM_TYPE = 'NODE';
 const EDITOR_TAB_ITEM_TYPE = 'WORKBENCH_EDITOR_TAB';
+const WORKBENCH_RESOURCE_ITEM_TYPE = 'WORKBENCH_RESOURCE';
 
 interface WorkbenchEditorProps {
   workspaceId: string;
@@ -42,22 +45,28 @@ interface WorkbenchEditorProps {
   activePaneId: string | null;
   editorLayout: EditorLayoutNode | null | undefined;
   resources: ResourceReference[];
-  documentStateByResourceId: Record<string, { content: string; savedContent: string; loading?: boolean }>;
+  documentStateByResourceId: DocumentStateByResourceId;
+  documentSaveStateByResourceId?: DocumentSaveStateByResourceId;
   onActivateEditor: (editorId: string, paneId?: string | null) => void;
   onCloseEditor: (editorId: string) => void;
   onBindResource: (editorId: string) => void;
   onChangeDocumentContent: (resourceId: string, content: string) => void;
+  onSaveDocumentContent?: (
+    resourceId: string,
+    content?: string,
+    options?: { baseContentHash?: string | null; revisionSummary?: string; actionType?: string; actor?: string }
+  ) => void | Promise<boolean | void>;
   onUpdateEditorViewState: (editorId: string, patch: Record<string, any>) => void;
   onActivatePane: (paneId: string) => void;
   onInitializeLayout: (layout: EditorLayoutNode, paneId: string | null) => void;
-  onDropResourceToPane: (
-    file: FileSystemObject,
-    paneId: string | null,
-    placement: WorkbenchDropPlacement
-  ) => void;
   onDropEditorTab: (
     editorId: string,
     sourcePaneId: string,
+    targetPaneId: string,
+    placement: WorkbenchDropPlacement
+  ) => void;
+  onDropResourceToPane: (
+    resource: ResourceReference,
     targetPaneId: string,
     placement: WorkbenchDropPlacement
   ) => void;
@@ -136,7 +145,7 @@ function PaneTab({
   paneId: string;
   editor: EditorState;
   resources: ResourceReference[];
-  documentStateByResourceId: Record<string, { content: string; savedContent: string; loading?: boolean }>;
+  documentStateByResourceId: DocumentStateByResourceId;
   isActive: boolean;
   onActivateEditor: (editorId: string, paneId?: string | null) => void;
   onActivatePane: (paneId: string) => void;
@@ -226,7 +235,7 @@ function PaneTitleBar({
   isPrimaryPane: boolean;
   resources: ResourceReference[];
   workspaceId: string;
-  documentStateByResourceId: Record<string, { content: string; savedContent: string; loading?: boolean }>;
+  documentStateByResourceId: DocumentStateByResourceId;
   onActivateEditor: (editorId: string, paneId?: string | null) => void;
   onActivatePane: (paneId: string) => void;
   onCloseEditor: (editorId: string) => void;
@@ -308,15 +317,17 @@ function EditorLeafView({
   editors,
   resources,
   documentStateByResourceId,
+  documentSaveStateByResourceId,
   activeEditorId,
   onActivateEditor,
   onCloseEditor,
   onBindResource,
   onChangeDocumentContent,
+  onSaveDocumentContent,
   onUpdateEditorViewState,
   onActivatePane,
-  onDropResourceToPane,
   onDropEditorTab,
+  onDropResourceToPane,
   onAddEditor,
   onClosePane,
   onToggleSidebar,
@@ -328,22 +339,28 @@ function EditorLeafView({
   workspaceId: string;
   editors: EditorState[];
   resources: ResourceReference[];
-  documentStateByResourceId: Record<string, { content: string; savedContent: string; loading?: boolean }>;
+  documentStateByResourceId: DocumentStateByResourceId;
+  documentSaveStateByResourceId?: DocumentSaveStateByResourceId;
   activeEditorId: string | null;
   onActivateEditor: (editorId: string, paneId?: string | null) => void;
   onCloseEditor: (editorId: string) => void;
   onBindResource: (editorId: string) => void;
   onChangeDocumentContent: (resourceId: string, content: string) => void;
+  onSaveDocumentContent?: (
+    resourceId: string,
+    content?: string,
+    options?: { baseContentHash?: string | null; revisionSummary?: string; actionType?: string; actor?: string }
+  ) => void | Promise<boolean | void>;
   onUpdateEditorViewState: (editorId: string, patch: Record<string, any>) => void;
   onActivatePane: (paneId: string) => void;
-  onDropResourceToPane: (
-    file: FileSystemObject,
-    paneId: string | null,
-    placement: WorkbenchDropPlacement
-  ) => void;
   onDropEditorTab: (
     editorId: string,
     sourcePaneId: string,
+    targetPaneId: string,
+    placement: WorkbenchDropPlacement
+  ) => void;
+  onDropResourceToPane: (
+    resource: ResourceReference,
     targetPaneId: string,
     placement: WorkbenchDropPlacement
   ) => void;
@@ -355,9 +372,7 @@ function EditorLeafView({
 }) {
   const normalizedLeaf = normalizeLeaf(leaf);
   const [dropPlacement, setDropPlacement] = useState<WorkbenchDropPlacement | null>(null);
-  const files = useFileTreeStore((state) => state.files);
   const paneRef = useRef<HTMLElement | null>(null);
-  const filesById = useMemo(() => new Map(files.map((file) => [file.id, file] as const)), [files]);
   const leafEditors = normalizedLeaf.editorIds
     .map((editorId) => editors.find((editor) => editor.id === editorId))
     .filter((editor): editor is EditorState => Boolean(editor));
@@ -369,20 +384,15 @@ function EditorLeafView({
     null;
   const isPrimaryPane = normalizedLeaf.id === primaryPaneId;
 
-  const [{ isOverCurrent, canDrop }, drop] = useDrop<WorkbenchDropItem, void, { isOverCurrent: boolean; canDrop: boolean }>(
+  const [{ isOverCurrent, canDrop }, drop] = useDrop<
+    WorkbenchEditorTabDragItem | WorkbenchResourceDragItem,
+    void,
+    { isOverCurrent: boolean; canDrop: boolean }
+  >(
     () => ({
-      accept: [FILE_TREE_ITEM_TYPE, EDITOR_TAB_ITEM_TYPE],
-      canDrop: (item, monitor) => {
-        if (monitor.getItemType() === FILE_TREE_ITEM_TYPE) {
-          return filesById.get((item as WorkbenchTreeDragItem).id)?.nodeType === 'file';
-        }
-
-        if (monitor.getItemType() === EDITOR_TAB_ITEM_TYPE) {
-          return Boolean((item as WorkbenchEditorTabDragItem).editorId);
-        }
-
-        return false;
-      },
+      accept: [EDITOR_TAB_ITEM_TYPE, WORKBENCH_RESOURCE_ITEM_TYPE],
+      canDrop: (item) =>
+        'editorId' in item ? Boolean(item.editorId) : Boolean(item.resource?.id),
       hover: (item, monitor) => {
         if (!monitor.isOver({ shallow: true })) return;
 
@@ -391,14 +401,6 @@ function EditorLeafView({
         if (!element || !point) {
           setDropPlacement(null);
           return;
-        }
-
-        if (monitor.getItemType() === FILE_TREE_ITEM_TYPE) {
-          const file = filesById.get((item as WorkbenchTreeDragItem).id);
-          if (file?.nodeType !== 'file') {
-            setDropPlacement(null);
-            return;
-          }
         }
 
         setDropPlacement(getDropPlacement(point, element));
@@ -412,24 +414,18 @@ function EditorLeafView({
 
         const placement = getDropPlacement(point, element);
 
-        if (monitor.getItemType() === FILE_TREE_ITEM_TYPE) {
-          const file = filesById.get((item as WorkbenchTreeDragItem).id);
-          if (file?.nodeType !== 'file') return;
-          onDropResourceToPane(file, normalizedLeaf.id, placement);
+        if ('editorId' in item) {
+          onDropEditorTab(item.editorId, item.sourcePaneId, normalizedLeaf.id, placement);
           return;
         }
-
-        if (monitor.getItemType() === EDITOR_TAB_ITEM_TYPE) {
-          const draggedTab = item as WorkbenchEditorTabDragItem;
-          onDropEditorTab(draggedTab.editorId, draggedTab.sourcePaneId, normalizedLeaf.id, placement);
-        }
+        onDropResourceToPane(item.resource, normalizedLeaf.id, placement);
       },
       collect: (monitor) => ({
         isOverCurrent: monitor.isOver({ shallow: true }),
         canDrop: monitor.canDrop()
       })
     }),
-    [filesById, normalizedLeaf.id, onDropEditorTab, onDropResourceToPane]
+    [normalizedLeaf.id, onDropEditorTab, onDropResourceToPane]
   );
 
   useEffect(() => {
@@ -470,31 +466,37 @@ function EditorLeafView({
               onToggleSidebar={onToggleSidebar}
               isSidebarPinned={isSidebarPinned}
             />
-            <div className="min-h-0 flex-1">
-              <WorkbenchEditorContent
-                editor={activeEditor}
-                resource={getBoundResource(activeEditor, resources)}
-                workspaceId={workspaceId}
-                content={
-                  activeEditor.resourceId
-                    ? documentStateByResourceId[activeEditor.resourceId]?.content ?? ''
-                    : ''
-                }
-                isDirty={Boolean(
-                  activeEditor.resourceId &&
-                    documentStateByResourceId[activeEditor.resourceId] &&
-                    documentStateByResourceId[activeEditor.resourceId].content !==
-                      documentStateByResourceId[activeEditor.resourceId].savedContent
-                )}
-                isLoading={Boolean(
-                  activeEditor.resourceId &&
-                    documentStateByResourceId[activeEditor.resourceId]?.loading
-                )}
-                onChangeContent={onChangeDocumentContent}
-                onUpdateViewState={onUpdateEditorViewState}
-                onBindResource={onBindResource}
-                aiContext={aiContext}
-              />
+            <div className="relative min-h-0 flex-1 overflow-hidden">
+              {leafEditors.map((editor) => {
+                const resource = getBoundResource(editor, resources);
+                const resourceState = editor.resourceId ? documentStateByResourceId[editor.resourceId] : undefined;
+                return (
+                  <div
+                    key={editor.id}
+                    className={`absolute inset-0 min-h-0 ${editor.id === activeEditor.id ? 'block' : 'hidden'}`}
+                    aria-hidden={editor.id === activeEditor.id ? undefined : true}
+                  >
+                    <WorkbenchEditorContent
+                      editor={editor}
+                      resource={resource}
+                      workspaceId={workspaceId}
+                      content={editor.resourceId ? resourceState?.content ?? '' : ''}
+                      isDirty={Boolean(resourceState && resourceState.content !== resourceState.savedContent)}
+                      saveStatus={editor.resourceId ? documentSaveStateByResourceId?.[editor.resourceId]?.status : undefined}
+                      savedAt={editor.resourceId ? documentSaveStateByResourceId?.[editor.resourceId]?.savedAt : undefined}
+                      saveError={editor.resourceId ? documentSaveStateByResourceId?.[editor.resourceId]?.error : undefined}
+                      isLoading={Boolean(resourceState?.loading || (editor.resourceId && (editor.type === 'code' || editor.type === 'notes') && !resourceState))}
+                      onChangeContent={onChangeDocumentContent}
+                      onSaveContent={editor.resourceId ? (content?: string) => onSaveDocumentContent?.(editor.resourceId as string, content) : undefined}
+                      onApplyAiNoteEdit={(resourceId, content, options) => onSaveDocumentContent?.(resourceId, content, options)}
+                      onUpdateViewState={onUpdateEditorViewState}
+                      onBindResource={onBindResource}
+                      aiContext={aiContext}
+                      resources={resources}
+                    />
+                  </div>
+                );
+              })}
             </div>
           </div>
         ) : (
@@ -513,22 +515,28 @@ function LayoutNodeView(props: {
   workspaceId: string;
   editors: EditorState[];
   resources: ResourceReference[];
-  documentStateByResourceId: Record<string, { content: string; savedContent: string; loading?: boolean }>;
+  documentStateByResourceId: DocumentStateByResourceId;
+  documentSaveStateByResourceId?: DocumentSaveStateByResourceId;
   activeEditorId: string | null;
   onActivateEditor: (editorId: string, paneId?: string | null) => void;
   onCloseEditor: (editorId: string) => void;
   onBindResource: (editorId: string) => void;
   onChangeDocumentContent: (resourceId: string, content: string) => void;
+  onSaveDocumentContent?: (
+    resourceId: string,
+    content?: string,
+    options?: { baseContentHash?: string | null; revisionSummary?: string; actionType?: string; actor?: string }
+  ) => void | Promise<boolean | void>;
   onUpdateEditorViewState: (editorId: string, patch: Record<string, any>) => void;
   onActivatePane: (paneId: string) => void;
-  onDropResourceToPane: (
-    file: FileSystemObject,
-    paneId: string | null,
-    placement: WorkbenchDropPlacement
-  ) => void;
   onDropEditorTab: (
     editorId: string,
     sourcePaneId: string,
+    targetPaneId: string,
+    placement: WorkbenchDropPlacement
+  ) => void;
+  onDropResourceToPane: (
+    resource: ResourceReference,
     targetPaneId: string,
     placement: WorkbenchDropPlacement
   ) => void;
@@ -546,15 +554,17 @@ function LayoutNodeView(props: {
     editors,
     resources,
     documentStateByResourceId,
+    documentSaveStateByResourceId,
     activeEditorId,
     onActivateEditor,
     onCloseEditor,
     onBindResource,
     onChangeDocumentContent,
+    onSaveDocumentContent,
     onUpdateEditorViewState,
     onActivatePane,
-    onDropResourceToPane,
     onDropEditorTab,
+    onDropResourceToPane,
     onAddEditor,
     onClosePane,
     onUpdateSplitRatio,
@@ -572,15 +582,17 @@ function LayoutNodeView(props: {
           editors={editors}
         resources={resources}
         documentStateByResourceId={documentStateByResourceId}
+        documentSaveStateByResourceId={documentSaveStateByResourceId}
         activeEditorId={activeEditorId}
         onActivateEditor={onActivateEditor}
         onCloseEditor={onCloseEditor}
         onBindResource={onBindResource}
         onChangeDocumentContent={onChangeDocumentContent}
+        onSaveDocumentContent={onSaveDocumentContent}
         onUpdateEditorViewState={onUpdateEditorViewState}
         onActivatePane={onActivatePane}
-        onDropResourceToPane={onDropResourceToPane}
         onDropEditorTab={onDropEditorTab}
+        onDropResourceToPane={onDropResourceToPane}
         onAddEditor={onAddEditor}
         onClosePane={onClosePane}
         onToggleSidebar={onToggleSidebar}
@@ -590,9 +602,18 @@ function LayoutNodeView(props: {
     );
   }
 
-  const containerRef = useRef<HTMLDivElement | null>(null);
   const isRow = node.direction === 'row';
   const ratio = typeof node.ratio === 'number' ? node.ratio : 0.5;
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const draftRatioRef = useRef(ratio);
+  const isResizingRef = useRef(false);
+  const [draftRatio, setDraftRatio] = useState(ratio);
+
+  useEffect(() => {
+    if (isResizingRef.current) return;
+    draftRatioRef.current = ratio;
+    setDraftRatio(ratio);
+  }, [ratio]);
 
   return (
     <div
@@ -600,7 +621,7 @@ function LayoutNodeView(props: {
       className={`flex min-h-0 min-w-0 flex-1 overflow-hidden ${isRow ? 'flex-row' : 'flex-col'}`}
     >
       <div
-        style={isRow ? { width: `${ratio * 100}%` } : { height: `${ratio * 100}%` }}
+        style={isRow ? { width: `${draftRatio * 100}%` } : { height: `${draftRatio * 100}%` }}
         className="min-h-0 min-w-0 flex overflow-hidden"
       >
         <LayoutNodeView {...props} node={node.children[0]} />
@@ -610,18 +631,24 @@ function LayoutNodeView(props: {
         className={`${isRow ? 'h-full w-0 cursor-col-resize' : 'h-0 w-full cursor-row-resize'} relative z-20 shrink-0`}
         onMouseDown={(event) => {
           event.preventDefault();
+          event.stopPropagation();
           const element = containerRef.current;
           if (!element) return;
+          isResizingRef.current = true;
           const rect = element.getBoundingClientRect();
 
           const onMove = (moveEvent: MouseEvent) => {
             const nextRatio = isRow
               ? (moveEvent.clientX - rect.left) / rect.width
               : (moveEvent.clientY - rect.top) / rect.height;
-            onUpdateSplitRatio(node.id, Math.max(0.2, Math.min(0.8, nextRatio)));
+            const boundedRatio = Math.max(0.2, Math.min(0.8, nextRatio));
+            draftRatioRef.current = boundedRatio;
+            setDraftRatio(boundedRatio);
           };
 
           const onUp = () => {
+            isResizingRef.current = false;
+            onUpdateSplitRatio(node.id, draftRatioRef.current);
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
           };
@@ -646,7 +673,7 @@ function LayoutNodeView(props: {
       </div>
 
       <div
-        style={isRow ? { width: `${(1 - ratio) * 100}%` } : { height: `${(1 - ratio) * 100}%` }}
+        style={isRow ? { width: `${(1 - draftRatio) * 100}%` } : { height: `${(1 - draftRatio) * 100}%` }}
         className="min-h-0 min-w-0 flex overflow-hidden"
       >
         <LayoutNodeView {...props} node={node.children[1]} />
@@ -663,15 +690,17 @@ export default function WorkbenchEditor({
   editorLayout,
   resources,
   documentStateByResourceId,
+  documentSaveStateByResourceId,
   onActivateEditor,
   onCloseEditor,
   onBindResource,
   onChangeDocumentContent,
+  onSaveDocumentContent,
   onUpdateEditorViewState,
   onActivatePane,
   onInitializeLayout,
-  onDropResourceToPane,
   onDropEditorTab,
+  onDropResourceToPane,
   onAddEditor,
   onClosePane,
   onUpdateSplitRatio,
@@ -679,9 +708,7 @@ export default function WorkbenchEditor({
   isSidebarPinned,
   aiContext
 }: WorkbenchEditorProps) {
-  const files = useFileTreeStore((state) => state.files);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const filesById = useMemo(() => new Map(files.map((file) => [file.id, file] as const)), [files]);
   const normalizedLayout = useMemo(() => {
     if (editorLayout) return editorLayout;
     if (editors.length === 0) return null;
@@ -696,28 +723,6 @@ export default function WorkbenchEditor({
   const primaryPaneId = leafIds[0] ?? null;
   const resolvedPaneId =
     activePaneId && leafIds.includes(activePaneId) ? activePaneId : leafIds[0] ?? null;
-
-  const [{ isOverEmptyState, canDropEmptyState }, dropEmptyState] = useDrop<
-    WorkbenchTreeDragItem,
-    void,
-    { isOverEmptyState: boolean; canDropEmptyState: boolean }
-  >(
-    () => ({
-      accept: FILE_TREE_ITEM_TYPE,
-      canDrop: (item) => filesById.get(item.id)?.nodeType === 'file',
-      drop: (item, monitor) => {
-        if (monitor.didDrop()) return;
-        const file = filesById.get(item.id);
-        if (file?.nodeType !== 'file') return;
-        onDropResourceToPane(file, null, 'center');
-      },
-      collect: (monitor) => ({
-        isOverEmptyState: monitor.isOver({ shallow: true }),
-        canDropEmptyState: monitor.canDrop()
-      })
-    }),
-    [filesById, onDropResourceToPane]
-  );
 
   const missingInit = useMemo(() => {
     if (!normalizedLayout && editors.length > 0) return true;
@@ -737,7 +742,8 @@ export default function WorkbenchEditor({
     return editors.some((editor) => !existingEditorIds.has(editor.id));
   }, [normalizedLayout, editors]);
 
-  if (missingInit && normalizedLayout) {
+  useEffect(() => {
+    if (!missingInit || !normalizedLayout) return;
     const firstLeaf =
       findLeafById(normalizedLayout, resolvedPaneId) ??
       (normalizedLayout.type === 'leaf' ? normalizeLeaf(normalizedLayout) : null);
@@ -758,25 +764,23 @@ export default function WorkbenchEditor({
         resolvedPaneId
       );
     }
-  }
+  }, [editors, missingInit, normalizedLayout, onInitializeLayout, resolvedPaneId]);
 
   if (!normalizedLayout) {
     return (
       <div
         ref={(element) => {
           rootRef.current = element;
-          dropEmptyState(element);
         }}
         className="relative flex h-full items-center justify-center overflow-hidden border border-[#e8e7e2] bg-white px-8"
       >
-        {isOverEmptyState && canDropEmptyState ? <DropHint placement="center" /> : null}
         <div className="workspace-soft-scale max-w-xl rounded-3xl border border-[#e5e5e1] bg-white p-8 text-center shadow-sm">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#e5e5e1] bg-[#f6f6f4] text-[#777a80]">
             <Columns2 className="h-6 w-6" />
           </div>
           <h2 className="text-xl font-semibold text-[#25272b]">No tabs open</h2>
           <p className="mt-3 text-sm leading-6 text-[#777a80]">
-            Open a resource from the explorer or drag a file here to start working.
+            Open a resource from Sources, Files, or Generated to start working.
           </p>
           <div className="mt-5 flex items-center justify-center">
             <button
@@ -801,15 +805,17 @@ export default function WorkbenchEditor({
         editors={editors}
         resources={resources}
         documentStateByResourceId={documentStateByResourceId}
+        documentSaveStateByResourceId={documentSaveStateByResourceId}
         activeEditorId={activeEditorId}
         onActivateEditor={onActivateEditor}
         onCloseEditor={onCloseEditor}
         onBindResource={onBindResource}
         onChangeDocumentContent={onChangeDocumentContent}
+        onSaveDocumentContent={onSaveDocumentContent}
         onUpdateEditorViewState={onUpdateEditorViewState}
         onActivatePane={onActivatePane}
-        onDropResourceToPane={onDropResourceToPane}
         onDropEditorTab={onDropEditorTab}
+        onDropResourceToPane={onDropResourceToPane}
         onAddEditor={onAddEditor}
         onClosePane={onClosePane}
         onUpdateSplitRatio={onUpdateSplitRatio}

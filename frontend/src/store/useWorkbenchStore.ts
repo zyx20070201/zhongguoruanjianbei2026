@@ -25,6 +25,7 @@ interface WorkbenchStoreState {
   loading: boolean;
   saveStatus: SaveStatus;
   dirty: boolean;
+  saveRevision: number;
   error: string | null;
   saveTimer: number | null;
   loadWorkbench: (id: string) => Promise<void>;
@@ -140,6 +141,28 @@ const sanitizeSource = (source: any) => ({
   includedInPrompt: Boolean(source?.includedInPrompt)
 });
 
+const sanitizeChatAttachment = (attachment: any) => ({
+  id: typeof attachment?.id === 'string' ? attachment.id : crypto.randomUUID?.() || String(Date.now()),
+  name: String(attachment?.name || 'Untitled attachment').slice(0, 180),
+  mimeType: String(attachment?.mimeType || attachment?.type || 'application/octet-stream').slice(0, 120),
+  size: typeof attachment?.size === 'number' ? attachment.size : 0,
+  kind: ['text', 'image', 'pdf', 'document', 'file'].includes(attachment?.kind) ? attachment.kind : 'file',
+  createdAt: typeof attachment?.createdAt === 'string' ? attachment.createdAt : new Date().toISOString(),
+  textContent: typeof attachment?.textContent === 'string' ? attachment.textContent.slice(0, 12000) : undefined,
+  dataUrl:
+    typeof attachment?.dataUrl === 'string' && attachment.dataUrl.startsWith('data:') && attachment.dataUrl.length <= 6_000_000
+      ? attachment.dataUrl
+      : undefined,
+  base64Data:
+    typeof attachment?.base64Data === 'string' && attachment.base64Data.length <= 5_500_000
+      ? attachment.base64Data
+      : undefined,
+  fileObjectId: typeof attachment?.fileObjectId === 'string' ? attachment.fileObjectId : undefined,
+  savedToWorkbench: Boolean(attachment?.savedToWorkbench),
+  status: ['ready', 'metadata_only', 'error'].includes(attachment?.status) ? attachment.status : undefined,
+  error: truncateText(attachment?.error, 240)
+});
+
 const sanitizeLastContextDebug = (debug: any) => {
   if (!debug || typeof debug !== 'object') return undefined;
   const capsule = debug.contextCapsule && typeof debug.contextCapsule === 'object' ? debug.contextCapsule : {};
@@ -167,6 +190,10 @@ const sanitizeViewStateForSave = (viewState: Record<string, any> = {}) => {
     next.persistentCitations = next.persistentCitations.slice(0, 12).map(sanitizeCitation);
   }
 
+  if (Array.isArray(next.chatSessionAttachments)) {
+    next.chatSessionAttachments = next.chatSessionAttachments.slice(-8).map(sanitizeChatAttachment);
+  }
+
   if (next.lockedContextSelection?.content) {
     next.lockedContextSelection = {
       ...next.lockedContextSelection,
@@ -178,7 +205,6 @@ const sanitizeViewStateForSave = (viewState: Record<string, any> = {}) => {
     next.lastContextDebug = sanitizeLastContextDebug(next.lastContextDebug);
   }
 
-  delete next.blocksuiteSourceContent;
   delete next.selectedText;
 
   return next;
@@ -198,10 +224,22 @@ const sanitizeWorkbenchStateForSave = (state: WorkbenchState): WorkbenchState =>
           : state.aiAssistant.sessions
       }
     : state.aiAssistant,
+  aiStudio: state.aiStudio
+    ? {
+        ...state.aiStudio,
+        viewState: sanitizeViewStateForSave(state.aiStudio.viewState)
+      }
+    : state.aiStudio,
   editors: state.editors.map((editor) => ({
     ...editor,
     viewState: sanitizeViewStateForSave(editor.viewState)
   }))
+});
+
+const markDirty = (current: WorkbenchStoreState, saveStatus: SaveStatus = 'idle') => ({
+  dirty: true,
+  saveStatus,
+  saveRevision: current.saveRevision + 1
 });
 
 const makeDefaultState = (workbenchId: string): WorkbenchState => ({
@@ -214,10 +252,7 @@ const makeDefaultState = (workbenchId: string): WorkbenchState => ({
   aiAssistant: {
     id: `ai-assistant-${workbenchId}`,
     title: 'AI 对话',
-    mode: 'floating',
-    isOpen: false,
     activeSessionId: `ai-session-${workbenchId}`,
-    sidebarWidth: 460,
     sessions: [
       {
         id: `ai-session-${workbenchId}`,
@@ -228,6 +263,18 @@ const makeDefaultState = (workbenchId: string): WorkbenchState => ({
       }
     ],
     viewState: { messages: [], contextHint: 'workbench' }
+  },
+  aiStudio: {
+    id: `ai-studio-${workbenchId}`,
+    title: 'AI Studio',
+    viewState: { studioResults: [] }
+  },
+  aiToolPanel: {
+    id: `ai-tool-panel-${workbenchId}`,
+    activeTool: 'chat',
+    mode: 'floating',
+    isOpen: false,
+    sidebarWidth: 520
   },
   version: 1
 });
@@ -271,10 +318,18 @@ const normalizeWorkbenchState = (
 ): WorkbenchState => {
   const defaultState = makeDefaultState(workbenchId);
   const defaultAssistant = defaultState.aiAssistant!;
+  const defaultStudio = defaultState.aiStudio!;
+  const defaultToolPanel = defaultState.aiToolPanel!;
   const assistant = state?.aiAssistant && typeof state.aiAssistant === 'object'
     ? state.aiAssistant
     : defaultAssistant;
-  const legacyViewState =
+  const studio = state?.aiStudio && typeof state.aiStudio === 'object'
+    ? state.aiStudio
+    : defaultStudio;
+  const toolPanel = state?.aiToolPanel && typeof state.aiToolPanel === 'object'
+    ? state.aiToolPanel
+    : defaultToolPanel;
+  const assistantViewState =
     assistant?.viewState && typeof assistant.viewState === 'object'
       ? assistant.viewState
       : defaultAssistant.viewState;
@@ -296,7 +351,7 @@ const normalizeWorkbenchState = (
             : 'AI 对话',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-          viewState: legacyViewState
+          viewState: assistantViewState
         }
       ];
   const activeSessionId =
@@ -330,18 +385,29 @@ const normalizeWorkbenchState = (
     aiAssistant: {
       id: typeof assistant?.id === 'string' ? assistant.id : defaultAssistant.id,
       title: typeof assistant?.title === 'string' ? assistant.title : defaultAssistant.title,
-      mode:
-        assistant?.mode === 'sidebar' || assistant?.mode === 'fullscreen' || assistant?.mode === 'floating'
-          ? assistant.mode
-          : defaultAssistant.mode,
-      isOpen: Boolean(assistant?.isOpen),
       activeSessionId,
-      sidebarWidth:
-        typeof assistant?.sidebarWidth === 'number'
-          ? Math.min(760, Math.max(360, assistant.sidebarWidth))
-          : defaultAssistant.sidebarWidth,
       sessions: normalizedSessions,
       viewState: activeSession.viewState
+    },
+    aiStudio: {
+      id: typeof studio?.id === 'string' ? studio.id : defaultStudio.id,
+      title: typeof studio?.title === 'string' ? studio.title : defaultStudio.title,
+      viewState: studio?.viewState && typeof studio.viewState === 'object'
+        ? studio.viewState
+        : defaultStudio.viewState
+    },
+    aiToolPanel: {
+      id: typeof toolPanel?.id === 'string' ? toolPanel.id : defaultToolPanel.id,
+      activeTool: toolPanel?.activeTool === 'studio' ? 'studio' : 'chat',
+      mode:
+        toolPanel?.mode === 'sidebar' || toolPanel?.mode === 'fullscreen' || toolPanel?.mode === 'floating'
+          ? toolPanel.mode
+          : defaultToolPanel.mode,
+      isOpen: Boolean(toolPanel?.isOpen),
+      sidebarWidth:
+        typeof toolPanel?.sidebarWidth === 'number'
+          ? Math.min(860, Math.max(360, toolPanel.sidebarWidth))
+          : defaultToolPanel.sidebarWidth
     },
     version: typeof state?.version === 'number' && state.version > 0 ? state.version : 1
   };
@@ -415,6 +481,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
   loading: false,
   saveStatus: 'idle',
   dirty: false,
+  saveRevision: 0,
   error: null,
   saveTimer: null,
 
@@ -428,6 +495,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
         state: normalizeWorkbenchState(workbench.state, workbench.id),
         loading: false,
         dirty: false,
+        saveRevision: 0,
         saveStatus: 'saved'
       });
     } catch (error: any) {
@@ -478,8 +546,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
           activeEditorPaneId: targetPaneId ?? current.state.activeEditorPaneId,
           editorLayout
         },
-        dirty: true,
-        saveStatus: 'idle'
+        ...markDirty(current)
       };
     });
     get().scheduleSave();
@@ -510,7 +577,8 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
         activeEditorId: duplicatedId
       },
       dirty: true,
-      saveStatus: 'idle'
+      saveStatus: 'idle',
+      saveRevision: current.saveRevision + 1
     });
     get().scheduleSave();
     return duplicatedId;
@@ -527,8 +595,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
             editor.id === editorId ? { ...editor, ...patch } : editor
           )
         },
-        dirty: true,
-        saveStatus: 'idle'
+        ...markDirty(current)
       };
     });
   },
@@ -547,8 +614,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
               : editor
           )
         },
-        dirty: liveContextOnly ? current.dirty : true,
-        saveStatus: liveContextOnly ? current.saveStatus : 'idle'
+        ...(liveContextOnly ? { dirty: current.dirty, saveStatus: current.saveStatus, saveRevision: current.saveRevision } : markDirty(current))
       };
     });
     if (!liveContextOnly) get().scheduleSave();
@@ -566,8 +632,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
           },
           current.state.workbenchId
         ),
-        dirty: true,
-        saveStatus: 'idle'
+        ...markDirty(current)
       };
     });
     get().scheduleSave();
@@ -605,8 +670,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
             editor.id === editorId ? { ...editor, zIndex: nextZIndex } : editor
           )
         },
-        dirty: true,
-        saveStatus: 'idle'
+        ...markDirty(current)
       };
     });
     get().scheduleSave();
@@ -644,8 +708,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
           activeEditorId: nextActiveEditorId,
           activeEditorPaneId: nextActiveEditorPaneId
         },
-        dirty: true,
-        saveStatus: 'idle'
+        ...markDirty(current)
       };
     });
     get().scheduleSave();
@@ -676,8 +739,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
               : editor
           )
         },
-        dirty: true,
-        saveStatus: 'idle'
+        ...markDirty(current)
       };
     });
     get().scheduleSave();
@@ -697,7 +759,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
   },
 
   async saveNow() {
-    const { workbench, state, dirty, saveTimer } = get();
+    const { workbench, state, dirty, saveTimer, saveRevision } = get();
     if (!workbench || !state || !dirty) return;
 
     if (saveTimer) {
@@ -709,11 +771,15 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
     try {
       const stateToSave = sanitizeWorkbenchStateForSave(state);
       const savedWorkbench = await workbenchApi.saveState(workbench.id, stateToSave);
-      set({
-        workbench: savedWorkbench,
-        state,
-        dirty: false,
-        saveStatus: 'saved'
+      set((current) => {
+        const hasNewChanges = current.saveRevision !== saveRevision;
+        return {
+          workbench: savedWorkbench,
+          state: hasNewChanges ? current.state : state,
+          dirty: hasNewChanges ? current.dirty : false,
+          saveRevision: current.saveRevision,
+          saveStatus: hasNewChanges ? current.saveStatus : 'saved'
+        };
       });
     } catch (error: any) {
       set({
@@ -736,6 +802,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
       loading: false,
       saveStatus: 'idle',
       dirty: false,
+      saveRevision: 0,
       error: null,
       saveTimer: null
     });

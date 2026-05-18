@@ -26,7 +26,7 @@ export const useFileTree = (
         ? await fileSystemApi.getResources(workspaceId, {
             workbenchId: options?.workbenchId,
             role: options?.role,
-            scope: options?.scope || (options?.workbenchId ? 'all' : 'workspace')
+            scope: options?.scope || (options?.workbenchId ? 'workbench' : 'workspace')
           })
         : await fileSystemApi.getTree(workspaceId);
 

@@ -1,7 +1,7 @@
 import { capabilityRegistry } from './capabilityRegistry';
 import { knowledgeSearchService } from './knowledgeSearchService';
 import { learningContextBuilder } from './learningContextBuilder';
-import { deepseekService } from './deepseekService';
+import { aiModelProviderService } from './aiModelProviderService';
 
 type GoalPlanningOutput = {
   normalizedGoal: string;
@@ -124,7 +124,7 @@ export const registerLearningCapabilities = () => {
     description: 'Plan a goal-oriented learning path from a user goal.',
     async execute(input: { goalText?: string; skills?: string[] }, context) {
       const fallback = fallbackGoalPlanning(input);
-      if (!deepseekService.isConfigured()) return { plan: fallback, source: 'fallback' };
+      if (!aiModelProviderService.isConfigured({ useCase: 'learning' })) return { plan: fallback, source: 'fallback' };
 
       try {
         const builtContext = await learningContextBuilder.build({
@@ -133,7 +133,8 @@ export const registerLearningCapabilities = () => {
           goalId: context.goalId,
           query: input.goalText
         });
-        const response = await deepseekService.json<GoalPlanningOutput>({
+        const response = await aiModelProviderService.json<GoalPlanningOutput>({
+          useCase: 'learning',
           instruction: '你是目标导向学习系统的 GoalPlanner。请把用户目标拆成可执行学习路径。',
           schema: {
             normalizedGoal: 'string',
@@ -155,7 +156,7 @@ export const registerLearningCapabilities = () => {
           }
         });
 
-        return { plan: response.data, source: 'deepseek', model: response.model, usage: response.usage };
+        return { plan: response.data, source: response.provider, model: response.model, usage: response.usage };
       } catch (error) {
         return { plan: fallback, source: 'fallback', error: error instanceof Error ? error.message : String(error) };
       }
@@ -168,10 +169,11 @@ export const registerLearningCapabilities = () => {
     async execute(input: { skills?: string[]; goalText?: string }, context) {
       const skills = asStringArray(input.skills, ['核心概念理解', '练习巩固']);
       const fallback = fallbackDiagnosis(skills);
-      if (!deepseekService.isConfigured()) return { ...fallback, source: 'fallback' };
+      if (!aiModelProviderService.isConfigured({ useCase: 'learning' })) return { ...fallback, source: 'fallback' };
 
       try {
-        const response = await deepseekService.json<DiagnosisOutput>({
+        const response = await aiModelProviderService.json<DiagnosisOutput>({
+          useCase: 'learning',
           instruction: '你是学习诊断 Agent。请生成能识别技能差距的诊断问题，问题应可用于学习者画像更新。',
           schema: {
             questions: [{ id: 'string', prompt: 'string', targetSkill: 'string', expectedEvidence: 'string' }],
@@ -180,7 +182,7 @@ export const registerLearningCapabilities = () => {
           input: { ...input, skills },
           context: { workspaceId: context.workspaceId, workbenchId: context.workbenchId || undefined }
         });
-        return { ...response.data, source: 'deepseek', model: response.model, usage: response.usage };
+        return { ...response.data, source: response.provider, model: response.model, usage: response.usage };
       } catch (error) {
         return { ...fallback, source: 'fallback', error: error instanceof Error ? error.message : String(error) };
       }
@@ -192,7 +194,7 @@ export const registerLearningCapabilities = () => {
     description: 'Generate learning resources for a workbench.',
     async execute(input: { goalText?: string; skills?: string[] }, context) {
       const fallback = fallbackContent(input);
-      if (!deepseekService.isConfigured()) return { generated: fallback, source: 'fallback' };
+      if (!aiModelProviderService.isConfigured({ useCase: 'learning' })) return { generated: fallback, source: 'fallback' };
 
       try {
         const builtContext = await learningContextBuilder.build({
@@ -201,7 +203,8 @@ export const registerLearningCapabilities = () => {
           goalId: context.goalId,
           query: input.goalText
         });
-        const response = await deepseekService.json<ContentGenerationOutput>({
+        const response = await aiModelProviderService.json<ContentGenerationOutput>({
+          useCase: 'learning',
           instruction: '你是学习资源生成 Agent。请生成学习蓝图、诊断练习和笔记模板，内容应贴合上下文资料。',
           schema: {
             brief: 'markdown string',
@@ -219,7 +222,7 @@ export const registerLearningCapabilities = () => {
             }
           }
         });
-        return { generated: response.data, source: 'deepseek', model: response.model, usage: response.usage };
+        return { generated: response.data, source: response.provider, model: response.model, usage: response.usage };
       } catch (error) {
         return { generated: fallback, source: 'fallback', error: error instanceof Error ? error.message : String(error) };
       }
@@ -232,10 +235,11 @@ export const registerLearningCapabilities = () => {
     async execute(input: { skills?: string[]; goalText?: string }, context) {
       const skills = asStringArray(input.skills, ['核心概念理解']);
       const fallback = fallbackQuiz(skills);
-      if (!deepseekService.isConfigured()) return { ...fallback, source: 'fallback' };
+      if (!aiModelProviderService.isConfigured({ useCase: 'learning' })) return { ...fallback, source: 'fallback' };
 
       try {
-        const response = await deepseekService.json<QuizGenerationOutput>({
+        const response = await aiModelProviderService.json<QuizGenerationOutput>({
+          useCase: 'learning',
           instruction: '你是测验生成 Agent。请生成轻量掌握度检测题，题目应覆盖核心技能并附答案要点。',
           schema: {
             quiz: [{ id: 'string', type: 'string', prompt: 'string', answerGuide: 'string', skill: 'string' }]
@@ -243,7 +247,7 @@ export const registerLearningCapabilities = () => {
           input: { ...input, skills },
           context: { workspaceId: context.workspaceId, workbenchId: context.workbenchId || undefined }
         });
-        return { ...response.data, source: 'deepseek', model: response.model, usage: response.usage };
+        return { ...response.data, source: response.provider, model: response.model, usage: response.usage };
       } catch (error) {
         return { ...fallback, source: 'fallback', error: error instanceof Error ? error.message : String(error) };
       }

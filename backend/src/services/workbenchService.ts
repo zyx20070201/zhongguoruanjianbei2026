@@ -6,10 +6,16 @@ import {
   EditorState,
   WorkbenchPayload,
   WorkbenchRecord,
+  WorkbenchResourceGroups,
   WorkbenchState,
   WorkbenchSummary
 } from '../types/workbench';
 import { generateUniqueFilename } from '../utils/path';
+import {
+  findWorkbenchResourceFiles,
+  getWorkbenchResourceFileIds,
+  normalizeWorkbenchResourceRole
+} from './workbenchResourceScope';
 
 const DEFAULT_LAYOUT_MODE = 'freeform' as const;
 
@@ -24,6 +30,58 @@ const slugifyWorkbenchFolderName = (value: string) => {
 };
 
 const buildFallbackRootPath = (title: string) => `/${slugifyWorkbenchFolderName(title)}`;
+
+const GENERIC_WORKBENCH_TITLES = new Set([
+  'New Task Workbench',
+  'Default Workbench',
+  'Untitled Workbench',
+  'AI 引导学习现场',
+  '新的学习目标'
+]);
+
+const isGenericWorkbenchTitle = (value?: string | null) => {
+  const title = String(value || '').trim();
+  return !title || GENERIC_WORKBENCH_TITLES.has(title) || /^new\s+/i.test(title) || /^untitled/i.test(title);
+};
+
+const cleanTitleSeed = (value: string) =>
+  value
+    .replace(/MCL\s*Planner\s*输出\s*v?\d*\s*计划[:：]?/gi, '')
+    .replace(/AI\s*引导学习现场[:：]?/gi, '')
+    .replace(/^(请|帮我|给我|讲讲|讲一下|学习|复习|整理|掌握|了解|我想|我需要)/, '')
+    .replace(/[“”"'`]/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+
+const meaningfulTitleFromText = (value: string, fallback = '课程学习整理') => {
+  const text = cleanTitleSeed(value);
+  if (!text) return fallback;
+
+  const topicPatterns: Array<[RegExp, string]> = [
+    [/软件项目管理.*?(计划过程|计划|WBS|网络计划|持续策划|滚动计划)/, '软件项目计划复习'],
+    [/软件项目.*?(特点|特性)/, '软件项目特性概览'],
+    [/软件项目.*?(风险)/, '软件项目风险梳理'],
+    [/(WBS|网络计划).*?(对比|区别)/, '计划工具对比整理'],
+    [/(数据结构|算法).*?(复习|练习|题)/, '数据结构算法复习']
+  ];
+
+  for (const [pattern, title] of topicPatterns) {
+    if (pattern.test(text)) return title;
+  }
+
+  const match = text.match(/[\u4e00-\u9fa5A-Za-z0-9]{2,18}/);
+  const base = (match?.[0] || text).slice(0, 12);
+  const suffix = /复习|整理|概览|练习|计划|对比/.test(base) ? '' : '整理';
+  return `${base}${suffix}`.slice(0, 16) || fallback;
+};
+
+const cleanUserFacingDescription = (value: string) =>
+  value
+    .replace(/MCL\s*Planner\s*输出\s*v?\d*\s*计划[:：]?/gi, '')
+    .replace(/AI\s*引导学习现场[:：]?/gi, '')
+    .replace(/agent|signals?|confidence|candidate weak|debug|embedding|reranker/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 const truncateText = (value: unknown, maxLength: number) => {
   if (typeof value !== 'string') return value;
@@ -99,6 +157,28 @@ const sanitizeSource = (source: any) => ({
   includedInPrompt: Boolean(source?.includedInPrompt)
 });
 
+const sanitizeChatAttachment = (attachment: any) => ({
+  id: typeof attachment?.id === 'string' ? attachment.id : crypto.randomUUID(),
+  name: String(attachment?.name || 'Untitled attachment').slice(0, 180),
+  mimeType: String(attachment?.mimeType || attachment?.type || 'application/octet-stream').slice(0, 120),
+  size: typeof attachment?.size === 'number' ? attachment.size : 0,
+  kind: ['text', 'image', 'pdf', 'document', 'file'].includes(attachment?.kind) ? attachment.kind : 'file',
+  createdAt: typeof attachment?.createdAt === 'string' ? attachment.createdAt : new Date().toISOString(),
+  textContent: typeof attachment?.textContent === 'string' ? attachment.textContent.slice(0, 12000) : undefined,
+  dataUrl:
+    typeof attachment?.dataUrl === 'string' && attachment.dataUrl.startsWith('data:') && attachment.dataUrl.length <= 6_000_000
+      ? attachment.dataUrl
+      : undefined,
+  base64Data:
+    typeof attachment?.base64Data === 'string' && attachment.base64Data.length <= 5_500_000
+      ? attachment.base64Data
+      : undefined,
+  fileObjectId: typeof attachment?.fileObjectId === 'string' ? attachment.fileObjectId : undefined,
+  savedToWorkbench: Boolean(attachment?.savedToWorkbench),
+  status: ['ready', 'metadata_only', 'error'].includes(attachment?.status) ? attachment.status : undefined,
+  error: truncateText(attachment?.error, 240)
+});
+
 const sanitizeLastContextDebug = (debug: any) => {
   if (!debug || typeof debug !== 'object') return undefined;
   const capsule = debug.contextCapsule && typeof debug.contextCapsule === 'object' ? debug.contextCapsule : {};
@@ -125,6 +205,10 @@ const sanitizeViewState = (viewState: Record<string, any> = {}) => {
 
   if (Array.isArray(next.persistentCitations)) {
     next.persistentCitations = next.persistentCitations.slice(0, 12).map(sanitizeCitation);
+  }
+
+  if (Array.isArray(next.chatSessionAttachments)) {
+    next.chatSessionAttachments = next.chatSessionAttachments.slice(-8).map(sanitizeChatAttachment);
   }
 
   if (next.lockedContextSelection?.content) {
@@ -225,18 +309,41 @@ const normalizeAiAssistant = (workbenchId: string, value: any): WorkbenchState['
   return {
     id: typeof assistant.id === 'string' ? assistant.id : `ai-assistant-${workbenchId}`,
     title: typeof assistant.title === 'string' && assistant.title.trim() ? assistant.title : activeSession.title,
-    mode:
-      assistant.mode === 'sidebar' || assistant.mode === 'fullscreen' || assistant.mode === 'floating'
-        ? assistant.mode
-        : 'floating',
-    isOpen: Boolean(assistant.isOpen),
     activeSessionId,
-    sidebarWidth:
-      typeof assistant.sidebarWidth === 'number'
-        ? Math.min(760, Math.max(360, assistant.sidebarWidth))
-        : 460,
     sessions,
     viewState: activeSession.viewState
+  };
+};
+
+const normalizeAiStudio = (workbenchId: string, value: any): WorkbenchState['aiStudio'] => {
+  const studio = value && typeof value === 'object' ? value : {};
+  return {
+    id: typeof studio.id === 'string' ? studio.id : `ai-studio-${workbenchId}`,
+    title: typeof studio.title === 'string' && studio.title.trim() ? studio.title : 'AI Studio',
+    viewState: sanitizeViewState(
+      studio.viewState && typeof studio.viewState === 'object' ? studio.viewState : { studioResults: [] }
+    )
+  };
+};
+
+const normalizeAiToolPanel = (
+  workbenchId: string,
+  value: any
+): WorkbenchState['aiToolPanel'] => {
+  const panel = value && typeof value === 'object' ? value : {};
+
+  return {
+    id: typeof panel.id === 'string' ? panel.id : `ai-tool-panel-${workbenchId}`,
+    activeTool: panel.activeTool === 'studio' ? 'studio' : 'chat',
+    mode:
+      panel.mode === 'sidebar' || panel.mode === 'fullscreen' || panel.mode === 'floating'
+        ? panel.mode
+        : 'floating',
+    isOpen: typeof panel.isOpen === 'boolean' ? panel.isOpen : false,
+    sidebarWidth:
+      typeof panel.sidebarWidth === 'number'
+        ? Math.min(860, Math.max(360, panel.sidebarWidth))
+        : 520
   };
 };
 
@@ -268,6 +375,8 @@ const normalizeState = (workbenchId: string, state?: Partial<WorkbenchState>): W
     activePanelId: undefined,
     activePaneId: undefined,
     aiAssistant: normalizeAiAssistant(workbenchId, state?.aiAssistant),
+    aiStudio: normalizeAiStudio(workbenchId, state?.aiStudio),
+    aiToolPanel: normalizeAiToolPanel(workbenchId, state?.aiToolPanel),
     version: typeof state?.version === 'number' && state.version > 0 ? state.version : 1
   };
 };
@@ -278,23 +387,150 @@ const normalizeRecord = (record: WorkbenchRecord): WorkbenchRecord => ({
   state: normalizeState(record.id, record.state)
 });
 
-const toSummary = (record: WorkbenchRecord): WorkbenchSummary => {
+const parseJsonObject = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== 'string') return {};
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const parseTags = (value: unknown): string[] => {
+  if (!value || typeof value !== 'string') return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map((tag) => String(tag)).filter(Boolean) : [];
+  } catch {
+    return value
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+};
+
+const inferResourceGroup = (resource: any): keyof WorkbenchResourceGroups => {
+  const bindingRole = normalizeWorkbenchResourceRole(resource.workbenchBindings?.[0]?.role) || 'file';
+  const resourceType = normalizeWorkbenchResourceRole(resource.resourceType) || 'file';
+  const category = String(resource.fileCategory || '').toLowerCase();
+
+  if (bindingRole === 'generated' || resourceType === 'generated' || category.includes('generated')) {
+    return 'generated';
+  }
+
+  if (
+    bindingRole === 'source' ||
+    resourceType === 'source' ||
+    category.includes('source') ||
+    category.includes('web')
+  ) {
+    return 'sources';
+  }
+
+  return 'files';
+};
+
+const inferBindingRole = (resource: any) => {
+  const normalizedType = normalizeWorkbenchResourceRole(resource.resourceType) || 'file';
+  if (normalizedType === 'source' || normalizedType === 'generated' || normalizedType === 'artifact') {
+    return normalizedType;
+  }
+  return 'file';
+};
+
+const mapFileResource = (resource: any) => ({
+  id: resource.id,
+  name: resource.name,
+  path: resource.path,
+  type: resource.resourceType || resource.fileCategory || resource.nodeType || 'file',
+  isBinary: Boolean(resource.isBinary),
+  resourceType: resource.resourceType,
+  scope: resource.scope,
+  origin: resource.origin,
+  ownerWorkbenchId: resource.ownerWorkbenchId,
+  metadata: parseJsonObject(resource.metadataJson),
+  tags: parseTags(resource.tags),
+  extension: resource.extension,
+  mimeType: resource.mimeType,
+  fileCategory: resource.fileCategory
+});
+
+const toSummary = (record: WorkbenchRecord, resourceCount = 0): WorkbenchSummary => {
   const normalizedRecord = normalizeRecord(record);
 
   return {
     id: normalizedRecord.id,
     workspaceId: normalizedRecord.workspaceId,
     title: normalizedRecord.title,
-    description: normalizedRecord.description,
+    description: cleanUserFacingDescription(normalizedRecord.description),
     rootPath: normalizedRecord.rootPath,
     createdAt: normalizedRecord.createdAt,
     updatedAt: normalizedRecord.updatedAt,
     lastOpenedAt: normalizedRecord.lastOpenedAt,
-    panelCount: normalizedRecord.state.editors.length
+    panelCount: normalizedRecord.state.editors.length,
+    resourceCount
   };
 };
 
 export class WorkbenchService {
+  private async inferUserFacingTitle(workspaceId: string, payload: WorkbenchPayload, fallback = '课程学习整理') {
+    if (!isGenericWorkbenchTitle(payload.title)) {
+      return meaningfulTitleFromText(payload.title || '', fallback);
+    }
+
+    if (payload.description?.trim()) {
+      return meaningfulTitleFromText(payload.description, fallback);
+    }
+
+    const [latestTrace, latestEvent, latestFile] = await Promise.all([
+      prisma.learningTrace.findFirst({
+        where: { workspaceId },
+        orderBy: { updatedAt: 'desc' },
+        select: { summary: true, nextActionsJson: true }
+      }),
+      prisma.learningEvent.findFirst({
+        where: { workspaceId },
+        orderBy: { createdAt: 'desc' },
+        select: { payloadJson: true, eventType: true }
+      }),
+      prisma.fileSystemObject.findFirst({
+        where: { workspaceId, nodeType: 'file' },
+        orderBy: { updatedAt: 'desc' },
+        select: { name: true }
+      })
+    ]);
+
+    const eventSeed = (() => {
+      if (!latestEvent?.payloadJson) return '';
+      try {
+        return JSON.stringify(JSON.parse(latestEvent.payloadJson));
+      } catch {
+        return latestEvent.payloadJson;
+      }
+    })();
+
+    return meaningfulTitleFromText(
+      latestTrace?.summary || latestTrace?.nextActionsJson || eventSeed || latestFile?.name || fallback,
+      fallback
+    );
+  }
+
+  private async hydrateUserFacingTitle(record: WorkbenchRecord): Promise<WorkbenchRecord> {
+    if (!isGenericWorkbenchTitle(record.title)) return record;
+
+    const title = await this.inferUserFacingTitle(record.workspaceId, { title: record.title, description: record.description });
+    if (!title || title === record.title) return record;
+
+    return workbenchRepository.save({
+      ...record,
+      title,
+      updatedAt: record.updatedAt
+    });
+  }
+
   private async ensureWorkbenchRootFolder(workspaceId: string, rootPath: string) {
     const normalizedPath = rootPath.startsWith('/') ? rootPath : `/${rootPath}`;
     const segments = normalizedPath.split('/').filter(Boolean);
@@ -333,16 +569,16 @@ export class WorkbenchService {
   }
 
   private async createWorkbenchRootPath(workspaceId: string, title: string) {
-    const existingFolders = await prisma.fileSystemObject.findMany({
-      where: {
-        workspaceId,
-        parentId: null,
-        nodeType: 'folder'
-      },
-      select: { name: true }
+    const existingWorkbenches = await prisma.workbench.findMany({
+      where: { workspaceId },
+      select: { rootPath: true }
     });
 
-    const existingNames = new Set(existingFolders.map((folder) => folder.name));
+    const existingNames = new Set(
+      existingWorkbenches
+        .map((workbench) => workbench.rootPath?.replace(/^\/+/, ''))
+        .filter((name): name is string => Boolean(name))
+    );
     const rootFolderName = generateUniqueFilename(slugifyWorkbenchFolderName(title), existingNames);
 
     return `/${rootFolderName}`;
@@ -350,15 +586,24 @@ export class WorkbenchService {
 
   async listByWorkspace(workspaceId: string): Promise<WorkbenchSummary[]> {
     const records = await workbenchRepository.listByWorkspace(workspaceId);
-    return records.map(toSummary);
+    const hydrated = await Promise.all(records.map((record) => this.hydrateUserFacingTitle(record)));
+    const resourceCounts = await Promise.all(
+      hydrated.map(async (record) =>
+        getWorkbenchResourceFileIds({
+          workspaceId,
+          workbenchId: record.id
+        }).then((ids) => ids.length)
+      )
+    );
+    return hydrated.map((record, index) => toSummary(record, resourceCounts[index] || 0));
   }
 
   async getById(id: string, markOpened = false): Promise<WorkbenchRecord | null> {
     const record = await workbenchRepository.findById(id);
     if (!record) return null;
 
-    const normalizedRecord = normalizeRecord(record);
-    await this.ensureWorkbenchRootFolder(normalizedRecord.workspaceId, normalizedRecord.rootPath);
+    const titledRecord = await this.hydrateUserFacingTitle(record);
+    const normalizedRecord = normalizeRecord(titledRecord);
 
     if (!markOpened) {
       return normalizedRecord;
@@ -378,7 +623,7 @@ export class WorkbenchService {
   async create(workspaceId: string, payload: WorkbenchPayload): Promise<WorkbenchRecord> {
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
-    const title = payload.title?.trim() || 'Untitled Workbench';
+    const title = await this.inferUserFacingTitle(workspaceId, payload);
     const description = payload.description?.trim() || '';
     const rootPath = await this.createWorkbenchRootPath(workspaceId, title);
 
@@ -401,8 +646,107 @@ export class WorkbenchService {
       }
     };
 
-    await this.ensureWorkbenchRootFolder(workspaceId, rootPath);
     return workbenchRepository.save(record);
+  }
+
+  async getResourceGroups(id: string): Promise<WorkbenchResourceGroups | null> {
+    const workbench = await prisma.workbench.findUnique({
+      where: { id },
+      select: { id: true, workspaceId: true }
+    });
+    if (!workbench) return null;
+
+    const resources = await findWorkbenchResourceFiles({
+      workspaceId: workbench.workspaceId,
+      workbenchId: id,
+      include: {
+        workbenchBindings: {
+          where: { workbenchId: id },
+          orderBy: [{ orderIndex: 'asc' }, { updatedAt: 'desc' }]
+        }
+      },
+      orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }]
+    });
+
+    const groups: WorkbenchResourceGroups = {
+      sources: [],
+      files: [],
+      generated: []
+    };
+
+    resources
+      .sort((left: any, right: any) => {
+        const leftOrder = left.workbenchBindings?.[0]?.orderIndex ?? Number.MAX_SAFE_INTEGER;
+        const rightOrder = right.workbenchBindings?.[0]?.orderIndex ?? Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+        const leftUpdated = new Date(left.updatedAt).getTime();
+        const rightUpdated = new Date(right.updatedAt).getTime();
+        return rightUpdated - leftUpdated;
+      })
+      .forEach((resource) => {
+      groups[inferResourceGroup(resource)].push(mapFileResource(resource));
+      });
+
+    return groups;
+  }
+
+  async reorderResources(id: string, orderedIds: string[]): Promise<WorkbenchResourceGroups | null> {
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+      return this.getResourceGroups(id);
+    }
+
+    const workbench = await prisma.workbench.findUnique({
+      where: { id },
+      select: { id: true, workspaceId: true }
+    });
+    if (!workbench) return null;
+
+    const resources = await findWorkbenchResourceFiles({
+      workspaceId: workbench.workspaceId,
+      workbenchId: id
+    });
+    const scopedIds = new Set(resources.map((resource: any) => resource.id));
+    const filteredIds = Array.from(new Set(orderedIds.filter((item) => scopedIds.has(item))));
+    if (filteredIds.length === 0) return this.getResourceGroups(id);
+
+    await prisma.$transaction(
+      filteredIds.map((fileObjectId, index) =>
+        (prisma as any).workbenchResource.updateMany({
+          where: { workbenchId: id, fileObjectId },
+          data: { orderIndex: index }
+        })
+      )
+    );
+
+    const idsWithBinding = new Set(
+      (
+        await (prisma as any).workbenchResource.findMany({
+          where: { workbenchId: id, fileObjectId: { in: filteredIds } },
+          select: { fileObjectId: true }
+        })
+      ).map((item: any) => item.fileObjectId)
+    );
+
+    const missingIds = filteredIds.filter((fileObjectId) => !idsWithBinding.has(fileObjectId));
+    if (missingIds.length > 0) {
+      const missingResources = resources.filter((resource: any) => missingIds.includes(resource.id));
+      await prisma.$transaction(
+        missingResources.map((resource: any, index: number) =>
+          (prisma as any).workbenchResource.create({
+            data: {
+              workbenchId: id,
+              fileObjectId: resource.id,
+              role: inferBindingRole(resource),
+              source: resource.origin || 'local',
+              orderIndex: filteredIds.indexOf(resource.id),
+              metadataJson: JSON.stringify({})
+            }
+          })
+        )
+      );
+    }
+
+    return this.getResourceGroups(id);
   }
 
   async updateMetadata(id: string, payload: WorkbenchPayload): Promise<WorkbenchRecord | null> {

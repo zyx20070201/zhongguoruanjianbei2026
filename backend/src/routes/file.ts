@@ -4,11 +4,15 @@ import {
   getFileTree, getResources, initFileSystem, createFolder, createFile, renameNode,
   moveNode, deleteNode, copyNode, uploadFiles, downloadFile,
   getFileContent, saveFileContent, saveGeneratedContent, getFilePreviewInfo, streamFilePreview,
-  updateNodeTags, getDocumentStructure, importWebSource, extractWebSourcePreview, discoverWebSources
+  listWorkbenchNoteRevisions, revertWorkbenchNoteRevision,
+  updateNodeTags, getDocumentStructure, importWebSource, extractWebSourcePreview, discoverWebSources,
+  getVideoAnalysis, startVideoAnalysis, cancelVideoAnalysis, updateVideoAnalysis,
+  getResourceIntelligence, startResourceIntelligence
 } from '../controllers/fileController';
 import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
+import { requireAuth, requireWorkspaceAccess } from '../middleware/auth';
 
 const router = express.Router();
 
@@ -27,6 +31,8 @@ const tempStorage = multer.diskStorage({
 
 const upload = multer({ storage: tempStorage });
 
+router.use('/workspace/:workspaceId', requireAuth, requireWorkspaceAccess);
+
 // New File System API
 router.get('/workspace/:workspaceId/tree', getFileTree);
 router.get('/workspace/:workspaceId/resources', getResources);
@@ -36,6 +42,14 @@ router.post('/workspace/:workspaceId/file', createFile);
 router.post('/workspace/:workspaceId/import-url', importWebSource);
 router.post('/workspace/:workspaceId/extract-url-preview', extractWebSourcePreview);
 router.post('/workspace/:workspaceId/discover-sources', discoverWebSources);
+router.get('/workspace/:workspaceId/:fileObjectId/video-analysis', getVideoAnalysis);
+router.post('/workspace/:workspaceId/:fileObjectId/video-analysis', startVideoAnalysis);
+router.post('/workspace/:workspaceId/:fileObjectId/video-analysis/retry', startVideoAnalysis);
+router.post('/workspace/:workspaceId/:fileObjectId/video-analysis/cancel', cancelVideoAnalysis);
+router.patch('/workspace/:workspaceId/:fileObjectId/video-analysis', updateVideoAnalysis);
+router.get('/workspace/:workspaceId/:fileObjectId/resource-intelligence', getResourceIntelligence);
+router.post('/workspace/:workspaceId/:fileObjectId/resource-intelligence', startResourceIntelligence);
+router.post('/workspace/:workspaceId/:fileObjectId/resource-intelligence/retry', startResourceIntelligence);
 router.patch('/workspace/:workspaceId/rename', renameNode);
 router.patch('/workspace/:workspaceId/move', moveNode);
 router.patch('/workspace/:workspaceId/tags', updateNodeTags);
@@ -48,6 +62,8 @@ router.get('/workspace/:workspaceId/preview', streamFilePreview);
 router.get('/workspace/:workspaceId/document-structure', getDocumentStructure);
 router.get('/workspace/:workspaceId/content', getFileContent);
 router.put('/workspace/:workspaceId/content', saveFileContent);
+router.get('/workspace/:workspaceId/:fileObjectId/revisions', listWorkbenchNoteRevisions);
+router.post('/workspace/:workspaceId/:fileObjectId/revisions/revert', revertWorkbenchNoteRevision);
 router.post('/workspace/:workspaceId/generated', saveGeneratedContent);
 
 // Legacy endpoints (Deprecated - please use /workspace/:workspaceId/... endpoints)
