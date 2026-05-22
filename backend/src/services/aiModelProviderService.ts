@@ -51,6 +51,12 @@ const DEFAULT_SYSTEM_PROMPT = [
   '如果上下文不足，请明确指出还缺什么信息。'
 ].join('\n');
 
+const timeoutSignal = (timeoutMs?: number, fallbackMs = DEFAULT_TIMEOUT_MS) => {
+  const ms = timeoutMs === undefined || timeoutMs === null ? fallbackMs : Number(timeoutMs);
+  if (!Number.isFinite(ms) || ms <= 0) return undefined;
+  return AbortSignal.timeout(ms);
+};
+
 const clip = (value: string | undefined, maxLength = 12000) => {
   const text = String(value || '').trim();
   return text.length > maxLength ? `${text.slice(0, maxLength)}\n\n[Content truncated]` : text;
@@ -85,6 +91,8 @@ const attachmentTextProjection = (attachments: ChatSessionAttachmentContext[] = 
         `Kind: ${attachment.kind}`,
         `Size: ${attachment.size} bytes`,
         attachment.textContent ? `Text content:\n${clip(attachment.textContent)}` : '',
+        attachment.summary ? `Summary:\n${clip(attachment.summary)}` : '',
+        attachment.parsedTextHash ? `Parsed text hash: ${attachment.parsedTextHash}` : '',
         !attachment.textContent && attachment.kind === 'image'
           ? 'Image payload is available only for multimodal providers. Text-only providers can see this metadata only.'
           : ''
@@ -146,6 +154,26 @@ const openaiApiMode = () => {
   return value === 'chat_completions' || value === 'chat-completions' || value === 'chat' ? 'chat_completions' : 'responses';
 };
 
+async function* streamJsonLines(response: Response): AsyncGenerator<any> {
+  if (!response.body) return;
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  for await (const chunk of response.body as any as AsyncIterable<Uint8Array>) {
+    buffer += decoder.decode(chunk, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || !line.startsWith('data:')) continue;
+      const payload = line.replace(/^data:\s*/, '');
+      if (payload === '[DONE]') return;
+      yield JSON.parse(payload);
+    }
+  }
+}
+
 class AiModelProviderService {
   provider(options?: ProviderChatOptions): AiModelProviderId {
     return options?.provider || configuredProvider(options?.useCase || 'chat');
@@ -169,6 +197,24 @@ class AiModelProviderService {
     if (provider === 'gemini') return Boolean(process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim());
     if (provider === 'claude') return Boolean(process.env.ANTHROPIC_API_KEY?.trim() || process.env.CLAUDE_API_KEY?.trim());
     return deepseekService.isConfigured();
+  }
+
+  configuredChatModels() {
+    const candidates: Array<{ provider: AiModelProviderId; model: string; configured: boolean }> = [
+      { provider: 'openai', model: this.model('openai', undefined, 'chat'), configured: this.isConfigured({ provider: 'openai', useCase: 'chat' }) },
+      { provider: 'gemini', model: this.model('gemini', undefined, 'chat'), configured: this.isConfigured({ provider: 'gemini', useCase: 'chat' }) },
+      { provider: 'claude', model: this.model('claude', undefined, 'chat'), configured: this.isConfigured({ provider: 'claude', useCase: 'chat' }) },
+      { provider: 'deepseek', model: this.model('deepseek', undefined, 'chat'), configured: this.isConfigured({ provider: 'deepseek', useCase: 'chat' }) }
+    ];
+    const seen = new Set<string>();
+    return candidates
+      .filter((item) => item.configured && item.model)
+      .filter((item) => {
+        const key = `${item.provider}:${item.model}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
   }
 
   private normalizeOptions(contextOrOptions?: ProviderChatOptions | Record<string, any>, maybeOptions?: ProviderChatOptions): ProviderChatOptions {
@@ -230,6 +276,19 @@ class AiModelProviderService {
       for await (const delta of deepseekService.chatStream(projectedMessages as any, undefined, { timeoutMs: options.timeoutMs })) {
         yield delta;
       }
+      return;
+    }
+
+    if (provider === 'openai') {
+      yield* this.openaiStream(messages, options);
+      return;
+    }
+    if (provider === 'gemini') {
+      yield* this.geminiStream(messages, options);
+      return;
+    }
+    if (provider === 'claude') {
+      yield* this.claudeStream(messages, options);
       return;
     }
 
@@ -328,7 +387,7 @@ class AiModelProviderService {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`
         },
-        signal: AbortSignal.timeout(options.timeoutMs || DEFAULT_TIMEOUT_MS),
+        signal: timeoutSignal(options.timeoutMs),
         body: JSON.stringify({
           model,
           messages: this.openaiChatCompletionMessages(messages, options),
@@ -348,7 +407,7 @@ class AiModelProviderService {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`
       },
-      signal: AbortSignal.timeout(options.timeoutMs || DEFAULT_TIMEOUT_MS),
+      signal: timeoutSignal(options.timeoutMs),
       body: JSON.stringify({
         model,
         instructions: options.systemPrompt || DEFAULT_SYSTEM_PROMPT,
@@ -362,6 +421,67 @@ class AiModelProviderService {
       data?.output?.flatMap((item: any) => item?.content || []).map((part: any) => part?.text || '').join('').trim();
     if (!reply) throw new Error('OpenAI returned an empty response');
     return { reply, model, provider: 'openai', usage: data?.usage || null };
+  }
+
+  private async *openaiStream(messages: ProviderChatMessage[], options: ProviderChatOptions): AsyncGenerator<string> {
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) throw new Error('OPENAI_API_KEY is not configured');
+    const model = this.model('openai', options.model, options.useCase || 'chat');
+    const baseUrl = providerBaseUrl('openai');
+
+    if (openaiApiMode() === 'chat_completions') {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        signal: timeoutSignal(options.timeoutMs),
+        body: JSON.stringify({
+          model,
+          messages: this.openaiChatCompletionMessages(messages, options),
+          temperature: 0.4,
+          stream: true
+        })
+      });
+      if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => null) as any;
+        throw new Error(data?.error?.message || `OpenAI request failed with status ${response.status}`);
+      }
+      for await (const data of streamJsonLines(response)) {
+        const delta = data?.choices?.[0]?.delta?.content;
+        if (delta) yield delta;
+      }
+      return;
+    }
+
+    const input = messages.map((message) => ({
+      role: message.role === 'assistant' ? 'assistant' : 'user',
+      content: this.openaiContentParts(message, options.attachments, options.visualEvidence)
+    }));
+    const response = await fetch(`${baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      signal: timeoutSignal(options.timeoutMs),
+      body: JSON.stringify({
+        model,
+        instructions: options.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+        input,
+        stream: true
+      })
+    });
+    if (!response.ok || !response.body) {
+      const data = await response.json().catch(() => null) as any;
+      throw new Error(data?.error?.message || `OpenAI request failed with status ${response.status}`);
+    }
+    for await (const data of streamJsonLines(response)) {
+      const delta = data?.delta || data?.item?.content?.[0]?.text || data?.response?.output_text_delta;
+      if (data?.type === 'response.output_text.delta' && typeof data.delta === 'string') yield data.delta;
+      else if (typeof delta === 'string') yield delta;
+    }
   }
 
   private openaiChatCompletionMessages(messages: ProviderChatMessage[], options: ProviderChatOptions) {
@@ -391,7 +511,7 @@ class AiModelProviderService {
         const imageUrl = dataUrlForAttachment(attachment);
         if (imageUrl) parts.push({ type: 'input_image', image_url: imageUrl });
       } else if (attachment.textContent) {
-        parts.push({ type: 'input_text', text: `Attachment ${attachment.name}:\n${clip(attachment.textContent)}` });
+        parts.push({ type: 'input_text', text: `Attachment ${attachment.name}:\n${clip([attachment.summary, attachment.textContent].filter(Boolean).join('\n\n'))}` });
       }
     });
     visualEvidence.forEach((item) => {
@@ -425,7 +545,7 @@ class AiModelProviderService {
     const response = await fetch(`${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(options.timeoutMs || DEFAULT_TIMEOUT_MS),
+      signal: timeoutSignal(options.timeoutMs),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: options.systemPrompt || DEFAULT_SYSTEM_PROMPT }] },
         contents
@@ -438,6 +558,34 @@ class AiModelProviderService {
     return { reply, model, provider: 'gemini', usage: data?.usageMetadata || null };
   }
 
+  private async *geminiStream(messages: ProviderChatMessage[], options: ProviderChatOptions): AsyncGenerator<string> {
+    const apiKey = process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim();
+    if (!apiKey) throw new Error('GEMINI_API_KEY is not configured');
+    const model = this.model('gemini', options.model, options.useCase || 'chat');
+    const contents = messages.map((message) => ({
+      role: message.role === 'assistant' ? 'model' : 'user',
+      parts: this.geminiParts(message, options.attachments, options.visualEvidence)
+    }));
+    const baseUrl = providerBaseUrl('gemini');
+    const response = await fetch(`${baseUrl}/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: timeoutSignal(options.timeoutMs),
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: options.systemPrompt || DEFAULT_SYSTEM_PROMPT }] },
+        contents
+      })
+    });
+    if (!response.ok || !response.body) {
+      const data = await response.json().catch(() => null) as any;
+      throw new Error(data?.error?.message || `Gemini request failed with status ${response.status}`);
+    }
+    for await (const data of streamJsonLines(response)) {
+      const delta = data?.candidates?.[0]?.content?.parts?.map((part: any) => part.text || '').join('');
+      if (delta) yield delta;
+    }
+  }
+
   private geminiParts(message: ProviderChatMessage, attachments: ChatSessionAttachmentContext[] = [], visualEvidence: VisualEvidenceItem[] = []) {
     const parts: any[] = [{ text: message.content }];
     if (message.role !== 'user') return parts;
@@ -446,7 +594,7 @@ class AiModelProviderService {
         const data = base64ForAttachment(attachment);
         if (data) parts.push({ inline_data: { mime_type: attachment.mimeType, data } });
       } else if (attachment.textContent) {
-        parts.push({ text: `Attachment ${attachment.name}:\n${clip(attachment.textContent)}` });
+        parts.push({ text: `Attachment ${attachment.name}:\n${clip([attachment.summary, attachment.textContent].filter(Boolean).join('\n\n'))}` });
       }
     });
     visualEvidence.forEach((item) => {
@@ -480,7 +628,7 @@ class AiModelProviderService {
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01'
       },
-      signal: AbortSignal.timeout(options.timeoutMs || DEFAULT_TIMEOUT_MS),
+      signal: timeoutSignal(options.timeoutMs),
       body: JSON.stringify({
         model,
         max_tokens: Number(process.env.CLAUDE_MAX_TOKENS || 4096),
@@ -500,6 +648,42 @@ class AiModelProviderService {
     return { reply, model, provider: 'claude', usage: data?.usage || null };
   }
 
+  private async *claudeStream(messages: ProviderChatMessage[], options: ProviderChatOptions): AsyncGenerator<string> {
+    const apiKey = process.env.ANTHROPIC_API_KEY?.trim() || process.env.CLAUDE_API_KEY?.trim();
+    if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
+    const model = this.model('claude', options.model, options.useCase || 'chat');
+    const baseUrl = providerBaseUrl('claude');
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      signal: timeoutSignal(options.timeoutMs),
+      body: JSON.stringify({
+        model,
+        max_tokens: Number(process.env.CLAUDE_MAX_TOKENS || 4096),
+        system: options.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+        stream: true,
+        messages: messages
+          .filter((message) => message.role !== 'system')
+          .map((message) => ({
+            role: message.role === 'assistant' ? 'assistant' : 'user',
+            content: this.claudeContentParts(message, options.attachments, options.visualEvidence)
+          }))
+      })
+    });
+    if (!response.ok || !response.body) {
+      const data = await response.json().catch(() => null) as any;
+      throw new Error(data?.error?.message || `Claude request failed with status ${response.status}`);
+    }
+    for await (const data of streamJsonLines(response)) {
+      const delta = data?.delta?.text;
+      if (data?.type === 'content_block_delta' && delta) yield delta;
+    }
+  }
+
   private claudeContentParts(message: ProviderChatMessage, attachments: ChatSessionAttachmentContext[] = [], visualEvidence: VisualEvidenceItem[] = []) {
     const parts: any[] = [{ type: 'text', text: message.content }];
     if (message.role !== 'user') return parts;
@@ -517,7 +701,7 @@ class AiModelProviderService {
           });
         }
       } else if (attachment.textContent) {
-        parts.push({ type: 'text', text: `Attachment ${attachment.name}:\n${clip(attachment.textContent)}` });
+        parts.push({ type: 'text', text: `Attachment ${attachment.name}:\n${clip([attachment.summary, attachment.textContent].filter(Boolean).join('\n\n'))}` });
       }
     });
     visualEvidence.forEach((item) => {

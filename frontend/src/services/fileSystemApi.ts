@@ -453,6 +453,13 @@ export const fileSystemApi = {
     return response.data;
   },
 
+  discoverSourcesGlobal: async (
+    data: { query: string; maxResults?: number; provider?: 'auto' | 'exa' | 'tavily' }
+  ): Promise<SourceDiscoveryResult> => {
+    const response = await client.post('/files/discover-sources', data, { timeout: RESOURCE_REQUEST_TIMEOUT_MS });
+    return response.data;
+  },
+
   getVideoAnalysis: async (workspaceId: string, id: string): Promise<VideoAnalysis> => {
     const response = await client.get(`/files/workspace/${workspaceId}/${id}/video-analysis`, { timeout: 30000 });
     return response.data;

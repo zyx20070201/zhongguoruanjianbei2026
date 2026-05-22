@@ -32,7 +32,6 @@ import {
   RefreshCcw,
   RotateCcw,
   Search,
-  Send,
   SlidersHorizontal,
   Sparkles,
   ThumbsDown,
@@ -47,7 +46,13 @@ import {
   CircleHelp,
   ClipboardList,
   GitCompare,
-  Route
+  Route,
+  WandSparkles,
+  Hand,
+  ShieldCheck,
+  Shield,
+  Gauge,
+  ArrowUp
 } from 'lucide-react';
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -79,8 +84,7 @@ import {
   AiWelcomeContent,
   AiWelcomeSuggestion,
   AgentTimelineItem,
-  AiLockedSelectionContext,
-  AiSourceInspectorItem
+  AiLockedSelectionContext
 } from '../../services/aiApi';
 import MarkdownPreview from './MarkdownPreview';
 import SyntaxHighlightedCode from './SyntaxHighlightedCode';
@@ -99,6 +103,30 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 const previewInfoCache = new Map<string, FilePreviewInfo>();
 const documentStructureCache = new Map<string, RenderableDocument>();
 const webPreviewCache = new Map<string, WebPreviewData>();
+
+type WorkbenchContextSelectionActionDetail = {
+  prompt?: string;
+  fileId?: string;
+  fileName?: string;
+  page?: number;
+  text?: string;
+  selectedRange?: Record<string, any>;
+  panelId?: string;
+  panelType?: string;
+  sourceLabel?: string;
+};
+
+type DroppedContextSelection = {
+  id: string;
+  fileId?: string | null;
+  fileName?: string;
+  panelId?: string;
+  panelType?: string;
+  sourceLabel?: string;
+  text: string;
+  selectedRange?: Record<string, any>;
+  createdAt: string;
+};
 
 const previewCacheKey = (workspaceId: string, resourceId: string) => `${workspaceId}:${resourceId}`;
 
@@ -821,7 +849,7 @@ function ResourcePanelShell({
       >
         <div className="min-h-0 overflow-hidden">{children}</div>
         {guideOpen && (
-        <aside className="hidden min-h-0 border-l border-[#eeeeeb] bg-[#f8f8f6] xl:block">
+        <aside className="min-h-0 border-t border-[#eeeeeb] bg-[#f8f8f6] xl:border-l xl:border-t-0">
           {guidePanel ? (
             guidePanel({
               collapsed: false,
@@ -1072,6 +1100,7 @@ function VideoLearningPanel({
         ? {
             timestampStart: range.start,
             timestampEnd: range.end,
+            segmentIds: range.segmentIds,
             textLength: selectedText.length,
             sourceType: 'video_selection'
           }
@@ -1083,6 +1112,29 @@ function VideoLearningPanel({
       visibleContent: contextLines,
       approxChunkIndex: Math.max(0, Math.floor(currentTime / 30))
     });
+  };
+
+  const startVideoDrag = (
+    event: React.DragEvent<HTMLElement>,
+    payload: {
+      text: string;
+      selectedRange: Record<string, any>;
+      label: string;
+    }
+  ) => {
+    const detail: WorkbenchContextSelectionActionDetail = {
+      fileId: resource.id,
+      fileName: analysis?.title || resource.name,
+      panelId: editorId,
+      panelType: 'video',
+      sourceLabel: payload.label,
+      selectedRange: payload.selectedRange,
+      text: payload.text,
+      prompt: '请基于我拖入的视频内容回答：'
+    };
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('application/x-workbench-context-selection', JSON.stringify(detail));
+    event.dataTransfer.setData('text/plain', payload.text);
   };
 
   useEffect(() => {
@@ -1114,22 +1166,9 @@ function VideoLearningPanel({
     return () => window.removeEventListener('workbench:jump-to-citation', handleJump);
   }, [resource.id, transcript, onSeek]);
 
-  const selectTranscriptRange = (segment: TranscriptSegment, extend = false) => {
-    if (!extend || !rangeAnchorId) {
-      setRangeAnchorId(segment.id);
-      setSelectedRange({ start: segment.start, end: segment.end, segmentIds: [segment.id] });
-      return;
-    }
-    const anchorIndex = transcript.findIndex((item) => item.id === rangeAnchorId);
-    const currentIndex = transcript.findIndex((item) => item.id === segment.id);
-    if (anchorIndex < 0 || currentIndex < 0) return;
-    const [from, to] = anchorIndex <= currentIndex ? [anchorIndex, currentIndex] : [currentIndex, anchorIndex];
-    const items = transcript.slice(from, to + 1);
-    setSelectedRange({
-      start: items[0]?.start ?? segment.start,
-      end: items[items.length - 1]?.end ?? segment.end,
-      segmentIds: items.map((item) => item.id)
-    });
+  const selectTranscriptRange = (segment: TranscriptSegment) => {
+    setRangeAnchorId(segment.id);
+    setSelectedRange({ start: segment.start, end: segment.end, segmentIds: [segment.id] });
   };
 
   const clearRange = () => {
@@ -1443,20 +1482,6 @@ function VideoLearningPanel({
           </div>
         ) : (
             <section ref={trackRef} className="min-w-0">
-              {selectedRange && (
-	                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-y border-[#d7dcf4] bg-[#f7f8ff] px-3 py-2 text-xs text-[#4b4f55]">
-                  <div>
-                    <span className="font-semibold text-[#202124]">Context chip</span>
-                    <span className="ml-2 font-semibold text-[rgb(46,113,236)]">{videoRangeText(selectedRange.start, selectedRange.end)}</span>
-                    <span className="ml-2 text-[#777a80]">{selectedRange.segmentIds.length} transcript lines selected</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <button type="button" onClick={() => publishVideoContext(selectedRange)} className="bg-[#202124] px-3 py-1.5 font-medium text-white">Use in AI</button>
-                    <button type="button" onClick={clearRange} className="border border-[#d7d7d2] bg-white px-3 py-1.5 font-medium text-[#5f6368]">Clear</button>
-                  </div>
-                </div>
-              )}
-
               {activeTrack === 'learning' && (
                 <div className="space-y-4">
             {analysis.manualRevision && (
@@ -1485,7 +1510,24 @@ function VideoLearningPanel({
               <p className="text-sm leading-7 text-[#777a80]">No summary is available yet.</p>
             )}
                   {activeChapter && (
-                    <button type="button" onClick={() => seekTo(activeChapter.start)} className={`${notionRowClass} border-y border-[#e1e1de]`}>
+                    <button
+                      type="button"
+                      draggable
+                      onDragStart={(event) => {
+                        startVideoDrag(event, {
+                          text: `[${videoRangeText(activeChapter.start, activeChapter.end)}] ${activeChapter.title}${activeChapter.summary ? `\n${activeChapter.summary}` : ''}`,
+                          selectedRange: {
+                            timestampStart: activeChapter.start,
+                            timestampEnd: activeChapter.end,
+                            sourceType: 'video_chapter',
+                            textLength: `${activeChapter.title}${activeChapter.summary || ''}`.length
+                          },
+                          label: '视频章节'
+                        });
+                      }}
+                      onClick={() => seekTo(activeChapter.start)}
+                      className={`${notionRowClass} border-y border-[#e1e1de]`}
+                    >
                       <div className="flex items-center justify-between gap-2">
                         <div className="text-xs font-semibold uppercase tracking-wide text-[#777a80]">Current chapter</div>
                         <span className="text-xs font-semibold text-[rgb(46,113,236)]">{videoRangeText(activeChapter.start, activeChapter.end)}</span>
@@ -1501,7 +1543,33 @@ function VideoLearningPanel({
                         const src = slide.imageUrl || (slide.imageFileId ? fileSystemApi.downloadUrl(workspaceId, slide.imageFileId) : '');
                         const active = slide.id === activeSlide?.id;
                         return (
-	                          <button key={slide.id} type="button" onClick={() => seekTo(slide.timestamp)} className={`${notionRowClass} grid grid-cols-[96px_1fr] gap-3 ${active ? notionActiveRowClass : ''}`}>
+	                          <button
+                              key={slide.id}
+                              type="button"
+                              draggable
+                              onDragStart={(event) => {
+                                const transcriptText = (slide.transcriptSegmentIds || [])
+                                  .map((segmentId) => analysis.transcript.find((segment) => segment.id === segmentId))
+                                  .filter(Boolean)
+                                  .slice(0, 2)
+                                  .map((segment) => segment?.text)
+                                  .filter(Boolean)
+                                  .join(' ');
+                                startVideoDrag(event, {
+                                  text: `[${formatVideoTime(slide.timestamp)}] ${slide.title || 'Slide'}${slide.ocrText ? `\nOCR: ${slide.ocrText}` : ''}${transcriptText ? `\n${transcriptText}` : ''}`,
+                                  selectedRange: {
+                                    timestampStart: slide.timestamp,
+                                    timestampEnd: slide.timestamp,
+                                    sourceType: 'video_slide',
+                                    chapterId: slide.chapterId,
+                                    textLength: `${slide.title || ''}${slide.ocrText || ''}`.length
+                                  },
+                                  label: '视频幻灯片'
+                                });
+                              }}
+                              onClick={() => seekTo(slide.timestamp)}
+                              className={`${notionRowClass} grid grid-cols-[96px_1fr] gap-3 ${active ? notionActiveRowClass : ''}`}
+                            >
                             {src ? <img src={src} alt={slide.title || 'Video frame'} className="aspect-video w-full bg-[#f6f6f4] object-cover" /> : <div className="flex aspect-video w-full items-center justify-center bg-[#f6f6f4] text-xs text-[#777a80]">Frame</div>}
                             <div className="min-w-0 text-xs">
                               <div className="font-semibold text-[rgb(46,113,236)]">{formatVideoTime(slide.timestamp)}</div>
@@ -1527,9 +1595,23 @@ function VideoLearningPanel({
                           <button
                             key={segment.id}
                             type="button"
+                            draggable
+                            onDragStart={(event) => {
+                              startVideoDrag(event, {
+                                text: `[${videoRangeText(segment.start, segment.end)}] ${segment.text}`,
+                                selectedRange: {
+                                  timestampStart: segment.start,
+                                  timestampEnd: segment.end,
+                                  segmentIds: [segment.id],
+                                  sourceType: 'video_transcript',
+                                  textLength: segment.text.length
+                                },
+                                label: '视频字幕'
+                              });
+                            }}
                             onClick={(event) => {
                               seekTo(segment.start);
-                              selectTranscriptRange(segment, event.shiftKey);
+                              selectTranscriptRange(segment);
                             }}
 	                            className={`${notionRowClass} grid grid-cols-[88px_1fr] gap-3 ${
 	                              active ? notionActiveRowClass : selected ? 'bg-[#f7f8ff]' : ''
@@ -1546,7 +1628,26 @@ function VideoLearningPanel({
                   {activeKeyPoints.length > 0 && (
 	                    <div className={notionListClass}>
                       {activeKeyPoints.map((point) => (
-	                        <button key={point.id} type="button" onClick={() => seekTo(point.timestamps[0] ?? point.sourceRange?.start)} className={notionRowClass}>
+	                        <button
+                            key={point.id}
+                            type="button"
+                            draggable
+                            onDragStart={(event) => {
+                              const ts = point.timestamps[0] ?? point.sourceRange?.start ?? 0;
+                              startVideoDrag(event, {
+                                text: `[${point.timestamps.map(formatVideoTime).join(', ')}] ${point.concept}\n${point.explanation}`,
+                                selectedRange: {
+                                  timestampStart: point.sourceRange?.start ?? ts,
+                                  timestampEnd: point.sourceRange?.end ?? ts,
+                                  sourceType: 'video_key_point',
+                                  textLength: `${point.concept}${point.explanation}`.length
+                                },
+                                label: '视频关键点'
+                              });
+                            }}
+                            onClick={() => seekTo(point.timestamps[0] ?? point.sourceRange?.start)}
+                            className={notionRowClass}
+                          >
                           <div className="flex items-center justify-between gap-2">
                             <div className="text-sm font-semibold text-[#25272b]">{point.concept}</div>
                             <ConfidenceBadge confidence={point.confidence} edited={point.manuallyEdited} />
@@ -1564,6 +1665,20 @@ function VideoLearningPanel({
                     key={point.id}
                     role="button"
                     tabIndex={0}
+                    draggable
+                    onDragStart={(event) => {
+                      const ts = point.timestamps[0] ?? point.sourceRange?.start ?? 0;
+                      startVideoDrag(event, {
+                        text: `[${point.timestamps.map(formatVideoTime).join(', ')}] ${point.concept}\n${point.explanation}`,
+                        selectedRange: {
+                          timestampStart: point.sourceRange?.start ?? ts,
+                          timestampEnd: point.sourceRange?.end ?? ts,
+                          sourceType: 'video_key_point',
+                          textLength: `${point.concept}${point.explanation}`.length
+                        },
+                        label: '视频关键点'
+                      });
+                    }}
                     onClick={() => point.timestamps[0] != null && seekTo(point.timestamps[0])}
                     onKeyDown={(event) => {
                       if ((event.key === 'Enter' || event.key === ' ') && point.timestamps[0] != null) {
@@ -1595,7 +1710,27 @@ function VideoLearningPanel({
                         <div className="mt-1 text-xs leading-5 text-[#5f6368]">{point.explanation}</div>
                       </>
                     )}
-                    {point.timestamps.length > 0 && <div className="mt-2 text-xs font-medium text-[rgb(46,113,236)]">{point.timestamps.map(formatVideoTime).join(', ')}</div>}
+                    {point.timestamps.length > 0 && (
+                      <div
+                        draggable
+                        onDragStart={(event) => {
+                          const ts = point.timestamps[0] ?? point.sourceRange?.start ?? 0;
+                          startVideoDrag(event, {
+                            text: `[${point.timestamps.map(formatVideoTime).join(', ')}] ${point.concept}\n${point.explanation}`,
+                            selectedRange: {
+                              timestampStart: point.sourceRange?.start ?? ts,
+                              timestampEnd: point.sourceRange?.end ?? ts,
+                              sourceType: 'video_key_point',
+                              textLength: `${point.concept}${point.explanation}`.length
+                            },
+                            label: '视频关键点'
+                          });
+                        }}
+                        className="mt-2 text-xs font-medium text-[rgb(46,113,236)]"
+                      >
+                        {point.timestamps.map(formatVideoTime).join(', ')}
+                      </div>
+                    )}
                     {!editing && <EvidenceList evidence={point.evidenceSegments} />}
                   </div>
                 ))}
@@ -1612,6 +1747,20 @@ function VideoLearningPanel({
                 <button
                   key={chapter.id}
                   type="button"
+                  draggable
+                  onDragStart={(event) => {
+                    const end = chapter.end ?? chapters[index + 1]?.start;
+                    startVideoDrag(event, {
+                      text: `[${videoRangeText(chapter.start, end)}] ${chapter.title}${chapter.summary ? `\n${chapter.summary}` : ''}`,
+                      selectedRange: {
+                        timestampStart: chapter.start,
+                        timestampEnd: end,
+                        sourceType: 'video_chapter',
+                        textLength: `${chapter.title}${chapter.summary || ''}`.length
+                      },
+                      label: '视频章节'
+                    });
+                  }}
                   onClick={() => seekTo(chapter.start)}
 	                  className={`${notionRowClass} ${
 	                    active ? notionActiveRowClass : ''
@@ -1636,14 +1785,28 @@ function VideoLearningPanel({
               {activeTrack === 'transcript' && (
 	          <div className={notionListClass}>
             {analysis.transcript.length ? analysis.transcript.map((segment) => (
-              <button
-                key={segment.id}
-                type="button"
-                onClick={(event) => {
-                  seekTo(segment.start);
-                  selectTranscriptRange(segment, event.shiftKey);
-                }}
-	                className={`${notionRowClass} grid grid-cols-[96px_1fr] gap-3 py-2 ${
+                <button
+                  key={segment.id}
+                  type="button"
+                  draggable
+                  onDragStart={(event) => {
+                  startVideoDrag(event, {
+                    text: `[${videoRangeText(segment.start, segment.end)}] ${segment.text}`,
+                    selectedRange: {
+                      timestampStart: segment.start,
+                      timestampEnd: segment.end,
+                      segmentIds: [segment.id],
+                      sourceType: 'video_transcript',
+                      textLength: segment.text.length
+                    },
+                    label: '视频字幕'
+                  });
+                  }}
+                  onClick={(event) => {
+                    seekTo(segment.start);
+                    selectTranscriptRange(segment);
+                  }}
+	                  className={`${notionRowClass} grid grid-cols-[96px_1fr] gap-3 py-2 ${
 	                  activeTranscript?.id === segment.id ? notionActiveRowClass : selectedRange?.segmentIds.includes(segment.id) ? 'bg-[#f7f8ff]' : ''
 	                }`}
               >
@@ -1669,6 +1832,21 @@ function VideoLearningPanel({
                 <button
                   key={slide.id}
                   type="button"
+                  draggable
+                  onDragStart={(event) => {
+                    const transcriptText = transcript.map((segment) => segment?.text).filter(Boolean).join(' ');
+                    startVideoDrag(event, {
+                      text: `[${formatVideoTime(slide.timestamp)}] ${slide.title || 'Slide'}${slide.ocrText ? `\nOCR: ${slide.ocrText}` : ''}${transcriptText ? `\n${transcriptText}` : ''}`,
+                      selectedRange: {
+                        timestampStart: slide.timestamp,
+                        timestampEnd: slide.timestamp,
+                        sourceType: 'video_slide',
+                        chapterId: slide.chapterId,
+                        textLength: `${slide.title || ''}${slide.ocrText || ''}${transcriptText}`.length
+                      },
+                      label: '视频幻灯片'
+                    });
+                  }}
                   onClick={() => seekTo(slide.timestamp)}
 	                  className={`${notionRowClass} grid grid-cols-[104px_1fr] gap-3 py-2 ${activeSlide?.id === slide.id ? notionActiveRowClass : ''}`}
                 >
@@ -1892,6 +2070,119 @@ const confidenceClass = (confidence?: string) => {
   return 'border-rose-200 bg-rose-50 text-rose-700';
 };
 
+const timelineStageMeta: Record<string, { label: string; hint: string }> = {
+  ContextService: { label: 'Read the workbench context', hint: 'Collected the active file, visible panel, selection, and attachments.' },
+  ProfileAgent: { label: 'Checked learner context', hint: 'Loaded recent focus and lightweight learning preferences.' },
+  RetrievalAgent: { label: 'Searched relevant material', hint: 'Pulled matching notes, resources, and recent conversation context.' },
+  ExplainAgent: { label: 'Drafted the answer', hint: 'Generated the response from the current question and selected context.' },
+  QualityAgent: { label: 'Checked answer quality', hint: 'Reviewed grounding, relevance, and risk before the final reply.' },
+  'ProfileAgent.update': { label: 'Updated learner context', hint: 'Refreshed recent focus signals for future answers.' },
+  'LearnerStateAnalyzer.chat': { label: 'Refreshed learning signals', hint: 'Extracted low-confidence study signals for the learner state.' },
+  'ConversationHistory.saveTurn': { label: 'Saved the turn', hint: 'Stored the conversation for future workbench chats.' }
+};
+
+const timelineDisplayLabel = (item: AgentTimelineItem) => timelineStageMeta[item.agentName]?.label || item.agentName;
+const timelineDisplayHint = (item: AgentTimelineItem) => timelineStageMeta[item.agentName]?.hint || item.inputSummary;
+
+const formatThinkingDuration = (timeline: AgentTimelineItem[]) => {
+  const durationMs = timeline.reduce((total, item) => total + Math.max(0, item.durationMs || 0), 0);
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  return `${seconds} second${seconds === 1 ? '' : 's'}`;
+};
+
+function ThinkingTrace({
+  timeline,
+  isActive,
+  open,
+  onToggle
+}: {
+  timeline: AgentTimelineItem[];
+  isActive: boolean;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  if (!isActive && timeline.length === 0) return null;
+  const activeStep = timeline.length ? timelineDisplayLabel(timeline[timeline.length - 1]) : 'Preparing context';
+  const title = isActive ? activeStep : `Thought for ${formatThinkingDuration(timeline)}`;
+
+  return (
+    <div className="mb-4">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="inline-flex items-center gap-2 rounded-full px-1 py-1 text-sm font-medium text-[#6b7280] hover:text-[#25272b]"
+        title="Show thinking trace"
+      >
+        {isActive ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
+        <span>{title}</span>
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+      </button>
+      {open && (
+        <div className="mt-2 max-w-xl rounded-2xl border border-[#e5e7eb] bg-[#fbfbfa] px-3 py-2">
+          <div className="space-y-2">
+            {timeline.length === 0 ? (
+              <div className="flex items-start gap-2 text-xs leading-5 text-[#6b7280]">
+                <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-[#a1a1aa]" />
+                Preparing context and choosing the next step.
+              </div>
+            ) : (
+              timeline.map((item, index) => (
+                <div key={`${item.agentName}-${item.durationMs}-${index}`} className="flex items-start gap-2 text-xs leading-5 text-[#5f6368]">
+                  <span
+                    className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                      item.status === 'failed' ? 'border-rose-200 bg-rose-50 text-rose-600' : 'border-[#d7e8d2] bg-[#f3faf1] text-[#16833a]'
+                    }`}
+                  >
+                    {item.status === 'failed' ? <X className="h-2.5 w-2.5" /> : <Check className="h-2.5 w-2.5" />}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="font-medium text-[#34373c]">{timelineDisplayLabel(item)}</div>
+                    <div className="text-[#7a7f87]">{timelineDisplayHint(item)}</div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MessageAttachmentStrip({ attachments }: { attachments?: AiChatAttachment[] }) {
+  if (!attachments?.length) return null;
+
+  return (
+    <div className="mt-3 grid max-w-[420px] gap-2">
+      {attachments.map((attachment) => (
+        <div
+          key={attachment.id}
+          className="flex min-w-0 items-center gap-2 rounded-2xl border border-black/5 bg-white/70 px-3 py-2 text-left shadow-sm"
+          title={`${attachment.name} · ${attachment.mimeType} · ${formatBytes(attachment.size)}`}
+        >
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[#f4f4f5] text-[#6b7280] ring-1 ring-inset ring-black/5">
+            {attachment.kind === 'image' && attachment.dataUrl ? (
+              <img src={attachment.dataUrl} alt={attachment.name} className="h-full w-full object-cover" />
+            ) : attachment.kind === 'image' ? (
+              <Image className="h-4 w-4" />
+            ) : (
+              <File className="h-4 w-4" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-medium text-[#25272b]">{attachment.name}</div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[#7a7f87]">
+              <span className="truncate">{attachment.mimeType}</span>
+              <span>·</span>
+              <span>{formatBytes(attachment.size)}</span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const sourceTypeLabel = (sourceType?: string) => {
   if (sourceType === 'selection') return '选区';
   if (sourceType === 'viewport') return '可见区域';
@@ -2109,19 +2400,19 @@ function SourcesCapsule({
   return (
     <div className="relative inline-flex max-w-full flex-col items-start">
       {open && (
-        <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(420px,calc(100vw-3rem))] rounded-2xl border border-[#e7e7e4] bg-white p-2 shadow-[0_18px_45px_rgba(0,0,0,0.12)]">
+        <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(420px,calc(100vw-3rem))] rounded-2xl border border-[#e7ece7] bg-white p-2 shadow-[0_18px_45px_rgba(15,23,42,0.10)]">
           {sources.map((source, index) => (
             <button
               key={`${source.fileId}:${source.label}:${source.sourceId || index}`}
               onClick={() => onOpenSource(source)}
-              className="flex w-full min-w-0 items-center gap-3 rounded-xl px-2.5 py-2 text-left text-sm text-[#34373c] hover:bg-[#f6f6f4]"
+              className="flex w-full min-w-0 items-center gap-3 rounded-xl px-2.5 py-2 text-left text-sm text-[#34373c] hover:bg-[#f6f8f5]"
             >
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{source.fileName || source.label}</span>
-                <span className="block truncate text-xs text-[#909399]">{source.label}</span>
+                <span className="block truncate text-[11px] text-[#7a7f87]">{source.label}</span>
               </span>
               {typeof source.score === 'number' && (
-                <span className="rounded-md bg-[#d8f5df] px-1.5 py-0.5 font-mono text-xs font-semibold text-[#126b32]">
+                <span className="rounded-full border border-[#d7e8d2] bg-[#f3faf1] px-2 py-0.5 font-mono text-[10px] font-semibold text-[#2f6c2f]">
                   {Math.round(source.score * 100) / 100}
                 </span>
               )}
@@ -2132,8 +2423,8 @@ function SourcesCapsule({
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className={`group inline-flex max-w-full items-center gap-2 rounded-full bg-[#f4f4f5] font-medium text-[#71717a] transition-colors hover:bg-[#ececee] hover:text-[#27272a] ${
-          compact ? 'px-3 py-1.5 text-xs' : 'px-4 py-2 text-sm'
+        className={`group inline-flex max-w-full items-center gap-2 rounded-full border border-[#e5e7eb] bg-[#fbfbfa] font-medium text-[#5f6368] transition-colors hover:border-[#d7e8d2] hover:bg-[#f7fbf6] hover:text-[#25272b] ${
+          compact ? 'px-3 py-1.5 text-[11px]' : 'px-4 py-2 text-sm'
         }`}
       >
         <span className="truncate">{label}</span>
@@ -2143,7 +2434,7 @@ function SourcesCapsule({
         <button
           type="button"
           onClick={() => onJump(first)}
-          className="absolute left-0 top-full mt-1 text-[11px] font-medium text-[#777a80] hover:text-[#202124]"
+          className="absolute left-0 top-full mt-1 text-[11px] font-medium text-[#6b7280] hover:text-[#25272b]"
         >
           跳转第一个来源
         </button>
@@ -2158,7 +2449,7 @@ const isTextLikeFile = (file: File) =>
     file.name
   );
 
-const MAX_INLINE_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+const MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 const inferChatAttachmentKind = (file: File): AiChatAttachment['kind'] => {
   const mimeType = file.type.toLowerCase();
@@ -2187,6 +2478,11 @@ const readFileAsDataUrl = (file: File) =>
   });
 
 const base64FromDataUrl = (dataUrl: string) => dataUrl.match(/^data:[^;]+;base64,(.+)$/)?.[1] || '';
+
+const stripAttachmentPayload = (attachment: AiChatAttachment): AiChatAttachment => {
+  const { dataUrl, base64Data, ...rest } = attachment;
+  return rest;
+};
 
 const fileFromChatAttachment = async (attachment: AiChatAttachment): Promise<File | null> => {
   if (attachment.textContent) {
@@ -3308,6 +3604,12 @@ function WebSourcePreview({
   const [activeUrl, setActiveUrl] = useState(url || '');
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractError, setExtractError] = useState('');
+  const [selectionMenu, setSelectionMenu] = useState<{
+    x: number;
+    y: number;
+    text: string;
+    selectedRange: Record<string, any>;
+  } | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const displayedTitle = previewData?.title || title;
   const displayedUrl = previewData?.url || activeUrl || url;
@@ -3395,6 +3697,87 @@ function WebSourcePreview({
     setActiveUrl(nextUrl);
   };
 
+  const readWebSelection = () => {
+    const element = scrollerRef.current;
+    const selection = window.getSelection();
+    if (!element || !selection || selection.rangeCount === 0) return null;
+    const selectedText = selection.toString().trim();
+    if (!selectedText) return null;
+    const range = selection.getRangeAt(0);
+    if (!element.contains(range.commonAncestorContainer)) return null;
+    const rect = range.getBoundingClientRect();
+    if (!rect.width && !rect.height) return null;
+    const normalizedSelection = selectedText.replace(/\s+/g, ' ');
+    const normalizedText = readableText.replace(/\s+/g, ' ');
+    const charStart = normalizedText.indexOf(normalizedSelection);
+    const lineStart = Math.max(1, readableText.slice(0, Math.max(0, charStart)).split('\n').length);
+    const lineEnd = lineStart + Math.max(0, selectedText.split('\n').length - 1);
+    const totalScrollable = Math.max(1, element.scrollHeight - element.clientHeight);
+    return {
+      selectedText,
+      selectedRange: {
+        sourceType: 'web_selection',
+        url: displayedUrl,
+        lineStart: charStart >= 0 ? lineStart : undefined,
+        lineEnd: charStart >= 0 ? lineEnd : undefined,
+        charStart: charStart >= 0 ? charStart : undefined,
+        charEnd: charStart >= 0 ? charStart + normalizedSelection.length : undefined,
+        textLength: selectedText.length,
+        scrollRatio: Math.min(1, Math.max(0, element.scrollTop / totalScrollable))
+      },
+      menu: {
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.max(12, Math.round(rect.top - 48))
+      }
+    };
+  };
+
+  const reportWebContext = () => {
+    const element = scrollerRef.current;
+    if (!resource?.id || !editorId || !onUpdateViewState || !element) return;
+    const totalScrollable = Math.max(1, element.scrollHeight - element.clientHeight);
+    const selectionLocator = readWebSelection();
+    const scrollRatio = Math.min(1, Math.max(0, element.scrollTop / totalScrollable));
+    const lineCount = Math.max(1, readableText.split('\n').length);
+    const approxLine = Math.max(1, Math.round(scrollRatio * lineCount));
+    if (selectionLocator) {
+      setSelectionMenu({
+        x: selectionLocator.menu.x,
+        y: selectionLocator.menu.y,
+        text: selectionLocator.selectedText,
+        selectedRange: selectionLocator.selectedRange
+      });
+    } else {
+      setSelectionMenu(null);
+    }
+    onUpdateViewState(editorId, {
+      scrollRatio,
+      approxChunkIndex: Math.max(0, approxLine - 1),
+      visibleLineRange: { start: approxLine, end: Math.min(lineCount, approxLine + 40) },
+      selectedText: selectionLocator?.selectedText || '',
+      selectedRange: selectionLocator?.selectedRange || null,
+      visibleContent: selectionLocator?.selectedText || readableText.slice(Math.max(0, approxLine - 1), approxLine + 2500)
+    });
+  };
+
+  const applyWebSelectionPrompt = (prompt: string) => {
+    if (!selectionMenu || !resource?.id) return;
+    window.dispatchEvent(
+      new CustomEvent('workbench:context-selection-action', {
+        detail: {
+          fileId: resource.id,
+          fileName: displayedTitle || resource.name,
+          panelId: editorId,
+          panelType: 'web',
+          sourceLabel: '网页选区',
+          selectedRange: selectionMenu.selectedRange,
+          text: selectionMenu.text,
+          prompt
+        } as WorkbenchContextSelectionActionDetail
+      })
+    );
+  };
+
   if (embed && resource) {
     return (
       <EmbeddedVideoSourcePreview
@@ -3426,7 +3809,25 @@ function WebSourcePreview({
   }
 
   return (
-    <div ref={scrollerRef} className="h-full overflow-auto bg-white px-6 py-5">
+    <div
+      ref={scrollerRef}
+      className="h-full overflow-auto bg-white px-6 py-5"
+      onScroll={reportWebContext}
+      onMouseUp={reportWebContext}
+      onKeyUp={reportWebContext}
+      onMouseEnter={reportWebContext}
+    >
+      {selectionMenu && (
+        <div
+          className="fixed z-50 flex items-center gap-1 rounded-full border border-[#d9d9d5] bg-[#202124] px-2 py-1 text-xs font-medium text-white shadow-[0_12px_35px_rgba(0,0,0,0.22)]"
+          style={{ left: selectionMenu.x, top: selectionMenu.y, transform: 'translateX(-50%)' }}
+        >
+          <button className="rounded-full px-2 py-1 hover:bg-white/15" onMouseDown={(event) => event.preventDefault()} onClick={() => applyWebSelectionPrompt('请解释我选中的这段网页内容')}>解释</button>
+          <button className="rounded-full px-2 py-1 hover:bg-white/15" onMouseDown={(event) => event.preventDefault()} onClick={() => applyWebSelectionPrompt('请总结我选中的这段网页内容')}>总结</button>
+          <button className="rounded-full px-2 py-1 hover:bg-white/15" onMouseDown={(event) => event.preventDefault()} onClick={() => applyWebSelectionPrompt('请基于我选中的网页内容回答：')}>提问</button>
+          <button className="rounded-full px-2 py-1 hover:bg-white/15" onMouseDown={(event) => event.preventDefault()} onClick={() => applyWebSelectionPrompt('__lock_context_selection__')}>锁定</button>
+        </div>
+      )}
       <div className="mx-auto max-w-5xl">
         <article className="min-w-0 text-[#25272b]">
           {richHtml.trim() ? (
@@ -4059,6 +4460,7 @@ export function AiEditorView({
   editor,
   workspaceId,
   aiContext,
+  resources = [],
   onUpdateViewState,
   onApplyNoteEdit,
   hideHeader = false,
@@ -4067,6 +4469,7 @@ export function AiEditorView({
   editor: EditorState;
   workspaceId: string;
   aiContext?: WorkbenchEditorContentProps['aiContext'];
+  resources?: ResourceReference[];
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
   onApplyNoteEdit?: (resourceId: string, content: string) => void | Promise<boolean | void>;
   hideHeader?: boolean;
@@ -4076,9 +4479,13 @@ export function AiEditorView({
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<AgentTimelineItem[]>([]);
+  const [thinkingTraceOpen, setThinkingTraceOpen] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [contextModeMenuOpen, setContextModeMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('');
   const [inspectedChipId, setInspectedChipId] = useState<string | null>(null);
-  const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [sourceModalSource, setSourceModalSource] = useState<CitationUiSource | null>(null);
   const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
@@ -4090,6 +4497,7 @@ export function AiEditorView({
   });
   const [isWelcomeLoading, setIsWelcomeLoading] = useState(false);
   const [welcomeError, setWelcomeError] = useState<string | null>(null);
+  const [availableModels, setAvailableModels] = useState<Array<{ provider: string; model: string }>>([]);
   const [applyingNoteEditKey, setApplyingNoteEditKey] = useState<string | null>(null);
   const [appliedNoteEditKey, setAppliedNoteEditKey] = useState<string | null>(null);
   const [noteEditPreview, setNoteEditPreview] = useState<{
@@ -4107,6 +4515,16 @@ export function AiEditorView({
   const [isRevertingRevision, setIsRevertingRevision] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedModelEntry = useMemo(
+    () => availableModels.find((item) => `${item.provider}:${item.model}` === selectedModel) || availableModels[0] || null,
+    [availableModels, selectedModel]
+  );
+  const openComposerMenu = (menu: 'attachment' | 'context' | 'model' | 'scope') => {
+    setAttachmentMenuOpen((open) => (menu === 'attachment' ? !open : false));
+    setContextModeMenuOpen((open) => (menu === 'context' ? !open : false));
+    setModelMenuOpen((open) => (menu === 'model' ? !open : false));
+    setDebugOpen((open) => (menu === 'scope' ? !open : false));
+  };
   const messages = useMemo(
     () => (Array.isArray(editor.viewState?.messages) ? editor.viewState.messages : []),
     [editor.viewState?.messages]
@@ -4118,7 +4536,11 @@ export function AiEditorView({
         : [],
     [editor.viewState?.chatSessionAttachments]
   );
-  const contextMode = ((editor.viewState?.contextMode as AiContextMode | undefined) || 'auto');
+  const storedContextMode = editor.viewState?.contextMode as AiContextMode | 'workspace' | undefined;
+  const contextMode: AiContextMode =
+    storedContextMode === 'workspace' || storedContextMode === 'selection_only'
+      ? 'auto'
+      : storedContextMode || 'auto';
   const hiddenChipIds = useMemo(
     () =>
       new Set(
@@ -4134,6 +4556,13 @@ export function AiEditorView({
         ? (editor.viewState.lockedContextSelection as AiLockedSelectionContext)
         : null,
     [editor.viewState?.lockedContextSelection]
+  );
+  const droppedContextSelections = useMemo(
+    () =>
+      Array.isArray(editor.viewState?.droppedContextSelections)
+        ? ((editor.viewState.droppedContextSelections as any[]) as DroppedContextSelection[])
+        : [],
+    [editor.viewState?.droppedContextSelections]
   );
   const persistentCitations = useMemo(
     () =>
@@ -4157,6 +4586,13 @@ export function AiEditorView({
         : [],
     [editor.viewState?.persistentCitations]
   );
+  const workbenchResourceFiles = useMemo(
+    () => resources.filter((item) => item.type !== 'folder').slice(0, 12),
+    [resources]
+  );
+  const resourceScopeLabel = workbenchResourceFiles.length
+    ? `资源范围：当前 Workbench ${workbenchResourceFiles.length} 个文件`
+    : '资源范围：当前 Workbench 暂无文件';
   const activePanelContext = useMemo(
     () =>
       aiContext?.openPanels?.find((panel) => panel.panelId === aiContext.activePanelId) ||
@@ -4222,42 +4658,57 @@ export function AiEditorView({
       window.clearTimeout(timer);
     };
   }, [aiContext, aiWelcomeSignature, messages.length]);
+
   useEffect(() => {
-    const handlePdfSelectionAction = (event: Event) => {
-      const detail = (event as CustomEvent).detail as
-        | { prompt?: string; fileId?: string; fileName?: string; page?: number; text?: string; selectedRange?: Record<string, any> }
-        | undefined;
+    const closeMenus = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-ai-composer-menu]')) return;
+      setAttachmentMenuOpen(false);
+      setContextModeMenuOpen(false);
+      setModelMenuOpen(false);
+      setDebugOpen(false);
+    };
+    window.addEventListener('mousedown', closeMenus);
+    return () => window.removeEventListener('mousedown', closeMenus);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void aiApi
+      .listModels()
+      .then((response) => {
+        if (cancelled) return;
+        setAvailableModels(Array.isArray(response.models) ? response.models : []);
+        if (Array.isArray(response.models) && response.models[0]?.model) {
+          setSelectedModel(`${response.models[0].provider}:${response.models[0].model}`);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableModels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    const handleSelectionAction = (event: Event) => {
+      const detail = (event as CustomEvent).detail as WorkbenchContextSelectionActionDetail | undefined;
       if (!detail?.prompt) return;
-      if (detail.prompt === '__lock_pdf_selection__' && detail.text) {
-        onUpdateViewState?.(editor.id, {
-          lockedContextSelection: {
-            id: `locked:${detail.fileId || 'pdf'}:${Date.now()}`,
-            panelId: activePanelContext?.panelId,
-            panelType: activePanelContext?.panelType || 'resource',
-            fileId: detail.fileId || activePanelContext?.fileId || null,
-            fileName: detail.fileName || activePanelContext?.fileName,
-            filePath: activePanelContext?.filePath,
-            content: detail.text,
-            locator: detail.selectedRange || {
-              page: detail.page,
-              pageStart: detail.page,
-              pageEnd: detail.page,
-              textLength: detail.text.length
-            },
-            createdAt: new Date().toISOString()
-          }
-        });
-        setInput('请基于我锁定的 PDF 选区回答：');
-        window.setTimeout(() => inputRef.current?.focus(), 0);
+      if ((detail.prompt === '__lock_pdf_selection__' || detail.prompt === '__lock_context_selection__') && detail.text) {
+        addDroppedContextSelection(detail);
         return;
       }
       setInput(detail.prompt);
       window.setTimeout(() => inputRef.current?.focus(), 0);
     };
 
-    window.addEventListener('workbench:pdf-selection-action', handlePdfSelectionAction);
-    return () => window.removeEventListener('workbench:pdf-selection-action', handlePdfSelectionAction);
-  }, [activePanelContext, editor.id, onUpdateViewState]);
+    window.addEventListener('workbench:pdf-selection-action', handleSelectionAction);
+    window.addEventListener('workbench:context-selection-action', handleSelectionAction);
+    return () => {
+      window.removeEventListener('workbench:pdf-selection-action', handleSelectionAction);
+      window.removeEventListener('workbench:context-selection-action', handleSelectionAction);
+    };
+  }, [activePanelContext, addDroppedContextSelection, editor.id, onUpdateViewState]);
 
   const contextChips = useMemo(() => {
     const chips: Array<{
@@ -4278,6 +4729,8 @@ export function AiEditorView({
       const locator = lockedSelection.locator || {};
       const loc = locator.page
         ? `第${locator.page}页`
+        : typeof locator.timestampStart === 'number'
+          ? `${formatVideoTime(locator.timestampStart)}${typeof locator.timestampEnd === 'number' ? `-${formatVideoTime(locator.timestampEnd)}` : ''}`
         : typeof locator.lineStart === 'number'
           ? `第${locator.lineStart}-${locator.lineEnd || locator.lineStart}行`
           : '锁定选区';
@@ -4295,6 +4748,10 @@ export function AiEditorView({
     if (selectedText && !lockedSelection?.content?.trim()) {
       const loc = selectedRange?.page
         ? `第${selectedRange.page}页`
+        : typeof selectedRange?.timestampStart === 'number'
+          ? `${formatVideoTime(selectedRange.timestampStart)}${typeof selectedRange.timestampEnd === 'number' ? `-${formatVideoTime(selectedRange.timestampEnd)}` : ''}`
+        : typeof selectedRange?.lineStart === 'number'
+          ? `第${selectedRange.lineStart}-${selectedRange.lineEnd || selectedRange.lineStart}行`
         : visiblePages[0]
           ? `第${visiblePages[0]}页`
         : lineRange
@@ -4311,6 +4768,12 @@ export function AiEditorView({
                 page: selectedRange.page,
                 pageStart: selectedRange.pageStart,
                 pageEnd: selectedRange.pageEnd,
+                timestampStart: selectedRange.timestampStart,
+                timestampEnd: selectedRange.timestampEnd,
+                segmentIds: selectedRange.segmentIds,
+                sourceType: selectedRange.sourceType,
+                lineStart: selectedRange.lineStart,
+                lineEnd: selectedRange.lineEnd,
                 charStart: selectedRange.charStart,
                 charEnd: selectedRange.charEnd,
                 rects: selectedRange.rects?.slice?.(0, 3)
@@ -4355,7 +4818,7 @@ export function AiEditorView({
       chips.push({
         id: 'scope:workbench',
         kind: 'resource_scope',
-        label: `资源范围：当前 Workbench ${resourceCount}个文件`,
+        label: `资源范围：当前 Workbench ${resourceCount} 个文件`,
         detail: (aiContext?.openPanels || [])
           .filter((panel) => panel.fileName)
           .map((panel) => panel.fileName)
@@ -4366,65 +4829,24 @@ export function AiEditorView({
     return chips.filter((chip) => !hiddenChipIds.has(chip.id));
   }, [activePanelContext, aiContext, hiddenChipIds, lockedSelection]);
   const inspectedChip = contextChips.find((chip) => chip.id === inspectedChipId) || null;
-  const pinnedContextChips = contextChips.filter((chip) => chip.kind === 'selection' || chip.kind === 'active_file');
+  const pinnedContextChips = [
+    ...droppedContextSelections.map((selection) => ({
+      id: selection.id,
+      kind: 'selection' as const,
+      label: (() => {
+        const locator = selection.selectedRange || {};
+        const timeLabel =
+          typeof locator.timestampStart === 'number'
+            ? `${formatVideoTime(locator.timestampStart)}${typeof locator.timestampEnd === 'number' && locator.timestampEnd !== locator.timestampStart ? `-${formatVideoTime(locator.timestampEnd)}` : ''}`
+            : '';
+        return [selection.sourceLabel || '引用', selection.fileName, timeLabel].filter(Boolean).join(' · ');
+      })(),
+      detail: selection.text,
+      selection
+    })),
+    ...contextChips.filter((chip) => chip.kind === 'active_file')
+  ];
   const menuContextChips = contextChips.filter((chip) => chip.kind !== 'selection' && chip.kind !== 'active_file');
-  const lastContextDebug = editor.viewState?.lastContextDebug as
-    | {
-        contextCapsule?: unknown;
-        contextPolicy?: unknown;
-        usedContextSummary?: unknown;
-      }
-    | undefined;
-  const lastCitations = useMemo(
-    () => ((lastContextDebug?.contextCapsule as any)?.citations || []) as Array<{
-      sourceId?: string;
-      fileId: string;
-      fileName: string;
-      label: string;
-      locator?: Record<string, any>;
-      confidence?: 'high' | 'medium' | 'low';
-      preview?: string;
-      supportSnippets?: Array<{ text: string; locator?: Record<string, any>; score?: number }>;
-      citationQuality?: {
-        supportCount?: number;
-        sourceCount?: number;
-        grounded?: boolean;
-      };
-    }>,
-    [lastContextDebug?.contextCapsule]
-  );
-  const sourceInspectorItems = useMemo(
-    () => (((lastContextDebug?.contextCapsule as any)?.sourceMap || []) as AiSourceInspectorItem[]),
-    [lastContextDebug?.contextCapsule]
-  );
-  const answerSources = useMemo(() => {
-    const sourceById = new Map(sourceInspectorItems.map((source) => [source.sourceId, source]));
-    const seen = new Set<string>();
-    return lastCitations
-      .map((citation, index) => {
-        const sourceId = citation.sourceId || `S${index + 1}`;
-        const richSource = sourceById.get(sourceId);
-        return {
-          ...citation,
-          ...richSource,
-          sourceId,
-          fileId: richSource?.fileId || citation.fileId,
-          fileName: richSource?.fileName || citation.fileName,
-          label: richSource?.label || citation.label,
-          locator: richSource?.locator || citation.locator,
-          confidence: richSource?.confidence || citation.confidence,
-          preview: richSource?.preview || citation.preview,
-          supportSnippets: richSource?.supportSnippets || citation.supportSnippets,
-          citationQuality: richSource?.citationQuality || citation.citationQuality
-        } as CitationUiSource;
-      })
-      .filter((source) => {
-        const key = `${source.fileId}:${source.label}:${source.sourceId}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-  }, [lastCitations, sourceInspectorItems]);
   const lastAssistantIndex = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       if (messages[index]?.role === 'assistant') return index;
@@ -4433,6 +4855,10 @@ export function AiEditorView({
   }, [messages]);
 
   const hideChip = (chipId: string) => {
+    if (chipId.startsWith('dropped:')) {
+      removeDroppedContextSelection(chipId);
+      return;
+    }
     const next = [...hiddenChipIds, chipId];
     onUpdateViewState?.(editor.id, { hiddenContextChipIds: next });
     if (inspectedChipId === chipId) setInspectedChipId(null);
@@ -4464,12 +4890,71 @@ export function AiEditorView({
     });
   };
 
+  function addDroppedContextSelection(detail: WorkbenchContextSelectionActionDetail) {
+    const content = String(detail.text || '').trim();
+    if (!content) return;
+    const nextSelection: DroppedContextSelection = {
+      id: `dropped:${detail.fileId || detail.panelId || 'context'}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+      panelId: detail.panelId || activePanelContext?.panelId,
+      panelType: detail.panelType || activePanelContext?.panelType || 'resource',
+      fileId: detail.fileId || activePanelContext?.fileId || null,
+      fileName: detail.fileName || activePanelContext?.fileName,
+      sourceLabel: detail.sourceLabel,
+      text: content,
+      selectedRange: detail.selectedRange || {
+        page: detail.page,
+        pageStart: detail.page,
+        pageEnd: detail.page,
+        textLength: content.length
+      },
+      createdAt: new Date().toISOString()
+    };
+    onUpdateViewState?.(editor.id, {
+      droppedContextSelections: [...droppedContextSelections, nextSelection].slice(-8)
+    });
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }
+
+  const removeDroppedContextSelection = (selectionId: string) => {
+    onUpdateViewState?.(editor.id, {
+      droppedContextSelections: droppedContextSelections.filter((selection) => selection.id !== selectionId)
+    });
+  };
+
   const clearLockedSelection = () => {
     onUpdateViewState?.(editor.id, { lockedContextSelection: null });
   };
 
   const setContextMode = (mode: AiContextMode) => {
     onUpdateViewState?.(editor.id, { contextMode: mode });
+  };
+
+  const buildDroppedSelectionContext = (): AiLockedSelectionContext | null => {
+    if (!droppedContextSelections.length) return null;
+    const first = droppedContextSelections[0];
+    return {
+      id: `dropped-context:${droppedContextSelections.map((selection) => selection.id).join('|')}`,
+      panelId: first.panelId,
+      panelType: first.panelType || 'video',
+      fileId: first.fileId || null,
+      fileName: first.fileName,
+      content: droppedContextSelections
+        .map((selection, index) => {
+          const locator = selection.selectedRange || {};
+          const timeLabel =
+            typeof locator.timestampStart === 'number'
+              ? `${formatVideoTime(locator.timestampStart)}${typeof locator.timestampEnd === 'number' && locator.timestampEnd !== locator.timestampStart ? `-${formatVideoTime(locator.timestampEnd)}` : ''}`
+              : '';
+          const label = [selection.sourceLabel || '引用', selection.fileName, timeLabel].filter(Boolean).join(' · ');
+          return `#${index + 1} ${label}\n${selection.text}`;
+        })
+        .join('\n\n'),
+      locator: {
+        sourceType: 'dropped_context_group',
+        textLength: droppedContextSelections.reduce((sum, selection) => sum + selection.text.length, 0)
+      },
+      createdAt: new Date().toISOString()
+    };
   };
 
   const jumpToCitation = (citation: { fileId: string; locator?: Record<string, any>; sourceId?: string; preview?: string }) => {
@@ -4520,7 +5005,6 @@ export function AiEditorView({
       const separator = current && !current.endsWith(' ') ? ' ' : '';
       return `${current}${separator}${value} `;
     });
-    setContextMenuOpen(false);
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
 
@@ -4550,7 +5034,7 @@ export function AiEditorView({
           };
         }
 
-        if (kind === 'image' && file.size <= MAX_INLINE_IMAGE_ATTACHMENT_BYTES) {
+        if (file.size <= MAX_INLINE_ATTACHMENT_BYTES) {
           const dataUrl = await readFileAsDataUrl(file);
           return {
             ...baseAttachment,
@@ -4565,8 +5049,8 @@ export function AiEditorView({
           status: 'metadata_only',
           error:
             kind === 'image'
-              ? '图片超过 4MB，当前仅保留附件元数据。'
-              : '该文件类型尚未在 Chat 附件中提取正文；可保存到 Workbench 后走资源索引。'
+              ? '图片超过 8MB，当前仅保留附件元数据。'
+              : '该文件超过 8MB，当前仅保留附件元数据；可保存到 Workbench 后走资源索引。'
         };
       })
     );
@@ -4670,12 +5154,14 @@ export function AiEditorView({
     const createdAt = new Date().toISOString();
 
     const previousMessages = [...baseMessages] as AiChatMessage[];
+    const pendingAttachments = chatSessionAttachments.map((attachment) => ({ ...attachment }));
+    const messageAttachments = pendingAttachments.map(stripAttachmentPayload);
     const nextMessages: AiChatMessage[] = [
       ...previousMessages,
-      { role: 'user', content: userContent, createdAt }
+      { role: 'user', content: userContent, createdAt, attachments: messageAttachments }
     ];
 
-    onUpdateViewState?.(editor.id, { messages: nextMessages });
+    onUpdateViewState?.(editor.id, { messages: nextMessages, chatSessionAttachments: [] });
     setInput('');
     setError(null);
     setIsSending(true);
@@ -4689,9 +5175,28 @@ export function AiEditorView({
             ? 'active_file'
             : /@Workbench/i.test(trimmedInput)
               ? 'workbench'
-              : contextMode;
+              : /@模型知识|@模型|@通用知识/i.test(trimmedInput)
+                ? 'model_knowledge'
+                : contextMode;
       const assistantCreatedAt = new Date().toISOString();
       const targetNoteFileId = aiContext?.activeFile?.id || activePanelContext?.fileId;
+      const droppedSelectionContext = buildDroppedSelectionContext();
+      const droppedSelectionCitations = droppedContextSelections.map((selection, index) => ({
+        sourceId: `D${index + 1}`,
+        fileId: selection.fileId || selection.panelId || `dropped-${index + 1}`,
+        fileName: selection.fileName || selection.sourceLabel || '视频引用',
+        label: (() => {
+          const locator = selection.selectedRange || {};
+          const timeLabel =
+            typeof locator.timestampStart === 'number'
+              ? `${formatVideoTime(locator.timestampStart)}${typeof locator.timestampEnd === 'number' && locator.timestampEnd !== locator.timestampStart ? `-${formatVideoTime(locator.timestampEnd)}` : ''}`
+              : '';
+          return [selection.sourceLabel || '视频引用', selection.fileName, timeLabel].filter(Boolean).join(' · ');
+        })(),
+        locator: selection.selectedRange,
+        confidence: 'high' as const,
+        preview: selection.text
+      }));
       const baseContentHash = shouldRequestNoteEditProposal
         ? await hashText(aiContext?.activeFileContent || '')
         : null;
@@ -4725,8 +5230,8 @@ export function AiEditorView({
         liveContextVersion: aiContext?.liveContextVersion,
         liveContextUpdatedAt: aiContext?.liveContextUpdatedAt,
         contextMode: effectiveContextMode,
-        lockedSelection,
-        persistentCitations,
+        lockedSelection: droppedSelectionContext || lockedSelection,
+        persistentCitations: [...droppedSelectionCitations, ...persistentCitations],
         activeContextChips: contextChips.map((chip) => ({
           id: chip.id,
           kind: chip.kind,
@@ -4734,6 +5239,8 @@ export function AiEditorView({
         })),
         activePanelId: aiContext?.activePanelId,
         activeFileId: aiContext?.activeFileId || aiContext?.activeFile?.id || null,
+        preferredProvider: selectedModelEntry?.provider || undefined,
+        preferredModel: selectedModelEntry?.model || undefined,
         activeFile: aiContext?.activeFile
           ? {
               ...aiContext.activeFile,
@@ -4748,9 +5255,14 @@ export function AiEditorView({
           activePanelContext?.selectedText ||
           aiContext?.selectedText ||
           '',
-        recentMessages: nextMessages.slice(-8)
+        recentMessages: nextMessages.map((message) => ({
+          ...message,
+          attachments: message.attachments?.map(stripAttachmentPayload)
+        }))
       };
 
+      onUpdateViewState?.(editor.id, { chatSessionAttachments: [] });
+      onUpdateViewState?.(editor.id, { droppedContextSelections: [] });
       onUpdateViewState?.(editor.id, { messages: streamMessages });
 
       const response = await aiApi.chatStream(
@@ -4780,12 +5292,7 @@ export function AiEditorView({
           onTimeline: (nextTimeline) => setTimeline(nextTimeline),
           onMeta: (meta) => {
             onUpdateViewState?.(editor.id, {
-              lastModel: meta.model || 'deepseek-chat',
-              lastContextDebug: {
-                contextCapsule: meta.contextCapsule,
-                contextPolicy: meta.contextPolicy,
-                usedContextSummary: meta.usedContextSummary
-              }
+              lastModel: meta.model || selectedModelEntry?.model || 'deepseek-chat'
             });
           }
         }
@@ -4799,12 +5306,7 @@ export function AiEditorView({
       };
       onUpdateViewState?.(editor.id, {
         messages: [...streamMessages],
-        lastModel: response.model || 'deepseek-chat',
-        lastContextDebug: {
-          contextCapsule: response.contextCapsule,
-          contextPolicy: response.contextPolicy,
-          usedContextSummary: response.usedContextSummary
-        }
+        lastModel: response.model || selectedModelEntry?.model || 'deepseek-chat'
       });
     } catch (sendError: any) {
       const message =
@@ -4816,7 +5318,7 @@ export function AiEditorView({
           ? 'AI 请求失败：后端或检索模型服务暂时不可用。已更新为本地 BM25 降级链路，请重启后端后重试。'
           : message
       );
-      onUpdateViewState?.(editor.id, { messages: previousMessages });
+      onUpdateViewState?.(editor.id, { messages: previousMessages, chatSessionAttachments: pendingAttachments });
     } finally {
       setIsSending(false);
     }
@@ -4836,7 +5338,12 @@ export function AiEditorView({
   };
 
   const deleteMessage = (index: number) => {
-    const next = (messages as AiChatMessage[]).filter((_, messageIndex) => messageIndex !== index);
+    const next = [...(messages as AiChatMessage[])];
+    const removed = next[index];
+    next.splice(index, 1);
+    if (removed?.role === 'user' && next[index]?.role === 'assistant') {
+      next.splice(index, 1);
+    }
     onUpdateViewState?.(editor.id, { messages: next });
   };
 
@@ -4993,23 +5500,6 @@ export function AiEditorView({
               {error}
             </div>
           )}
-          {timeline.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {timeline.map((item) => (
-                <span
-                  key={`${item.agentName}-${item.durationMs}`}
-                  title={`${item.inputSummary}\n${item.outputSummary}`}
-                  className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                    item.status === 'completed'
-                      ? 'border-[#d7e8d2] bg-[#f3faf1] text-[#37652f]'
-                      : 'border-rose-200 bg-rose-50 text-rose-700'
-                  }`}
-                >
-                  {item.agentName} · {item.durationMs}ms
-                </span>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
@@ -5018,23 +5508,6 @@ export function AiEditorView({
           {hideHeader && error && (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {error}
-            </div>
-          )}
-          {hideHeader && timeline.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {timeline.map((item) => (
-                <span
-                  key={`${item.agentName}-${item.durationMs}`}
-                  title={`${item.inputSummary}\n${item.outputSummary}`}
-                  className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                    item.status === 'completed'
-                      ? 'border-[#d7e8d2] bg-[#f3faf1] text-[#37652f]'
-                      : 'border-rose-200 bg-rose-50 text-rose-700'
-                  }`}
-                >
-                  {item.agentName} · {item.durationMs}ms
-                </span>
-              ))}
             </div>
           )}
           {messages.length === 0 && (
@@ -5086,6 +5559,7 @@ export function AiEditorView({
             const currentTargetFileId = aiContext?.activeFile?.id || activePanelContext?.fileId || '';
             const noteEditTargetMatches = !noteEditProposal?.targetFileId || noteEditProposal.targetFileId === currentTargetFileId;
             const noteEditKey = `${index}:${noteEditProposal?.targetFileId || currentTargetFileId}`;
+            const showThinkingTrace = isAssistant && index === lastAssistantIndex && (timeline.length > 0 || (isSending && index === messages.length - 1));
             return (
               <div
                 key={`${message.role}-${index}`}
@@ -5096,7 +5570,7 @@ export function AiEditorView({
                     <Bot className="h-4.5 w-4.5" />
                   </div>
                 )}
-                <div className={isAssistant ? 'min-w-0 flex-1 border-b border-[#eeeeeb] pb-7' : 'flex max-w-[78%] flex-col items-end'}>
+                <div className={isAssistant ? 'min-w-0 flex-1 border-b border-[#eeeeeb] pb-7' : 'flex max-w-[min(72%,640px)] flex-col items-end'}>
                   {isAssistant ? (
                     <>
                       <div className="mb-3 flex items-center gap-2">
@@ -5105,22 +5579,21 @@ export function AiEditorView({
                           {messageTime}
                         </span>
                       </div>
+                      {showThinkingTrace && (
+                        <ThinkingTrace
+                          timeline={timeline}
+                          isActive={isSending && index === messages.length - 1}
+                          open={thinkingTraceOpen || (isSending && timeline.length === 0)}
+                          onToggle={() => setThinkingTraceOpen((value) => !value)}
+                        />
+                      )}
                       <MarkdownPreview
                         content={cleanMessageContent || ''}
                         variant="message"
-                        citationSources={sourceInspectorItems}
+                        citationSources={[]}
                         onCitationJump={jumpToCitation}
                         isStreaming={isSending && index === messages.length - 1}
                       />
-                      {index === lastAssistantIndex && answerSources.length > 0 && !(isSending && index === messages.length - 1) && (
-                        <div className="mt-4">
-                          <SourcesCapsule
-                            sources={answerSources}
-                            onJump={jumpToCitation}
-                            onOpenSource={openSourceDetail}
-                          />
-                        </div>
-                      )}
                       {noteEditProposal && noteEditTargetMatches && (
                         <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-[#d7e8d2] bg-[#f7fbf6] px-3 py-2">
                           <div className="min-w-0 flex-1 text-xs text-[#4f5f4a]">
@@ -5145,23 +5618,8 @@ export function AiEditorView({
                         </div>
                       )}
                       <div className="mt-3 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                        <button onClick={() => startEditMessage(index, cleanMessageContent)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Edit">
-                          <Edit3 className="h-4 w-4" />
-                        </button>
                         <button onClick={() => void copyMessage(cleanMessageContent, index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Copy">
                           {copiedMessageIndex === index ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                        </button>
-                        <button className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Read aloud">
-                          <Volume2 className="h-4 w-4" />
-                        </button>
-                        <button className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Details">
-                          <Info className="h-4 w-4" />
-                        </button>
-                        <button className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Good response">
-                          <ThumbsUp className="h-4 w-4" />
-                        </button>
-                        <button className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Bad response">
-                          <ThumbsDown className="h-4 w-4" />
                         </button>
                         <button onClick={() => void regenerateFrom(index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Regenerate">
                           <RefreshCcw className="h-4 w-4" />
@@ -5170,16 +5628,17 @@ export function AiEditorView({
                     </>
                   ) : (
                     <>
+                      <MessageAttachmentStrip attachments={message.attachments} />
                       <div className="mb-1 flex items-center gap-2 pr-2 text-xs font-medium text-[#a1a1aa] opacity-0 transition-opacity group-hover:opacity-100">
                         <span>{messageTime}</span>
                       </div>
-                      <div className="rounded-[24px] bg-[#f4f4f5] px-5 py-3 text-[15px] leading-7 text-[#374151] shadow-sm transition-transform duration-200 group-hover:-translate-y-0.5">
+                      <div className="rounded-[20px] bg-[#f4f4f5] px-4 py-2.5 text-[14px] leading-6 text-[#374151] shadow-sm transition-transform duration-200 group-hover:-translate-y-0.5">
                         {editingMessageIndex === index ? (
-                          <div className="w-[min(560px,70vw)]">
+                          <div className="w-[min(520px,calc(100vw-7rem))]">
                             <textarea
                               value={editingMessageContent}
                               onChange={(event) => setEditingMessageContent(event.target.value)}
-                              className="block min-h-[90px] w-full resize-y rounded-2xl border border-[#e5e7eb] bg-white p-3 text-sm text-[#111827] outline-none focus:border-[#111827]"
+                              className="block min-h-[76px] w-full resize-y rounded-2xl border border-[#e5e7eb] bg-white p-3 text-sm text-[#111827] outline-none focus:border-[#111827]"
                             />
                             <div className="mt-2 flex justify-end gap-2">
                               <button onClick={() => setEditingMessageIndex(null)} className="rounded-full px-3 py-1.5 text-xs font-medium text-[#6b7280] hover:bg-[#ededee]">Cancel</button>
@@ -5189,11 +5648,6 @@ export function AiEditorView({
                         ) : (
                           <div className="whitespace-pre-wrap">
                             {displayContent}
-                            {message.content.includes('【本轮临时附件】') && (
-                              <div className="mt-2 border-t border-black/10 pt-2 text-xs text-[#71717a]">
-                                已附加本轮临时文件
-                              </div>
-                            )}
                           </div>
                         )}
                       </div>
@@ -5313,15 +5767,34 @@ export function AiEditorView({
 
       <div className="bg-white px-5 py-4">
         <div className="mx-auto max-w-4xl">
-          <div className="ai-composer-lift relative rounded-[28px] border border-[#e5e7eb] bg-white p-3 shadow-[0_14px_45px_rgba(15,23,42,0.08)]">
-            {(pinnedContextChips.length > 0 || persistentCitations.length > 0 || chatSessionAttachments.length > 0) && (
+          <div
+            data-ai-composer-menu
+            className="ai-composer-lift relative rounded-[24px] border border-[#e5e7eb] bg-white p-2.5 shadow-[0_12px_30px_rgba(15,23,42,0.06)]"
+            onDragOver={(event) => {
+              if (event.dataTransfer.types.includes('application/x-workbench-context-selection')) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'copy';
+              }
+            }}
+            onDrop={(event) => {
+              const raw = event.dataTransfer.getData('application/x-workbench-context-selection');
+              if (!raw) return;
+              event.preventDefault();
+              try {
+                addDroppedContextSelection(JSON.parse(raw) as WorkbenchContextSelectionActionDetail);
+              } catch {
+                // Ignore malformed drag payloads from outside the workbench.
+              }
+            }}
+          >
+            {(pinnedContextChips.length > 0 || persistentCitations.length > 0) && (
               <div className="mb-2 flex flex-wrap gap-2">
-                {pinnedContextChips.slice(0, 2).map((chip) => (
+                {pinnedContextChips.slice(0, 8).map((chip) => (
                   <span
                     key={chip.id}
-                    className="inline-flex max-w-full items-center gap-1 rounded-full bg-[#f4f4f5] px-2.5 py-1 text-xs font-medium text-[#71717a]"
+                    className="inline-flex max-w-full items-center gap-1 rounded-full border border-[#dfe5dc] bg-[#f7fbf6] px-2 py-0.5 text-[10px] font-medium text-[#4f6f49]"
                   >
-                    {chip.kind === 'selection' ? <FileText className="h-3.5 w-3.5" /> : <File className="h-3.5 w-3.5" />}
+                    {chip.kind === 'selection' ? <FileText className="h-3 w-3" /> : <File className="h-3 w-3" />}
                     <button
                       onClick={() => setInspectedChipId(inspectedChipId === chip.id ? null : chip.id)}
                       className="min-w-0 truncate text-left"
@@ -5336,28 +5809,10 @@ export function AiEditorView({
                     >
                       <X className="h-3 w-3" />
                     </button>
-                    {chip.kind === 'selection' && !lockedSelection && (
-                      <button
-                        onClick={lockCurrentSelection}
-                        className="rounded-full px-1 text-[11px] text-[#16833a] hover:bg-[#f3faf1]"
-                        title="锁定当前选区"
-                      >
-                        锁定
-                      </button>
-                    )}
-                    {chip.kind === 'selection' && lockedSelection && (
-                      <button
-                        onClick={clearLockedSelection}
-                        className="rounded-full px-1 text-[11px] text-[#777a80] hover:bg-[#eeeeeb]"
-                        title="解除锁定选区"
-                      >
-                        解锁
-                      </button>
-                    )}
                   </span>
                 ))}
                 {persistentCitations.length > 0 && (
-                  <div className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-[#f4f4f5] px-1 py-0.5 text-xs font-medium text-[#5f6368]">
+                  <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#dfe5dc] bg-[#f7fbf6] px-1 py-0.5 text-[10px] font-medium text-[#4f6f49]">
                     <SourcesCapsule
                       sources={persistentCitations.map((citation, index) => ({
                         ...citation,
@@ -5377,42 +5832,6 @@ export function AiEditorView({
                     </button>
                   </div>
                 )}
-                {chatSessionAttachments.map((attachment) => (
-                  <span
-                    key={attachment.id}
-                    className="inline-flex max-w-full items-center gap-1 rounded-full bg-[#f4f4f5] px-2.5 py-1 text-xs font-medium text-[#71717a]"
-                    title={`${attachment.name} · ${attachment.mimeType} · ${formatBytes(attachment.size)}`}
-                  >
-                    {attachment.kind === 'image' ? <Image className="h-3.5 w-3.5" /> : <File className="h-3.5 w-3.5" />}
-                    <span className="max-w-[220px] truncate">{attachment.name}</span>
-                    {attachment.status === 'metadata_only' && (
-                      <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700" title={attachment.error || '仅保留元数据'}>
-                        元数据
-                      </span>
-                    )}
-                    {attachment.savedToWorkbench ? (
-                      <span className="rounded-full bg-[#f3faf1] px-1.5 py-0.5 text-[10px] text-[#16833a]">
-                        已保存
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => void saveAttachmentToWorkbench(attachment)}
-                        disabled={savingAttachmentId === attachment.id}
-                        className="rounded-full px-1.5 py-0.5 text-[10px] text-[#16833a] hover:bg-[#f3faf1] disabled:text-[#a6a8ab]"
-                        title="保存到 Workbench，供其他 Chat 和资源索引使用"
-                      >
-                        {savingAttachmentId === attachment.id ? '保存中' : '保存'}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => removeAttachment(attachment.id)}
-                      className="rounded-full p-0.5 text-[#a6a8ab] hover:bg-[#eeeeeb] hover:text-[#34373c]"
-                      title="从当前 Chat 移除附件"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
-                ))}
               </div>
             )}
             <textarea
@@ -5425,10 +5844,10 @@ export function AiEditorView({
                   void handleSend();
                 }
               }}
-              rows={2}
+              rows={1}
               placeholder="使用 AI 处理各种任务..."
               disabled={isSending}
-              className="block min-h-[70px] w-full resize-none border-0 bg-transparent text-[15px] leading-6 text-[#111827] outline-none placeholder:text-[#a1a1aa]"
+              className="block min-h-[38px] w-full resize-none border-0 bg-transparent px-1 py-1 text-[14px] leading-5 text-[#111827] outline-none placeholder:text-[#a1a1aa]"
             />
             <input
               ref={fileInputRef}
@@ -5439,124 +5858,198 @@ export function AiEditorView({
                 if (event.target.files) void handleAttachmentFiles(event.target.files);
               }}
             />
-            <div className="mt-2 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="ai-soft-button inline-flex h-9 w-9 items-center justify-center rounded-full text-[#777a80] hover:bg-[#f1f1ef] hover:text-[#25272b]"
-                  title="添加临时图片或文件"
-                >
-                  <Plus className="h-5 w-5" />
-                </button>
-                <button
-                  onClick={() => setContextMenuOpen((value) => !value)}
-                  className={`ai-soft-button inline-flex h-9 w-9 items-center justify-center rounded-full border ${
-                    contextMenuOpen
-                      ? 'border-[#16833a] bg-[#f3faf1] text-[#16833a]'
-                      : 'border-transparent text-[#777a80] hover:bg-[#f1f1ef] hover:text-[#25272b]'
-                  }`}
-                  title="调整上下文"
-                >
-                  <SlidersHorizontal className="h-4.5 w-4.5" />
-                </button>
+            {chatSessionAttachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {chatSessionAttachments.map((attachment) => (
+                  <div
+                    key={attachment.id}
+                    className="flex min-w-0 max-w-[260px] items-center gap-2 rounded-2xl border border-[#e5e7eb] bg-[#fbfbfb] px-2 py-1.5 text-xs text-[#525866]"
+                    title={`${attachment.name} · ${attachment.mimeType} · ${formatBytes(attachment.size)}`}
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white text-[#6b7280] ring-1 ring-inset ring-[#e5e7eb]">
+                      {attachment.kind === 'image' && attachment.dataUrl ? (
+                        <img src={attachment.dataUrl} alt={attachment.name} className="h-full w-full object-cover" />
+                      ) : attachment.kind === 'image' ? (
+                        <Image className="h-3.5 w-3.5" />
+                      ) : (
+                        <File className="h-3.5 w-3.5" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[12px] font-medium text-[#25272b]">{attachment.name}</div>
+                      <div className="truncate text-[10px] text-[#8a8f98]">{formatBytes(attachment.size)}</div>
+                    </div>
+                    <button
+                      onClick={() => removeAttachment(attachment.id)}
+                      className="rounded-full p-1 text-[#a6a8ab] hover:bg-[#eeeeeb] hover:text-[#34373c]"
+                      title="Remove attachment"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
               </div>
-              <div className="flex items-center gap-3">
-                <select
-                  value={contextMode}
-                  onChange={(event) => setContextMode(event.target.value as AiContextMode)}
-                  className="rounded-full border-0 bg-transparent px-2 py-1 text-sm font-semibold text-[#777a80] outline-none"
-                  title="Context mode"
+            )}
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <div className="relative flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => openComposerMenu('attachment')}
+                  className="ai-soft-button inline-flex h-8 w-8 items-center justify-center text-[#6f7378] hover:text-[#25272b]"
+                  title="Add photos and files"
                 >
-                  <option value="auto">自动</option>
-                  <option value="selection_only">仅选区</option>
-                  <option value="viewport">当前可见区域</option>
-                  <option value="active_file">当前文件</option>
-                  <option value="workbench">当前 Workbench</option>
-                  <option value="workspace">整个 Workspace</option>
-                </select>
+                  <Plus className="h-4.5 w-4.5" />
+                </button>
+                {attachmentMenuOpen && (
+                  <div data-ai-composer-menu className="ai-menu-pop absolute bottom-full left-0 z-30 mb-2 w-56 rounded-2xl border border-[#e5e5e1] bg-white/95 p-1.5 text-xs text-[#525866] shadow-[0_18px_45px_rgba(15,23,42,0.14)] backdrop-blur">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttachmentMenuOpen(false);
+                        fileInputRef.current?.click();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-[#f6f6f4]"
+                    >
+                      <Image className="h-3.5 w-3.5 text-[#777a80]" />
+                      <span>Add photos & files</span>
+                    </button>
+                  </div>
+                )}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => openComposerMenu('context')}
+                    className="ai-soft-button inline-flex h-8 items-center gap-1.5 text-xs font-medium text-[#666b73] hover:text-[#25272b]"
+                    title="Context strategy"
+                  >
+                    <Hand className="h-3.5 w-3.5" />
+                    <span className="max-w-[110px] truncate">
+                      {contextMode === 'auto'
+                        ? 'Auto context'
+                        : contextMode === 'viewport'
+                          ? 'Visible context'
+                          : contextMode === 'active_file'
+                            ? 'Current file'
+                            : contextMode === 'workbench'
+                              ? 'Workbench'
+                              : 'Model knowledge'}
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                  {contextModeMenuOpen && (
+                    <div data-ai-composer-menu className="ai-menu-pop absolute bottom-full left-0 z-30 mb-2 w-56 rounded-2xl border border-[#e5e5e1] bg-white/95 p-1.5 text-xs text-[#525866] shadow-[0_18px_45px_rgba(15,23,42,0.14)] backdrop-blur">
+                      {([
+                        ['auto', 'Auto context', Hand],
+                        ['viewport', 'Visible context', Eye],
+                        ['active_file', 'Current file', FileText],
+                        ['workbench', 'Workbench resources', FolderOpen],
+                        ['model_knowledge', 'Model knowledge', Brain]
+                      ] as Array<[AiContextMode, string, typeof Hand]>).map(([mode, label, Icon]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => {
+                            setContextMode(mode);
+                            setContextModeMenuOpen(false);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-[#f6f6f4]"
+                        >
+                          <Icon className="h-3.5 w-3.5 text-[#777a80]" />
+                          <span className="min-w-0 flex-1">{label}</span>
+                          {contextMode === mode && <Check className="h-3.5 w-3.5 text-[#16833a]" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => openComposerMenu('scope')}
+                    className={`ai-soft-button inline-flex h-8 w-8 items-center justify-center text-[#6f7378] hover:text-[#25272b] ${debugOpen ? 'text-[#25272b]' : ''}`}
+                    title="Resource scope"
+                  >
+                    <Gauge className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => openComposerMenu('model')}
+                    className={`ai-soft-button inline-flex h-8 items-center gap-1.5 text-xs font-medium text-[#666b73] hover:text-[#25272b] ${modelMenuOpen ? 'text-[#25272b]' : ''}`}
+                    title="Model"
+                  >
+                    <Brain className="h-3.5 w-3.5" />
+                    <span className="max-w-[120px] truncate">
+                      {selectedModelEntry ? selectedModelEntry.model : 'Model'}
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                  {modelMenuOpen && (
+                    <div data-ai-composer-menu className="ai-menu-pop absolute bottom-full right-0 z-30 mb-2 w-64 rounded-2xl border border-[#e5e5e1] bg-white/95 p-1.5 text-xs text-[#525866] shadow-[0_18px_45px_rgba(15,23,42,0.14)] backdrop-blur">
+                      {!availableModels.length && (
+                        <div className="px-2.5 py-2 text-[#8a8f98]">No configured chat model</div>
+                      )}
+                      {availableModels.map((entry) => {
+                        const key = `${entry.provider}:${entry.model}`;
+                        const isSelected = selectedModel === key;
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            onClick={() => {
+                              setSelectedModel(key);
+                              setModelMenuOpen(false);
+                            }}
+                            className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-[#f6f6f4] ${isSelected ? 'bg-[#f3f7f2]' : ''}`}
+                          >
+                            <Brain className="h-3.5 w-3.5 text-[#777a80]" />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[#25272b]">{entry.model}</span>
+                              <span className="block truncate text-[10px] text-[#8a8f98]">{entry.provider}</span>
+                            </span>
+                            {isSelected && <Check className="h-3.5 w-3.5 text-[#16833a]" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={() => void handleSend()}
                   disabled={isSending || (!input.trim() && chatSessionAttachments.length === 0)}
-                  className="ai-soft-button inline-flex h-10 w-10 items-center justify-center rounded-full bg-[#202124] text-white hover:bg-[#34373c] disabled:cursor-not-allowed disabled:bg-[#f1f1ef] disabled:text-[#c2c3c5]"
+                  className="ai-soft-button inline-flex h-8 w-8 items-center justify-center text-[#111827] hover:text-[#000000] disabled:cursor-not-allowed disabled:text-[#c2c3c5]"
                   title="Send"
                 >
-                  <Send className="h-4 w-4" />
+                  <ArrowUp className="h-4.5 w-4.5 stroke-[2.25]" />
                 </button>
               </div>
             </div>
-            {contextMenuOpen && (
-              <div className="ai-menu-pop ai-session-menu-pop absolute bottom-[76px] left-3 z-20 w-[min(520px,calc(100vw-3rem))] rounded-2xl border border-[#e5e5e1] bg-white p-3 text-xs text-[#34373c] shadow-[0_18px_55px_rgba(0,0,0,0.16)]">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="font-semibold text-[#25272b]">上下文设置</div>
-                  {hiddenChipIds.size > 0 && (
-                    <button
-                      onClick={() => onUpdateViewState?.(editor.id, { hiddenContextChipIds: [] })}
-                      className="rounded-full px-2 py-1 text-[#777a80] hover:bg-[#f6f6f4]"
-                    >
-                      恢复隐藏项
-                    </button>
-                  )}
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => openComposerMenu('scope')}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#e5e7eb] bg-[#fbfbfa] px-2.5 py-1 text-[10px] font-medium text-[#5f6368] hover:bg-[#f7fbf6] hover:text-[#25272b]"
+              >
+                <Gauge className="h-3.5 w-3.5" />
+                {resourceScopeLabel}
+              </button>
+              {debugOpen && (
+                <div data-ai-composer-menu className="mt-2 w-full max-w-md rounded-2xl border border-[#e7ece7] bg-white p-3 text-xs text-[#4b5563] shadow-[0_14px_38px_rgba(15,23,42,0.10)]">
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#96999d]">资源范围</div>
+                  <div className="space-y-1.5">
+                    {workbenchResourceFiles.map((item, index) => (
+                      <div key={item.id} className="flex items-start gap-2">
+                        <span className="mt-0.5 text-[#a1a1aa]">{index + 1}.</span>
+                        <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="mb-3 flex flex-wrap gap-1.5">
-                  <button
-                    onClick={() => insertMention('@选区')}
-                    className="rounded-full border border-[#eeeeeb] px-2.5 py-1 font-medium text-[#777a80] hover:bg-[#f6f6f4]"
-                  >
-                    @选区
-                  </button>
-                  <button
-                    onClick={() => insertMention('@当前页')}
-                    className="rounded-full border border-[#eeeeeb] px-2.5 py-1 font-medium text-[#777a80] hover:bg-[#f6f6f4]"
-                  >
-                    @当前页
-                  </button>
-                  <button
-                    onClick={() => insertMention('@当前文件')}
-                    className="rounded-full border border-[#eeeeeb] px-2.5 py-1 font-medium text-[#777a80] hover:bg-[#f6f6f4]"
-                  >
-                    @当前文件
-                  </button>
-                  <button
-                    onClick={() => insertMention('@Workbench')}
-                    className="rounded-full border border-[#eeeeeb] px-2.5 py-1 font-medium text-[#777a80] hover:bg-[#f6f6f4]"
-                  >
-                    @Workbench
-                  </button>
-                </div>
-                <div className="grid gap-2">
-                  {menuContextChips.length === 0 && pinnedContextChips.length === 0 && (
-                    <div className="rounded-xl bg-[#fbfbfa] px-3 py-2 text-[#96999d]">暂无可用上下文</div>
-                  )}
-                  {[...pinnedContextChips, ...menuContextChips].map((chip) => (
-                    <div
-                      key={chip.id}
-                      className="flex min-w-0 items-center gap-2 rounded-xl border border-[#eeeeeb] px-3 py-2"
-                    >
-                      <button
-                        onClick={() => setInspectedChipId(inspectedChipId === chip.id ? null : chip.id)}
-                        className="min-w-0 flex-1 truncate text-left"
-                        title={chip.label}
-                      >
-                        {chip.label}
-                      </button>
-                      <button
-                        onClick={() => hideChip(chip.id)}
-                        className="rounded-full p-1 text-[#96999d] hover:bg-[#f6f6f4] hover:text-[#34373c]"
-                        title="隐藏上下文"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <button
-                  onClick={() => setDebugOpen((value) => !value)}
-                  className="mt-3 rounded-full border border-[#e5e5e1] px-3 py-1.5 font-medium text-[#777a80] hover:bg-[#f6f6f4]"
-                >
-                  Context Debug
-                </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
           {inspectedChip && (
             <div className="mt-2 rounded-2xl border border-[#e5e5e1] bg-[#fbfbfa] p-3 text-xs text-[#34373c]">
@@ -5564,218 +6057,6 @@ export function AiEditorView({
               <pre className="max-h-36 overflow-auto whitespace-pre-wrap font-mono leading-5 text-[#777a80]">
                 {inspectedChip.detail || '暂无文本详情'}
               </pre>
-            </div>
-          )}
-          {debugOpen && (
-            <div className="fixed inset-y-4 right-4 z-40 flex w-[min(560px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-[#d7e8d2] bg-white text-xs text-[#34373c] shadow-[0_24px_80px_rgba(0,0,0,0.22)]">
-              <div className="flex items-center justify-between border-b border-[#eeeeeb] px-4 py-3">
-                <div>
-                  <div className="font-semibold text-[#25272b]">Context Debug</div>
-                  <div className="mt-0.5 text-[11px] text-[#777a80]">开发态上下文抽屉，可用于检查与手动调试</div>
-                </div>
-                <button
-                  onClick={() => setDebugOpen(false)}
-                  className="rounded-full p-1.5 text-[#777a80] hover:bg-[#f6f6f4] hover:text-[#25272b]"
-                  title="关闭"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="min-h-0 flex-1 space-y-3 overflow-auto bg-[#fbfbfa] p-4">
-                <section className="rounded-xl border border-[#eeeeeb] bg-white p-3">
-                  <div className="mb-2 font-semibold text-[#25272b]">Live Context</div>
-                  <div className="grid gap-1 sm:grid-cols-2">
-                    <div>activePanel: {aiContext?.activePanelId || 'none'}</div>
-                    <div>activeFile: {aiContext?.activeFile?.name || 'none'}</div>
-                    <div>openPanels: {aiContext?.openPanels?.length || 0}</div>
-                    <div>contextMode: {contextMode}</div>
-                    <div>liveVersion: {aiContext?.liveContextVersion ?? 0}</div>
-                    <div>chips: {contextChips.length}</div>
-                    <div>lockedSelection: {lockedSelection ? `${lockedSelection.content.length} chars` : 'none'}</div>
-                    <div>pinnedSources: {persistentCitations.length}</div>
-                  </div>
-                </section>
-                <section className="rounded-xl border border-[#eeeeeb] bg-white p-3">
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="font-semibold text-[#25272b]">可调试选项</div>
-                    <button
-                      onClick={() => onUpdateViewState?.(editor.id, { hiddenContextChipIds: [], persistentCitations: [] })}
-                      className="rounded-full border border-[#eeeeeb] px-2 py-1 text-[#777a80] hover:bg-[#f6f6f4]"
-                    >
-                      重置隐藏项/固定来源
-                    </button>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {(['auto', 'selection_only', 'viewport', 'active_file', 'workbench', 'workspace'] as AiContextMode[]).map((mode) => (
-                      <button
-                        key={mode}
-                        onClick={() => setContextMode(mode)}
-                        className={`rounded-full border px-2.5 py-1 font-medium ${
-                          contextMode === mode
-                            ? 'border-[#16833a] bg-[#f3faf1] text-[#16833a]'
-                            : 'border-[#eeeeeb] text-[#777a80] hover:bg-[#f6f6f4]'
-                        }`}
-                      >
-                        {mode}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-                <section className="rounded-xl border border-[#eeeeeb] bg-white p-3">
-                  <div className="mb-2 font-semibold text-[#25272b]">Capsule Summary</div>
-                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-[#f7f7f5] p-2 font-mono leading-5 text-[#777a80]">
-                    {JSON.stringify(
-                      {
-                        activeChips: contextChips.map((chip) => ({ id: chip.id, kind: chip.kind, label: chip.label })),
-                        policyDecision: lastContextDebug?.contextPolicy || null,
-                        usedContextSummary: lastContextDebug?.usedContextSummary || null,
-                        estimatedTokensByLayer: (lastContextDebug?.contextCapsule as any)?.estimatedTokensByLayer || null,
-                        fallbackReasons: (lastContextDebug?.contextCapsule as any)?.fallbackReasons || [],
-                        clippedItems: (lastContextDebug?.contextCapsule as any)?.clippedItems || [],
-                        citations: (lastContextDebug?.contextCapsule as any)?.citations || [],
-                        sourceMap: sourceInspectorItems.map((source) => ({
-                          sourceId: source.sourceId,
-                          sourceType: source.sourceType,
-                          confidence: source.confidence,
-                          label: source.label,
-                          score: source.score,
-                          includedInPrompt: source.includedInPrompt
-                        }))
-                      },
-                      null,
-                      2
-                    )}
-                  </pre>
-                </section>
-                <section className="rounded-xl border border-[#eeeeeb] bg-white p-3">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <div>
-                      <div className="font-semibold text-[#25272b]">Source Inspector</div>
-                      <div className="mt-0.5 text-[11px] text-[#777a80]">
-                        Stable source id、可信度和检索分数拆解
-                      </div>
-                    </div>
-                    <div className="shrink-0 rounded-full border border-[#eeeeeb] px-2 py-1 text-[11px] text-[#777a80]">
-                      {sourceInspectorItems.length} sources
-                    </div>
-                  </div>
-                  {sourceInspectorItems.length === 0 ? (
-                    <div className="rounded-lg bg-[#f7f7f5] p-3 text-[#96999d]">
-                      还没有可检查的来源。发送一次问题后会显示 S1/S2/S3。
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {sourceInspectorItems.map((source) => (
-                        <div
-                          key={source.sourceId}
-                          className="rounded-xl border border-[#eeeeeb] bg-[#fbfbfa] p-3"
-                        >
-                          <div className="flex min-w-0 items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <span className="rounded-md bg-[#202124] px-1.5 py-0.5 font-mono text-[11px] font-semibold text-white">
-                                  {source.sourceId}
-                                </span>
-                                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${confidenceClass(source.confidence)}`}>
-                                  {confidenceLabel(source.confidence)}
-                                </span>
-                                <span className="rounded-full border border-[#eeeeeb] bg-white px-2 py-0.5 text-[11px] text-[#777a80]">
-                                  {sourceTypeLabel(source.sourceType)}
-                                </span>
-                                {!source.includedInPrompt && (
-                                  <span className="rounded-full border border-[#eeeeeb] bg-white px-2 py-0.5 text-[11px] text-[#96999d]">
-                                    pinned only
-                                  </span>
-                                )}
-                              </div>
-                              <button
-                                onClick={() => jumpToCitation(source)}
-                                className="mt-2 max-w-full truncate text-left font-semibold text-[#25272b] hover:underline"
-                                title="点击回跳到来源位置"
-                              >
-                                {source.label}
-                              </button>
-                              <div className="mt-1 truncate text-[11px] text-[#777a80]">
-                                {source.fileName}
-                                {typeof source.score === 'number' ? ` · score ${source.score.toFixed(2)}` : ''}
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => persistCitation(source)}
-                              className="shrink-0 rounded-full border border-[#eeeeeb] bg-white px-2 py-1 text-[11px] font-medium text-[#777a80] hover:bg-[#f6f6f4]"
-                              title="固定这个来源"
-                            >
-                              固定
-                            </button>
-                          </div>
-                          {source.retrievalReason && (
-                            <div className="mt-2 rounded-lg bg-white px-2 py-1.5 text-[11px] leading-5 text-[#5f6368]">
-                              {source.retrievalReason}
-                            </div>
-                          )}
-                          {source.matchedTerms?.length ? (
-                            <div className="mt-2 flex flex-wrap gap-1">
-                              {source.matchedTerms.slice(0, 8).map((term) => (
-                                <span
-                                  key={`${source.sourceId}:${term}`}
-                                  className="rounded-full border border-[#eeeeeb] bg-white px-2 py-0.5 font-mono text-[10px] text-[#777a80]"
-                                >
-                                  {term}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          {source.scoreBreakdown && (
-                            <div className="mt-2 grid grid-cols-2 gap-1 sm:grid-cols-4">
-                              {Object.entries(source.scoreBreakdown)
-                                .filter(([, value]) => typeof value === 'number' && Math.abs(value) > 0)
-                                .map(([key, value]) => (
-                                  <div key={`${source.sourceId}:${key}`} className="rounded-lg bg-white px-2 py-1">
-                                    <div className="text-[10px] uppercase tracking-wide text-[#96999d]">{key}</div>
-                                    <div className="font-mono text-[11px] font-semibold text-[#34373c]">
-                                      {Number(value).toFixed(2)}
-                                    </div>
-                                  </div>
-                                ))}
-                            </div>
-                          )}
-                          {source.preview && (
-                            <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-2 font-mono text-[11px] leading-5 text-[#777a80]">
-                              {source.preview}
-                            </pre>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </section>
-                <section className="rounded-xl border border-[#eeeeeb] bg-white p-3">
-                  <div className="mb-2 font-semibold text-[#25272b]">Retrieved Chunks</div>
-                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-[#f7f7f5] p-2 font-mono leading-5 text-[#777a80]">
-                    {JSON.stringify(
-                      ((lastContextDebug?.contextCapsule as any)?.retrievedChunks || []).map((chunk: any) => ({
-                        sourceId: chunk.sourceId,
-                        confidence: chunk.confidence,
-                        fileName: chunk.fileName,
-                        score: chunk.score,
-                        retrievalReason: chunk.retrievalReason,
-                        matchedTerms: chunk.matchedTerms,
-                        scoreBreakdown: chunk.scoreBreakdown,
-                        locator: chunk.locator,
-                        preview: chunk.content?.slice?.(0, 300)
-                      })),
-                      null,
-                      2
-                    )}
-                  </pre>
-                </section>
-                <section className="rounded-xl border border-[#eeeeeb] bg-white p-3">
-                  <div className="mb-2 font-semibold text-[#25272b]">Final Prompt Context Preview</div>
-                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-[#f7f7f5] p-2 font-mono leading-5 text-[#777a80]">
-                    {(lastContextDebug?.contextCapsule as any)?.promptContextPreview || '还没有发送过带 Debug 信息的请求'}
-                  </pre>
-                </section>
-              </div>
             </div>
           )}
         </div>
@@ -5857,6 +6138,7 @@ export default function WorkbenchEditorContent({
         editor={editor}
         workspaceId={workspaceId}
         aiContext={aiContext}
+        resources={resources}
         onUpdateViewState={onUpdateViewState}
         onApplyNoteEdit={onApplyAiNoteEdit}
       />

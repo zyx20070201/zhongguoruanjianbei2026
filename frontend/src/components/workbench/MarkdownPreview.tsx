@@ -37,25 +37,41 @@ const renderInline = (
   onCitationJump?: (source: MarkdownCitationSource) => void
 ): ReactNode[] => {
   const parts = line
-    .split(/(\[[^\]]+\]\([^)]+\)|\[(?:S\d+|\d+)\]|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g)
+    .split(/(\[[^\]]+\]\([^)]+\)|(?:\[(?:S\d+|\d+)\]\s*)+|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g)
     .filter(Boolean);
 
   return parts.map((part, index) => {
-    const marker = part.match(/^\[(S\d+|\d+)\]$/)?.[1];
-    if (marker) {
-      const sourceId = marker.startsWith('S') ? marker : `S${marker}`;
-      const source = citationSources?.get(sourceId);
+    const markers = Array.from(part.matchAll(/\[(S\d+|\d+)\]/g)).map((match) => match[1]);
+    if (markers.length > 0 && part.replace(/\[(?:S\d+|\d+)\]/g, '').trim() === '') {
+      const sources = markers
+        .map((marker) => {
+          const sourceId = marker.startsWith('S') ? marker : `S${marker}`;
+          return citationSources?.get(sourceId);
+        })
+        .filter((source): source is MarkdownCitationSource => Boolean(source));
+      const source = sources[0];
       if (!source) return <Fragment key={index}>{part}</Fragment>;
+      const distinctFiles = Array.from(new Set(sources.map((item) => item.fileName || item.label).filter(Boolean)));
+      const label =
+        markers.length > 1
+          ? distinctFiles.length === 1
+            ? `${markers.join(', ')}`
+            : `${markers[0]} +${markers.length - 1}`
+          : markers[0];
+      const title =
+        sources.length > 1
+          ? sources.map((item, sourceIndex) => `[${markers[sourceIndex]}] ${item.label || item.fileName}`).join('\n')
+          : source.label || source.fileName;
 
       return (
-        <span key={`${sourceId}-${index}`} className="relative inline-flex max-w-[220px] align-baseline">
+        <span key={`${markers.join('-')}-${index}`} className="relative inline-flex align-baseline">
           <button
             type="button"
             onClick={() => onCitationJump?.(source)}
-            className="mx-0.5 inline-flex max-w-full items-center rounded-full bg-[#f1f1f2] px-2 py-0.5 text-[11px] font-medium leading-5 text-[#5f6368] transition-colors hover:bg-[#e7e7e9] hover:text-[#25272b]"
-            title={source.fileName || source.label}
+            className="mx-0.5 inline-flex items-center rounded-full border border-[#dfe5dc] bg-[#f7fbf6] px-1.5 py-0.5 font-mono text-[10px] font-semibold leading-4 text-[#4f6f49] transition-colors hover:border-[#b8d8b1] hover:bg-[#eef8eb] hover:text-[#1f5f2f]"
+            title={title}
           >
-            <span className="truncate">{source.fileName || source.label}</span>
+            {label}
           </button>
         </span>
       );

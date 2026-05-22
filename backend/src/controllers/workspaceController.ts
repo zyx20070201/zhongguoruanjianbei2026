@@ -78,25 +78,96 @@ export const deleteWorkspace = async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Invalid workspace id' });
   }
 
-  // Delete related records first (or rely on cascade if configured, but SQLite/Prisma needs manual or explicit cascade)
-  // For simplicity in this task, we'll just delete the workspace. 
-  // In a real app, we'd handle cascading deletes for workbenches, fileObjects, etc.
-  
-  await prisma.learningEvent.deleteMany({ where: { workspaceId } });
-  await prisma.learningTrace.deleteMany({ where: { workspaceId } });
-  await prisma.knowledgeChunk.deleteMany({ where: { workspaceId } });
-  await prisma.knowledgeIndexJob.deleteMany({ where: { workspaceId } });
-  await prisma.workbenchTablePropertyValue.deleteMany({ where: { workspaceId } });
-  await prisma.workbenchTableProperty.deleteMany({ where: { workspaceId } });
-  const runs = await prisma.learningRun.findMany({ where: { workspaceId }, select: { id: true } });
-  await prisma.learningRunStep.deleteMany({ where: { runId: { in: runs.map((run) => run.id) } } });
-  await prisma.learningRun.deleteMany({ where: { workspaceId } });
-  await workbenchService.deleteByWorkspace(workspaceId);
-  await prisma.learningGoal.deleteMany({ where: { workspaceId } });
-  await prisma.fileSystemObject.deleteMany({ where: { workspaceId: workspaceId } });
-  
-  await prisma.workspace.delete({
-    where: { id: workspaceId },
+  await prisma.$transaction(async (tx) => {
+    const [workbenches, files, runs, cards, learnerCores] = await Promise.all([
+      tx.workbench.findMany({ where: { workspaceId }, select: { id: true } }),
+      tx.fileSystemObject.findMany({ where: { workspaceId }, select: { id: true } }),
+      tx.learningRun.findMany({ where: { workspaceId }, select: { id: true } }),
+      tx.flashcard.findMany({ where: { workspaceId }, select: { id: true } }),
+      tx.learnerStateCore.findMany({ where: { workspaceId }, select: { id: true } })
+    ]);
+
+    const workbenchIds = workbenches.map((workbench) => workbench.id);
+    const fileIds = files.map((file) => file.id);
+    const runIds = runs.map((run) => run.id);
+    const cardIds = cards.map((card) => card.id);
+    const learnerCoreIds = learnerCores.map((core) => core.id);
+
+    await tx.learningRunStep.deleteMany({ where: { runId: { in: runIds } } });
+    await tx.flashcardReviewLog.deleteMany({ where: { OR: [{ workspaceId }, { cardId: { in: cardIds } }] } });
+    await tx.workbenchTablePropertyValue.deleteMany({ where: { workspaceId } });
+    await tx.workbenchTableProperty.deleteMany({ where: { workspaceId } });
+
+    await tx.panel.deleteMany({
+      where: {
+        OR: [
+          { workbenchId: { in: workbenchIds } },
+          { fileObjectId: { in: fileIds } }
+        ]
+      }
+    });
+    await tx.workbenchResource.deleteMany({
+      where: {
+        OR: [
+          { workbenchId: { in: workbenchIds } },
+          { fileObjectId: { in: fileIds } }
+        ]
+      }
+    });
+    await tx.generatedResource.deleteMany({ where: { fileObjectId: { in: fileIds } } });
+    await tx.$executeRawUnsafe('DELETE FROM "StudioArtifact" WHERE "workspaceId" = ?', workspaceId);
+
+    await tx.conversationMessage.deleteMany({ where: { workspaceId } });
+    await tx.conversationSession.deleteMany({ where: { workspaceId } });
+    await tx.savedMemory.deleteMany({ where: { workspaceId } });
+
+    await tx.learningEvent.deleteMany({ where: { workspaceId } });
+    await tx.learningEventSequencePattern.deleteMany({ where: { workspaceId } });
+    await tx.learningEventSchemaRegistry.deleteMany({ where: { workspaceId } });
+    await tx.learningTrace.deleteMany({ where: { workspaceId } });
+    await tx.learningPlan.updateMany({ where: { workspaceId }, data: { previousPlanId: null } });
+    await tx.learningPlan.deleteMany({ where: { workspaceId } });
+
+    await tx.learnerStateTransition.deleteMany({ where: { workspaceId } });
+    await tx.learnerEvidence.deleteMany({ where: { workspaceId } });
+    await tx.learnerMemoryControl.deleteMany({ where: { workspaceId } });
+    await tx.learnerStateSnapshotVersion.deleteMany({ where: { workspaceId } });
+    await tx.learnerObservation.deleteMany({ where: { workspaceId } });
+    await tx.learnerStateSignal.deleteMany({
+      where: {
+        OR: [
+          { workspaceId },
+          { learnerStateCoreId: { in: learnerCoreIds } }
+        ]
+      }
+    });
+    await tx.learnerStateCore.deleteMany({ where: { workspaceId } });
+
+    await tx.flashcard.deleteMany({ where: { workspaceId } });
+    await tx.flashcardDeck.deleteMany({ where: { workspaceId } });
+
+    await tx.courseKnowledgeBinding.deleteMany({ where: { workspaceId } });
+    await tx.courseKnowledgeGovernanceLog.deleteMany({ where: { workspaceId } });
+    await tx.courseKnowledgeLearnerState.deleteMany({ where: { workspaceId } });
+    await tx.courseKnowledgeActivation.deleteMany({ where: { workspaceId } });
+    await tx.courseKnowledgeMisconception.deleteMany({ where: { workspaceId } });
+    await tx.courseKnowledgeRelation.deleteMany({ where: { workspaceId } });
+    await tx.courseKnowledgeConcept.deleteMany({ where: { workspaceId } });
+
+    await tx.knowledgeChunk.deleteMany({ where: { workspaceId } });
+    await tx.knowledgeIndexJob.deleteMany({ where: { workspaceId } });
+    await tx.learningRun.deleteMany({ where: { workspaceId } });
+    await tx.learningGoal.deleteMany({ where: { workspaceId } });
+    await tx.profile.deleteMany({ where: { workspaceId } });
+
+    await tx.fileSystemObject.updateMany({ where: { workspaceId }, data: { parentId: null, ownerWorkbenchId: null } });
+    await tx.workbench.updateMany({ where: { workspaceId }, data: { learningGoalId: null } });
+    await tx.workbench.deleteMany({ where: { workspaceId } });
+    await tx.fileSystemObject.deleteMany({ where: { workspaceId } });
+
+    await tx.workspace.delete({
+      where: { id: workspaceId },
+    });
   });
 
   res.json({ success: true });

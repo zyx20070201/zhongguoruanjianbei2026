@@ -67,6 +67,12 @@ const MAX_MESSAGE_COUNT = 20;
 const MAX_FILE_CONTENT_LENGTH = 6000;
 const REQUEST_TIMEOUT_MS = Number(process.env.DEEPSEEK_TIMEOUT_MS || 60000);
 
+const timeoutSignal = (timeoutMs?: number, fallbackMs = REQUEST_TIMEOUT_MS) => {
+  const ms = timeoutMs === undefined || timeoutMs === null ? fallbackMs : Number(timeoutMs);
+  if (!Number.isFinite(ms) || ms <= 0) return undefined;
+  return AbortSignal.timeout(ms);
+};
+
 const clipText = (value: string | undefined, maxLength: number) => {
   if (!value) return '';
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n\n[Content truncated]` : value;
@@ -227,7 +233,7 @@ export class DeepSeekService {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`
       },
-      signal: AbortSignal.timeout(options?.timeoutMs || REQUEST_TIMEOUT_MS),
+      signal: timeoutSignal(options?.timeoutMs),
       body: JSON.stringify({
         model: this.model,
         messages: [
@@ -290,7 +296,7 @@ export class DeepSeekService {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`
       },
-      signal: AbortSignal.timeout(options?.timeoutMs || REQUEST_TIMEOUT_MS),
+      signal: timeoutSignal(options?.timeoutMs),
       body: JSON.stringify({
         model: this.model,
         messages: [

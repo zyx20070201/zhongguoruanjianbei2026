@@ -585,6 +585,16 @@ interface RemoteVideoAnalysisResult {
   tools?: VideoAnalysis['tools'];
 }
 
+class RemoteVideoAnalysisError extends Error {
+  statusCode: number;
+
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.name = 'RemoteVideoAnalysisError';
+    this.statusCode = statusCode;
+  }
+}
+
 interface RemoteVideoStream {
   url: string;
   headers: Record<string, string>;
@@ -1373,7 +1383,7 @@ export class VideoAnalysisService {
         ...(await this.getAnalysis(workspaceId, fileObjectId)),
         warnings,
         tools
-      }), error instanceof Error ? error.message : String(error), errorClass);
+      }), this.formatVideoAnalysisError(error), errorClass);
       await this.updateAnalysisIfCurrentRun(workspaceId, fileObjectId, failed);
       throw error;
     } finally {
@@ -1538,7 +1548,18 @@ export class VideoAnalysisService {
 
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(data?.detail || data?.error || `AutoDL video analysis failed with status ${response.status}`);
+      const message = String(data?.detail || data?.error || '').trim();
+      if (response.status === 401 || /unauthori[sz]ed|authentication required|auth required/i.test(message)) {
+        throw new RemoteVideoAnalysisError(
+          'Remote video analysis service rejected the request. Check VIDEO_ANALYSIS_API_KEY and the remote service credentials.',
+          response.status
+        );
+      }
+
+      throw new RemoteVideoAnalysisError(
+        message || `AutoDL video analysis failed with status ${response.status}`,
+        response.status
+      );
     }
 
     return {
@@ -1782,6 +1803,12 @@ export class VideoAnalysisService {
         ? [...generated.warnings, `Preserved manual edits from revision ${previous.manualRevision.revision}.`]
         : generated.warnings
     });
+  }
+
+  private formatVideoAnalysisError(error: unknown) {
+    if (error instanceof RemoteVideoAnalysisError) return error.message;
+    if (error instanceof Error) return error.message;
+    return String(error);
   }
 
   private enrichSlides(analysis: VideoAnalysis): VideoAnalysis {

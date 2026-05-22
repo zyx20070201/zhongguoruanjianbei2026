@@ -49,7 +49,7 @@ app.use(
     credentials: true
   })
 );
-app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '2mb' }));
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '16mb' }));
 
 const start = async () => {
   await ensureAuthSecuritySchema();

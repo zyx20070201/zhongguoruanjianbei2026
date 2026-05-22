@@ -1,12 +1,23 @@
 import prisma from '../config/db';
 import { stableHash } from './chunkSchema';
 import {
-  isProbablyKnowledgeConcept,
-  isToolGeneratedLearningRequest
-} from './learnerSignalSanitizer';
+  isCourseConceptCandidate,
+  isStrictCourseKnowledgeConcept,
+  stripCourseConceptNoise
+} from './courseKnowledgeConceptRules';
+import { isProbablyKnowledgeConcept } from './learnerSignalSanitizer';
+import {
+  AiKgEvidenceRef,
+  aiCourseKnowledgeGraphExtractionService
+} from './aiCourseKnowledgeGraphExtractionService';
+import { aiModelProviderService } from './aiModelProviderService';
 
 type RelationType = 'prerequisite' | 'related' | 'part_of' | 'supports' | 'assesses' | 'remediates';
 type BindingType = 'resource' | 'task' | 'quiz' | 'misconception' | 'event' | 'plan' | 'goal';
+type ConceptTagSource = 'system_candidate' | 'ai_suggested' | 'user';
+type ConceptTagState = 'candidate' | 'applied';
+
+const SYSTEM_CANDIDATE_TAGS = new Set(['核心概念', '可能难点', '易混淆']);
 
 const stringify = (value: unknown, fallback: unknown = {}) => {
   try {
@@ -32,6 +43,8 @@ const clamp01 = (value: unknown, fallback = 0.5) => {
 };
 
 const normalizeText = (value: unknown) => String(value || '').replace(/\s+/g, ' ').trim();
+const normalizeTagLabel = (value: unknown) => normalizeText(value).replace(/^#+/, '').slice(0, 32);
+const normalizedTagKey = (value: unknown) => normalizeTagLabel(value).toLowerCase();
 
 const unique = (items: Array<string | null | undefined>) =>
   Array.from(new Set(items.map((item) => normalizeText(item)).filter((item) => item.length >= 2)));
@@ -86,48 +99,13 @@ export const isCourseKnowledgeGraphSourceFile = (file: {
   return Boolean(metadata.courseKnowledgeGraph === true || metadata.extractToCourseKnowledgeGraph === true);
 };
 
-const stripMarkdownNoise = (value: string) =>
-  value
-    .replace(/^\s{0,3}#{1,6}\s+/, '')
-    .replace(/^\s*[-*+]\s+/, '')
-    .replace(/^\s*\d+[.)、]\s*/, '')
-    .replace(/\*\*|__|`/g, '')
-    .trim();
-
-const isCourseConceptCandidate = (value: string | null | undefined) => {
-  const text = stripMarkdownNoise(normalizeText(value));
-  if (!isProbablyKnowledgeConcept(text)) return false;
-  if (/^(?:name|aid|viewport|utf-?8|zh-cn|segoe ui|width\s*=|initial-scale|youtube\.com)$/i.test(text)) return false;
-  if (/^(?:资源|来源依据|个性化依据|适用对象|核心内容|核心直觉|关键概念|复盘问题|战术任务|事件|读者|大纲|要什么|如何做|关系|计划|写故事|盖房子)$/.test(text)) return false;
-  if (/youtube\.com|digitalocean|hugging face|google for developers/i.test(text)) return false;
-  if (/根据当前资料生成|提取关键概念|方便我|给我|帮我|写一段|只输出|不要标题|语言：|难度：|数量：|细节：/.test(text)) return false;
-  if (/生成.*(?:概念讲解|检查问题|知识点|学习资源)|有来源依据|个性化学习资源|学习者$/.test(text)) return false;
-  if (/^(?:功能|代码).*(?:完成|写了)\s*\d+%$/.test(text)) return false;
-  if (/[=<>]/.test(text)) return false;
-  if (/[,，]/.test(text) && text.length > 28) return false;
-  if (/[。！？?]/.test(text) && text.length > 24) return false;
-  return true;
-};
-
 export const conceptKeyFor = (workspaceId: string, title: string) => {
   const normalized = normalizeText(title).toLowerCase();
   return stableHash([workspaceId, normalized]).slice(0, 32);
 };
 
-const conceptCandidatesFromText = (text: string, limit = 8) => {
-  if (isToolGeneratedLearningRequest(text)) return [];
-  const candidates: string[] = [];
-  for (const match of text.matchAll(/[「“"]([^」”"]{2,80})[」”"]/g)) candidates.push(match[1]);
-  for (const match of text.matchAll(/(?:知识点|概念|主题|skill|concept|topic)\s*[:：]\s*([^，。；;\n]{2,80})/gi)) candidates.push(match[1]);
-  for (const match of text.matchAll(/(?:理解|掌握|学习|解释|介绍|关于)\s*([^，。！？\n]{2,60})/g)) candidates.push(match[1]);
-  return unique(candidates)
-    .map((item) => item.replace(/^(的|和|与)/, '').replace(/(是什么|的区别|的概念|相关内容)$/g, '').trim())
-    .filter(isCourseConceptCandidate)
-    .slice(0, limit);
-};
-
 const cleanConceptList = (values: Array<string | null | undefined>, limit = 12) =>
-  Array.from(new Set(values.map((value) => stripMarkdownNoise(normalizeText(value))).filter(isCourseConceptCandidate))).slice(0, limit);
+  Array.from(new Set(values.map((value) => stripCourseConceptNoise(normalizeText(value))).filter(isCourseConceptCandidate))).slice(0, limit);
 
 type ResourceConceptEvidence = {
   fileObjectId: string;
@@ -141,23 +119,43 @@ type ResourceConceptEvidence = {
   confidence: number;
 };
 
-type ResourceConceptCandidate = {
-  title: string;
-  aliases: string[];
-  roles: Set<ResourceConceptEvidence['role']>;
-  score: number;
-  occurrenceCount: number;
-  headingCount: number;
-  assessmentCount: number;
-  evidence: ResourceConceptEvidence[];
-};
-
 const clip = (value: unknown, maxLength = 420) => {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 };
 
-const canonicalTitleKey = (value: unknown) => normalizeText(value).toLowerCase();
+const dateIso = (value: unknown) => {
+  if (value instanceof Date) return value.toISOString();
+  const parsed = new Date(String(value || ''));
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+};
+
+const parseTagSources = (value: string | null | undefined): ConceptTagSource[] => {
+  const parsed = parseJson<string[]>(value, []);
+  return Array.from(new Set(parsed.filter((item): item is ConceptTagSource =>
+    item === 'system_candidate' || item === 'ai_suggested' || item === 'user'
+  )));
+};
+
+const serializeTag = (tag: {
+  id: string;
+  label: string;
+  normalizedLabel: string;
+  state: string;
+  sourcesJson: string;
+  rationale: string;
+  createdAt: Date;
+  updatedAt: Date;
+}) => ({
+  id: tag.id,
+  label: tag.label,
+  normalizedLabel: tag.normalizedLabel,
+  state: tag.state as ConceptTagState,
+  sources: parseTagSources(tag.sourcesJson),
+  rationale: tag.rationale,
+  createdAt: dateIso(tag.createdAt),
+  updatedAt: dateIso(tag.updatedAt)
+});
 
 const mergeEvidenceArrays = <T extends Record<string, any>>(
   existing: T[] | undefined,
@@ -233,86 +231,6 @@ const mergeConceptEvidence = (
   };
 };
 
-const inferChunkRole = (chunk: any, metadata: Record<string, any>): ResourceConceptEvidence['role'] => {
-  const chunkType = String(metadata.chunkType || '').toLowerCase();
-  const purpose = String(metadata.purpose || '').toLowerCase();
-  const text = `${chunk.summary || ''}\n${chunk.text || ''}`;
-  if (chunkType === 'video_key_point') return 'video_key_point';
-  if (chunkType === 'video_chapter') return 'video_chapter';
-  if (/quiz|assessment|exercise|题|练习|测验|考察|考点/i.test(purpose) || /(?:题目|选择题|填空题|判断题|答案|解析)/.test(text)) return 'assessment';
-  if (/误区|易错|常见错误|错因|pitfall|mistake/i.test(text)) return 'misconception';
-  if (/例如|例子|案例|示例|example/i.test(text)) return 'example';
-  if (/定义|是指|指的是|means|is defined as/i.test(text)) return 'definition';
-  return 'mention';
-};
-
-const candidateFromText = (text: string, limit = 10) => {
-  if (isToolGeneratedLearningRequest(text)) return [];
-  const candidates: string[] = [];
-  for (const match of text.matchAll(/[「“"]([^」”"]{2,80})[」”"]/g)) candidates.push(match[1]);
-  for (const match of text.matchAll(/(?:知识点|概念|主题|技能|考点|能力点|skill|concept|topic)\s*[:：]\s*([^，。；;\n]{2,80})/gi)) candidates.push(match[1]);
-  for (const match of text.matchAll(/(?:理解|掌握|学习|解释|介绍|关于|考察)\s*([^，。！？\n]{2,60})/g)) candidates.push(match[1]);
-  return cleanConceptList(candidates, limit);
-};
-
-const addCandidate = (
-  candidates: Map<string, ResourceConceptCandidate>,
-  title: string,
-  patch: {
-    aliases?: string[];
-    role: ResourceConceptEvidence['role'];
-    score: number;
-    evidence: ResourceConceptEvidence;
-  }
-) => {
-  const cleanTitle = cleanConceptList([title], 1)[0];
-  if (!cleanTitle) return;
-  const key = canonicalTitleKey(cleanTitle);
-  const current = candidates.get(key) || {
-    title: cleanTitle,
-    aliases: [],
-    roles: new Set<ResourceConceptEvidence['role']>(),
-    score: 0,
-    occurrenceCount: 0,
-    headingCount: 0,
-    assessmentCount: 0,
-    evidence: []
-  };
-  current.aliases = unique([...current.aliases, ...(patch.aliases || []), cleanTitle]);
-  current.roles.add(patch.role);
-  current.score += patch.score;
-  current.occurrenceCount += 1;
-  if (patch.role === 'heading' || patch.role === 'video_chapter') current.headingCount += 1;
-  if (patch.role === 'assessment') current.assessmentCount += 1;
-  current.evidence = mergeEvidenceArrays<ResourceConceptEvidence>(
-    current.evidence,
-    [patch.evidence],
-    (item) => `${item.fileObjectId}:${item.chunkId || item.chunkIndex || ''}:${item.role}:${clip(item.snippet, 80)}`,
-    8
-  );
-  candidates.set(key, current);
-};
-
-const relationEvidenceFor = (input: {
-  file: { id: string; name: string; path: string };
-  relationSource: string;
-  headingPath?: string[];
-  chunkId?: string;
-  chunkIndex?: number;
-  rationale: string;
-}) => ({
-  schema: 'course_relation_evidence.v1',
-  sourceLayer: 'resource_extraction',
-  fileObjectId: input.file.id,
-  fileName: input.file.name,
-  path: input.file.path,
-  relationSource: input.relationSource,
-  headingPath: input.headingPath || [],
-  chunkId: input.chunkId,
-  chunkIndex: input.chunkIndex,
-  rationale: input.rationale
-});
-
 export class CourseKnowledgeGraphService {
   async upsertConcept(input: {
     workspaceId: string;
@@ -325,7 +243,13 @@ export class CourseKnowledgeGraphService {
     evidence?: Record<string, unknown>;
   }) {
     const title = normalizeText(input.title);
-    if (!isCourseConceptCandidate(title)) throw new Error('valid concept title is required');
+    if (!title) throw new Error('valid concept title is required');
+    const validConceptTitle = input.source === 'ai_kg_extraction'
+      ? isStrictCourseKnowledgeConcept(title)
+      : isCourseConceptCandidate(title);
+    if (!validConceptTitle) {
+      throw new Error('valid concept title is required');
+    }
     const conceptKey = conceptKeyFor(input.workspaceId, title);
     const existing = await prisma.courseKnowledgeConcept.findUnique({
       where: { workspaceId_conceptKey: { workspaceId: input.workspaceId, conceptKey } }
@@ -523,6 +447,91 @@ export class CourseKnowledgeGraphService {
     });
   }
 
+  private async upsertExercise(input: {
+    workspaceId: string;
+    fileObjectId: string;
+    title: string;
+    prompt: string;
+    exerciseType?: string;
+    difficulty?: number;
+    answer?: unknown;
+    explanation?: string;
+    source?: string;
+    evidence?: Record<string, unknown>;
+  }) {
+    const title = clip(input.title || input.prompt, 180);
+    const prompt = clip(input.prompt || input.title, 1800);
+    if (!title || prompt.length < 8) return null;
+    const exerciseKey = stableHash([input.workspaceId, input.fileObjectId, normalizeText(prompt).toLowerCase()]).slice(0, 32);
+    const id = `exercise-${exerciseKey}`;
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "CourseKnowledgeExercise" (
+        "id", "exerciseKey", "title", "prompt", "exerciseType", "difficulty", "answerJson", "explanation", "source", "evidenceJson", "workspaceId", "fileObjectId", "updatedAt"
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT("workspaceId", "exerciseKey") DO UPDATE SET
+        "title" = excluded."title",
+        "prompt" = excluded."prompt",
+        "exerciseType" = excluded."exerciseType",
+        "difficulty" = excluded."difficulty",
+        "answerJson" = excluded."answerJson",
+        "explanation" = excluded."explanation",
+        "source" = excluded."source",
+        "evidenceJson" = excluded."evidenceJson",
+        "fileObjectId" = excluded."fileObjectId",
+        "status" = 'active',
+        "updatedAt" = CURRENT_TIMESTAMP`,
+      id,
+      exerciseKey,
+      title,
+      prompt,
+      input.exerciseType || 'question',
+      clamp01(input.difficulty, 0.5),
+      stringify(input.answer ?? null, null),
+      input.explanation || '',
+      input.source || 'ai_kg_extraction',
+      stringify(input.evidence || {}),
+      input.workspaceId,
+      input.fileObjectId
+    );
+    const rows = await prisma.$queryRawUnsafe<Array<any>>(
+      `SELECT * FROM "CourseKnowledgeExercise" WHERE "workspaceId" = ? AND "exerciseKey" = ? LIMIT 1`,
+      input.workspaceId,
+      exerciseKey
+    );
+    return rows[0] || null;
+  }
+
+  private async bindExerciseToConcept(input: {
+    workspaceId: string;
+    exerciseId: string;
+    conceptId: string;
+    role?: string;
+    strength?: number;
+    confidence?: number;
+    evidence?: Record<string, unknown>;
+  }) {
+    const role = input.role || 'assesses';
+    const id = `exercise-binding-${stableHash([input.workspaceId, input.exerciseId, input.conceptId, role]).slice(0, 32)}`;
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "CourseKnowledgeExerciseBinding" (
+        "id", "role", "strength", "confidence", "evidenceJson", "workspaceId", "exerciseId", "conceptId", "updatedAt"
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT("workspaceId", "exerciseId", "conceptId", "role") DO UPDATE SET
+        "strength" = excluded."strength",
+        "confidence" = excluded."confidence",
+        "evidenceJson" = excluded."evidenceJson",
+        "updatedAt" = CURRENT_TIMESTAMP`,
+      id,
+      role,
+      clamp01(input.strength, 0.65),
+      clamp01(input.confidence, 0.65),
+      stringify(input.evidence || {}),
+      input.workspaceId,
+      input.exerciseId,
+      input.conceptId
+    );
+  }
+
   async updateLearnerConceptState(input: {
     workspaceId: string;
     conceptId: string;
@@ -594,8 +603,7 @@ export class CourseKnowledgeGraphService {
     source?: string;
   }) {
     const file = await prisma.fileSystemObject.findFirst({
-      where: { id: input.fileObjectId, workspaceId: input.workspaceId },
-      include: { knowledgeChunks: { orderBy: { chunkIndex: 'asc' }, take: 12 } }
+      where: { id: input.fileObjectId, workspaceId: input.workspaceId }
     });
     if (!file) throw new Error('File not found');
     if (!isCourseKnowledgeGraphSourceFile(file)) {
@@ -607,243 +615,252 @@ export class CourseKnowledgeGraphService {
         file: { id: file.id, name: file.name, path: file.path, resourceType: file.resourceType, fileCategory: file.fileCategory }
       };
     }
-    const candidates = new Map<string, ResourceConceptCandidate>();
-    const relatedTitles = new Set<string>();
-    const fileMetadata = parseJson<Record<string, any>>(file.metadataJson, {});
-    const fileHeadingPath = Array.isArray(fileMetadata.headingPath) ? fileMetadata.headingPath.map((item: unknown) => normalizeText(item)).filter(Boolean) : [];
-
-    file.knowledgeChunks.forEach((chunk) => {
-      const metadata = parseJson<Record<string, any>>(chunk.metadataJson, {});
-      const headingPath = Array.isArray(metadata.headingPath) ? metadata.headingPath.map((item: unknown) => normalizeText(item)).filter(Boolean) : [];
-      const role = inferChunkRole(chunk, metadata);
-      const chunkText = `${chunk.summary || ''}\n${chunk.text || ''}`;
-      const headingCandidates = [...headingPath, ...fileHeadingPath].filter(Boolean);
-      const textCandidates = candidateFromText(chunkText, 10);
-      const conceptsFromChunk = cleanConceptList([
-        ...headingCandidates,
-        ...textCandidates,
-        ...(Array.isArray(metadata.conceptCandidates) ? metadata.conceptCandidates : [])
-      ], 18);
-      conceptsFromChunk.forEach((title) => {
-        relatedTitles.add(title);
-        addCandidate(candidates, title, {
-          aliases: headingCandidates,
-          role: headingCandidates.includes(title) ? 'heading' : role,
-          score: headingCandidates.includes(title)
-            ? 1.4
-            : role === 'assessment'
-              ? 1.1
-              : role === 'definition'
-                ? 1
-                : role === 'example'
-                  ? 0.88
-                  : role === 'misconception'
-                    ? 1.05
-                    : 0.72,
-          evidence: {
-            fileObjectId: file.id,
-            fileName: file.name,
-            path: file.path,
-            chunkId: chunk.id,
-            chunkIndex: chunk.chunkIndex,
-            role,
-            headingPath,
-            snippet: clip(chunk.summary || chunk.text, 260),
-            confidence: headingCandidates.includes(title) ? 0.92 : role === 'assessment' ? 0.84 : 0.7
-          }
-        });
-      });
+    const extraction = await aiCourseKnowledgeGraphExtractionService.extract({
+      workspaceId: input.workspaceId,
+      fileObjectId: input.fileObjectId,
+      source: input.source || 'course_graph_build'
     });
-
-    const orderedCandidates = Array.from(candidates.values())
-      .map((candidate) => ({
-        ...candidate,
-        title: candidate.title,
-        evidence: candidate.evidence.sort((left, right) => right.confidence - left.confidence)
-      }))
-      .sort((left, right) => {
-        const weightedLeft =
-          left.score +
-          left.headingCount * 0.8 +
-          left.assessmentCount * 0.7 +
-          Math.min(1.2, left.occurrenceCount * 0.12);
-        const weightedRight =
-          right.score +
-          right.headingCount * 0.8 +
-          right.assessmentCount * 0.7 +
-          Math.min(1.2, right.occurrenceCount * 0.12);
-        return weightedRight - weightedLeft;
-      })
-      .slice(0, 24);
-
-    const concepts: Array<Awaited<ReturnType<CourseKnowledgeGraphService['upsertConcept']>>> = [];
-    const conceptByKey = new Map<string, Awaited<ReturnType<CourseKnowledgeGraphService['upsertConcept']>>>();
-
-    for (const candidate of orderedCandidates) {
-      const evidence = {
-        sourceLayer: 'resource_extraction',
-        source: input.source || 'resource_index',
+    const chunkById = new Map(extraction.chunks.map((chunk) => [chunk.id, chunk] as const));
+    const chunkByIndex = new Map(extraction.chunks.map((chunk) => [chunk.chunkIndex, chunk] as const));
+    const evidenceFor = (refs: AiKgEvidenceRef[], patch: Record<string, unknown> = {}) => {
+      const resourceEvidence = refs.map((ref) => {
+        const chunk = (ref.chunkId ? chunkById.get(ref.chunkId) : undefined) || (typeof ref.chunkIndex === 'number' ? chunkByIndex.get(ref.chunkIndex) : undefined);
+        return {
+          fileObjectId: file.id,
+          fileName: file.name,
+          path: file.path,
+          chunkId: chunk?.id || ref.chunkId,
+          chunkIndex: chunk?.chunkIndex ?? ref.chunkIndex,
+          role: 'ai_evidence',
+          headingPath: Array.isArray(chunk?.metadata?.headingPath) ? chunk.metadata.headingPath : [],
+          snippet: ref.quote || clip(chunk?.summary || chunk?.text, 260),
+          rationale: ref.rationale,
+          sectionId: ref.sectionId,
+          confidence: 0.86
+        };
+      });
+      return {
+        schema: 'ai_course_kg_evidence.v1',
+        sourceLayer: 'ai_kg_extraction',
+        source: input.source || 'course_graph_build',
         fileObjectId: file.id,
         fileName: file.name,
         path: file.path,
+        aiPipeline: {
+          models: extraction.models,
+          trace: extraction.trace,
+          resource: extraction.resource
+        },
         resourceSignals: {
           sourceFileIds: [file.id],
           sourceCount: 1,
           workbenchIds: file.ownerWorkbenchId ? [file.ownerWorkbenchId] : [],
-          occurrenceCount: candidate.occurrenceCount,
-          headingCount: candidate.headingCount,
-          assessmentCount: candidate.assessmentCount,
-          roles: Array.from(candidate.roles)
+          occurrenceCount: resourceEvidence.length,
+          headingCount: 0,
+          assessmentCount: 0,
+          roles: ['ai_extracted']
         },
-        resourceEvidence: candidate.evidence
+        resourceEvidence,
+        ...patch
       };
-      const concept = await this.upsertConcept({
-        workspaceId: input.workspaceId,
-        title: candidate.title,
-        aliases: candidate.aliases,
-        source: input.source || 'resource_index',
-        difficulty: Math.min(1, 0.28 + candidate.headingCount * 0.08 + candidate.assessmentCount * 0.12 + Math.min(0.36, candidate.score * 0.04)),
-        evidence
+    };
+
+    const concepts: Array<Awaited<ReturnType<CourseKnowledgeGraphService['upsertConcept']>>> = [];
+    const conceptByLocalId = new Map<string, Awaited<ReturnType<CourseKnowledgeGraphService['upsertConcept']>>>();
+
+    for (const item of extraction.concepts.filter((concept) => concept.approved && isStrictCourseKnowledgeConcept(concept.canonicalTitle || concept.title))) {
+      const evidence = evidenceFor(item.evidenceRefs || [], {
+        canonicalization: {
+          action: item.action,
+          existingConceptId: item.existingConceptId || null,
+          rationale: item.canonicalRationale || ''
+        },
+        review: {
+          confidence: item.reviewConfidence,
+          issues: item.reviewIssues
+        }
       });
+      const existing = item.existingConceptId
+        ? await prisma.courseKnowledgeConcept.findFirst({ where: { id: item.existingConceptId, workspaceId: input.workspaceId, status: 'active' } })
+        : null;
+      const concept = existing
+        ? await prisma.courseKnowledgeConcept.update({
+            where: { id: existing.id },
+            data: {
+              description: item.description || existing.description,
+              aliasesJson: stringify(unique([...parseJson<string[]>(existing.aliasesJson, []), ...item.canonicalAliases, item.canonicalTitle]), []),
+              category: item.kind || existing.category,
+              difficulty: item.difficulty !== undefined ? clamp01(item.difficulty) : existing.difficulty,
+              source: 'ai_kg_extraction',
+              evidenceJson: stringify(mergeConceptEvidence(parseJson<Record<string, any>>(existing.evidenceJson, {}), evidence))
+            }
+          })
+        : await this.upsertConcept({
+            workspaceId: input.workspaceId,
+            title: item.canonicalTitle,
+            description: item.description,
+            aliases: item.canonicalAliases,
+            category: item.kind || 'concept',
+            difficulty: item.difficulty,
+            source: 'ai_kg_extraction',
+            evidence
+          });
+
       concepts.push(concept);
-      conceptByKey.set(canonicalTitleKey(candidate.title), concept);
-      conceptByKey.set(concept.conceptKey, concept);
+      conceptByLocalId.set(item.localId, concept);
       await this.bindConcept({
         workspaceId: input.workspaceId,
         conceptId: concept.id,
         bindingType: 'resource',
         targetType: 'resource',
         targetId: file.id,
-        role: candidate.roles.has('assessment')
+        role: item.kind === 'assessment'
           ? 'assesses'
-          : candidate.roles.has('misconception')
+          : item.kind === 'misconception'
             ? 'remediates'
-            : candidate.roles.has('example')
+            : item.kind === 'application' || item.kind === 'procedure'
               ? 'supports'
               : 'explains',
-        strength: Math.min(0.92, 0.46 + candidate.headingCount * 0.08 + candidate.assessmentCount * 0.06 + Math.min(0.18, candidate.occurrenceCount * 0.02)),
-        confidence: Math.min(0.92, 0.52 + candidate.headingCount * 0.1 + candidate.assessmentCount * 0.07),
+        strength: Math.min(0.94, Math.max(item.confidence || 0, item.reviewConfidence || 0.6)),
+        confidence: item.reviewConfidence,
         fileObjectId: file.id,
+        workbenchId: file.ownerWorkbenchId || null,
         evidence
       });
       await this.activateConcept({
         workspaceId: input.workspaceId,
         conceptId: concept.id,
-        activationType: 'resource_indexed',
+        activationType: 'ai_resource_indexed',
         sourceType: 'resource',
         sourceId: file.id,
-        score: Math.min(0.42, 0.12 + candidate.occurrenceCount * 0.03 + candidate.headingCount * 0.04 + candidate.assessmentCount * 0.05),
+        score: Math.min(0.46, 0.16 + item.reviewConfidence * 0.22),
         evidence
       });
       await this.updateLearnerConceptState({
         workspaceId: input.workspaceId,
         conceptId: concept.id,
-        readinessDelta: Math.min(0.08, 0.015 + candidate.headingCount * 0.01 + candidate.assessmentCount * 0.008),
+        readinessDelta: Math.min(0.06, 0.015 + item.reviewConfidence * 0.035),
         evidence
       });
-      if (candidate.roles.has('assessment')) {
-        await this.upsertMisconception({
+    }
+
+    let exerciseCount = 0;
+    let exerciseBindingCount = 0;
+    for (const exercise of (extraction.exercises || []).filter((item) => item.approved)) {
+      const boundConcepts = unique(exercise.conceptLocalIds || []).slice(0, 8)
+        .map((localId) => conceptByLocalId.get(localId))
+        .filter(Boolean) as Array<Awaited<ReturnType<CourseKnowledgeGraphService['upsertConcept']>>>;
+      if (!boundConcepts.length) continue;
+      const evidence = evidenceFor(exercise.evidenceRefs || [], {
+        exerciseLocalId: exercise.localId,
+        conceptLocalIds: exercise.conceptLocalIds || [],
+        conceptTitles: exercise.conceptTitles || [],
+        review: {
+          confidence: exercise.reviewConfidence,
+          issues: exercise.reviewIssues
+        }
+      });
+      const persistedExercise = await this.upsertExercise({
+        workspaceId: input.workspaceId,
+        fileObjectId: file.id,
+        title: exercise.title,
+        prompt: exercise.prompt,
+        exerciseType: exercise.exerciseType,
+        difficulty: exercise.difficulty,
+        answer: exercise.answer,
+        explanation: exercise.explanation,
+        source: 'ai_kg_extraction',
+        evidence
+      });
+      if (!persistedExercise?.id) continue;
+      exerciseCount += 1;
+      for (const concept of boundConcepts) {
+        await this.bindExerciseToConcept({
           workspaceId: input.workspaceId,
+          exerciseId: persistedExercise.id,
           conceptId: concept.id,
-          title: `Assessment coverage around ${candidate.title}`,
-          description: `This concept appears in assessment-oriented chunks for ${file.name}.`,
-          repairHint: 'Use the assessment pattern to validate whether the learner can apply the concept, not just recall it.',
-          severity: Math.min(0.72, 0.32 + candidate.assessmentCount * 0.08),
-          confidence: 0.68,
+          role: exercise.exerciseType === 'task' || exercise.exerciseType === 'design' || exercise.exerciseType === 'coding' ? 'applies' : 'assesses',
+          strength: Math.min(0.92, Math.max(exercise.confidence || 0, exercise.reviewConfidence || 0.62)),
+          confidence: exercise.reviewConfidence,
           evidence
-        }).catch(() => null);
+        });
+        exerciseBindingCount += 1;
       }
     }
 
-    const rootCandidate = orderedCandidates[0];
-    for (let i = 1; i < orderedCandidates.length; i += 1) {
-      const current = orderedCandidates[i];
-      const currentConcept = conceptByKey.get(canonicalTitleKey(current.title));
-      const rootConcept = rootCandidate ? conceptByKey.get(canonicalTitleKey(rootCandidate.title)) : null;
-      if (!currentConcept || !rootConcept || currentConcept.id === rootConcept.id) continue;
-      const relationType = current.roles.has('assessment')
-        ? 'assesses'
-        : current.roles.has('misconception')
-          ? 'remediates'
-          : current.roles.has('example')
-            ? 'supports'
-            : current.headingCount > 0 && rootCandidate?.headingCount && i < 6
-              ? 'part_of'
-              : 'related';
+    for (const relation of extraction.relations.filter((item) => item.approved)) {
+      const from = conceptByLocalId.get(relation.fromLocalId);
+      const to = conceptByLocalId.get(relation.toLocalId);
+      if (!from || !to || from.id === to.id) continue;
       await this.upsertRelation({
         workspaceId: input.workspaceId,
-        fromConceptId: currentConcept.id,
-        toConceptId: rootConcept.id,
-        relationType,
-        weight: relationType === 'part_of'
-          ? 0.72
-          : relationType === 'assesses'
-            ? 0.68
-            : relationType === 'remediates'
-              ? 0.66
-              : relationType === 'supports'
-                ? 0.58
-                : 0.46,
-        confidence: Math.min(0.92, 0.42 + current.occurrenceCount * 0.02 + current.headingCount * 0.05),
-        source: 'resource_structure',
-        evidence: relationEvidenceFor({
-          file: { id: file.id, name: file.name, path: file.path },
-          relationSource: 'resource_extraction',
-          headingPath: current.evidence[0]?.headingPath || fileHeadingPath,
-          chunkId: current.evidence[0]?.chunkId,
-          chunkIndex: current.evidence[0]?.chunkIndex,
-          rationale: relationType === 'part_of'
-            ? 'Derived from shared heading hierarchy in user resources.'
-            : relationType === 'assesses'
-              ? 'Derived from assessment-oriented resource evidence.'
-              : relationType === 'remediates'
-                ? 'Derived from misconception-oriented resource evidence.'
-                : relationType === 'supports'
-                  ? 'Derived from examples or explanatory resource evidence.'
-                  : 'Derived from co-occurrence and resource evidence.'
+        fromConceptId: from.id,
+        toConceptId: to.id,
+        relationType: relation.relationType,
+        weight: relation.weight,
+        confidence: relation.reviewConfidence,
+        source: 'ai_kg_extraction',
+        evidence: evidenceFor(relation.evidenceRefs || [], {
+          relationLocalId: relation.localId,
+          description: relation.description || '',
+          review: {
+            confidence: relation.reviewConfidence,
+            issues: relation.reviewIssues
+          }
         })
       });
     }
 
-    if (orderedCandidates.length >= 2) {
-      const headingCandidates = orderedCandidates.filter((candidate) => candidate.headingCount > 0).slice(0, 6);
-      for (let i = 0; i < headingCandidates.length - 1; i += 1) {
-        const from = conceptByKey.get(canonicalTitleKey(headingCandidates[i].title));
-        const to = conceptByKey.get(canonicalTitleKey(headingCandidates[i + 1].title));
-        if (!from || !to || from.id === to.id) continue;
-        await this.upsertRelation({
-          workspaceId: input.workspaceId,
-          fromConceptId: from.id,
-          toConceptId: to.id,
-          relationType: 'prerequisite',
-          weight: 0.62,
-          confidence: 0.52,
-          source: 'resource_heading_order',
-          evidence: relationEvidenceFor({
-            file: { id: file.id, name: file.name, path: file.path },
-            relationSource: 'heading_order',
-            headingPath: headingCandidates[i].evidence[0]?.headingPath || fileHeadingPath,
-            chunkId: headingCandidates[i].evidence[0]?.chunkId,
-            chunkIndex: headingCandidates[i].evidence[0]?.chunkIndex,
-            rationale: 'Derived from heading order inside the source material.'
-          })
-        });
-      }
+    for (const misconception of extraction.misconceptions.filter((item) => item.approved)) {
+      const concept = conceptByLocalId.get(misconception.conceptLocalId);
+      if (!concept) continue;
+      await this.upsertMisconception({
+        workspaceId: input.workspaceId,
+        conceptId: concept.id,
+        title: misconception.title,
+        description: misconception.description,
+        repairHint: misconception.repairHint,
+        severity: misconception.severity,
+        confidence: misconception.reviewConfidence,
+        evidence: evidenceFor(misconception.evidenceRefs || [], {
+          misconceptionLocalId: misconception.localId,
+          review: {
+            confidence: misconception.reviewConfidence,
+            issues: misconception.reviewIssues
+          }
+        })
+      }).catch(() => null);
     }
+
+    await prisma.courseKnowledgeGovernanceLog.create({
+      data: {
+        workspaceId: input.workspaceId,
+        action: 'ai_kg_extraction_completed',
+        targetType: 'resource',
+        targetId: file.id,
+        beforeJson: '{}',
+        afterJson: stringify({
+          schema: extraction.schema,
+          models: extraction.models,
+          trace: extraction.trace,
+          communities: extraction.communities,
+          persistedConceptIds: concepts.map((concept) => concept.id),
+          persistedExerciseCount: exerciseCount,
+          persistedExerciseBindingCount: exerciseBindingCount
+        }),
+        rationale: 'AI-only five-layer course KG extraction completed: resource semantic layer, extraction, canonicalization, review, and community summaries.',
+        confidence: concepts.length ? Math.min(0.95, 0.55 + concepts.length * 0.02) : 0.4
+      }
+    }).catch((error) => console.warn('AI KG extraction governance log failed:', error));
 
     return {
       concepts,
       bindings: concepts.length,
-      candidates: orderedCandidates.map((candidate) => ({
-        title: candidate.title,
-        aliases: candidate.aliases,
-        roles: Array.from(candidate.roles),
-        score: Number(candidate.score.toFixed(3)),
-        occurrenceCount: candidate.occurrenceCount,
-        headingCount: candidate.headingCount,
-        assessmentCount: candidate.assessmentCount,
-        evidenceCount: candidate.evidence.length
-      }))
+      exercises: exerciseCount,
+      exerciseBindings: exerciseBindingCount,
+      skipped: concepts.length === 0,
+      reason: concepts.length ? null : 'ai_no_approved_concepts',
+      aiExtraction: extraction
     };
   }
 
@@ -1191,70 +1208,553 @@ export class CourseKnowledgeGraphService {
     };
   }
 
-  async getGraph(input: { workspaceId: string; limit?: number }) {
+  private systemCandidateTagsFor(concept: {
+    title: string;
+    description?: string | null;
+    difficulty?: number | null;
+    activationScore?: number | null;
+    misconceptions?: Array<{ title?: string | null }> | null;
+    learnerStates?: Array<{ weaknessEstimate?: number | null }> | null;
+  }, degree = 0) {
+    const tags: Array<{ label: string; rationale: string }> = [];
+    const difficulty = Number(concept.difficulty ?? 0.5);
+    const weakness = Number(concept.learnerStates?.[0]?.weaknessEstimate ?? 0);
+    const text = `${concept.title} ${concept.description || ''}`;
+
+    if ((concept.activationScore ?? 0) >= 0.5 || degree >= 3) {
+      tags.push({ label: '核心概念', rationale: '该节点在图谱中连接度或活跃度较高，适合作为学习组织入口。' });
+    }
+    if (difficulty >= 0.68 || weakness >= 0.62 || /复杂|难|证明|推导|递归|并发|优化|抽象/.test(text)) {
+      tags.push({ label: '可能难点', rationale: '该节点的难度、语义或现有学习信号显示它可能需要额外关注。' });
+    }
+    if ((concept.misconceptions || []).length || /区别|对比|混淆|误区|边界|相似/.test(text)) {
+      tags.push({ label: '易混淆', rationale: '该节点有误区线索或容易与相近概念形成混淆。' });
+    }
+
+    return tags.slice(0, 2);
+  }
+
+  private async ensureSystemCandidateTags(input: {
+    workspaceId: string;
+    concepts: Array<{
+      id: string;
+      title: string;
+      description?: string | null;
+      difficulty?: number | null;
+      activationScore?: number | null;
+      misconceptions?: Array<{ title?: string | null }> | null;
+      learnerStates?: Array<{ weaknessEstimate?: number | null }> | null;
+    }>;
+    degreeById: Map<string, number>;
+  }) {
+    const limited = input.concepts
+      .map((concept) => ({ concept, degree: input.degreeById.get(concept.id) || 0 }))
+      .filter((item) => item.degree >= 2 || Number(item.concept.activationScore || 0) >= 0.45 || Number(item.concept.difficulty || 0) >= 0.68 || (item.concept.misconceptions || []).length)
+      .sort((left, right) => right.degree - left.degree || Number(right.concept.activationScore || 0) - Number(left.concept.activationScore || 0))
+      .slice(0, 14);
+
+    for (const item of limited) {
+      const tags = this.systemCandidateTagsFor(item.concept, item.degree);
+      for (const tag of tags) {
+        await this.upsertConceptTag({
+          workspaceId: input.workspaceId,
+          conceptId: item.concept.id,
+          label: tag.label,
+          source: 'system_candidate',
+          state: 'candidate',
+          rationale: tag.rationale
+        }).catch(() => null);
+      }
+    }
+  }
+
+  async listConceptTags(input: { workspaceId: string; conceptId: string }) {
+    const rows = await prisma.$queryRawUnsafe<Array<any>>(
+      `SELECT "id", "label", "normalizedLabel", "state", "sourcesJson", "rationale", "createdAt", "updatedAt"
+       FROM "CourseKnowledgeConceptTag"
+       WHERE "workspaceId" = ? AND "conceptId" = ?
+       ORDER BY CASE WHEN "state" = 'applied' THEN 0 ELSE 1 END, "updatedAt" DESC`,
+      input.workspaceId,
+      input.conceptId
+    );
+    return rows.map((row) => serializeTag(row));
+  }
+
+  async upsertConceptTag(input: {
+    workspaceId: string;
+    conceptId: string;
+    label: string;
+    source?: ConceptTagSource;
+    state?: ConceptTagState;
+    rationale?: string;
+  }) {
+    const label = normalizeTagLabel(input.label);
+    const normalizedLabel = normalizedTagKey(label);
+    if (!label || normalizedLabel.length < 1) throw new Error('valid tag label is required');
+    if (input.source === 'system_candidate' && !SYSTEM_CANDIDATE_TAGS.has(label)) {
+      throw new Error('system candidate tag must be 核心概念, 可能难点, or 易混淆');
+    }
+    const source: ConceptTagSource = input.source || 'user';
+    const state: ConceptTagState = input.state || (source === 'user' ? 'applied' : 'candidate');
+    const existing = await prisma.$queryRawUnsafe<Array<any>>(
+      `SELECT "id", "label", "normalizedLabel", "state", "sourcesJson", "rationale", "createdAt", "updatedAt"
+       FROM "CourseKnowledgeConceptTag"
+       WHERE "workspaceId" = ? AND "conceptId" = ? AND "normalizedLabel" = ?
+       LIMIT 1`,
+      input.workspaceId,
+      input.conceptId,
+      normalizedLabel
+    );
+    const id = existing[0]?.id || `concept-tag-${stableHash([input.workspaceId, input.conceptId, normalizedLabel]).slice(0, 32)}`;
+    const nextState: ConceptTagState = existing[0]?.state === 'applied' || state === 'applied' ? 'applied' : 'candidate';
+    const sources = Array.from(new Set([
+      ...(existing[0] ? parseTagSources(existing[0].sourcesJson) : []),
+      source,
+      ...(nextState === 'applied' ? ['user' as ConceptTagSource] : [])
+    ]));
+    const rationale = clip(input.rationale || existing[0]?.rationale || '', 360);
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "CourseKnowledgeConceptTag" ("id", "label", "normalizedLabel", "state", "sourcesJson", "rationale", "workspaceId", "conceptId")
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT("workspaceId", "conceptId", "normalizedLabel") DO UPDATE SET
+         "label" = excluded."label",
+         "state" = excluded."state",
+         "sourcesJson" = excluded."sourcesJson",
+         "rationale" = CASE WHEN excluded."rationale" != '' THEN excluded."rationale" ELSE "CourseKnowledgeConceptTag"."rationale" END,
+         "updatedAt" = CURRENT_TIMESTAMP`,
+      id,
+      label,
+      normalizedLabel,
+      nextState,
+      stringify(sources, []),
+      rationale,
+      input.workspaceId,
+      input.conceptId
+    );
+    const rows = await prisma.$queryRawUnsafe<Array<any>>(
+      `SELECT "id", "label", "normalizedLabel", "state", "sourcesJson", "rationale", "createdAt", "updatedAt"
+       FROM "CourseKnowledgeConceptTag"
+       WHERE "id" = ?
+       LIMIT 1`,
+      id
+    );
+    return rows[0] ? serializeTag(rows[0]) : null;
+  }
+
+  async deleteConceptTag(input: { workspaceId: string; conceptId: string; tagId: string }) {
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM "CourseKnowledgeConceptTag" WHERE "workspaceId" = ? AND "conceptId" = ? AND "id" = ?`,
+      input.workspaceId,
+      input.conceptId,
+      input.tagId
+    );
+    return { ok: true };
+  }
+
+  async chatAboutConceptForTags(input: {
+    workspaceId: string;
+    conceptId: string;
+    question?: string;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  }) {
+    const graph = await this.getGraph({ workspaceId: input.workspaceId, limit: 220 });
+    const concept = (graph.nodes as any[]).find((node) => node.id === input.conceptId);
+    if (!concept) throw new Error('concept not found');
+    const neighbors = (graph.edges as any[])
+      .filter((edge) => edge.from === input.conceptId || edge.to === input.conceptId)
+      .slice(0, 12)
+      .map((edge) => ({
+        relationType: edge.relationType,
+        direction: edge.from === input.conceptId ? 'outgoing' : 'incoming',
+        concept: (graph.nodes as any[]).find((node) => node.id === (edge.from === input.conceptId ? edge.to : edge.from))?.title || ''
+      }));
+    const sourceSnippets = (concept.sources || [])
+      .flatMap((source: any) => (source.snippets || []).slice(0, 2).map((snippet: any) => ({
+        source: source.name,
+        quote: snippet.quote || snippet.snippet || ''
+      })))
+      .slice(0, 6);
+
+    const result = await aiModelProviderService.json<{
+      reply?: string;
+      suggestedTags?: Array<{ label: string; rationale?: string }>;
+    }>({
+      instruction: [
+        '你是一个轻量知识图谱节点助手。',
+        '只基于给定节点、邻近图信息、来源片段和用户问题回答。',
+        '如果用户继续追问，可以承接前文上下文，尽量直接解释这个节点的概念、作用、前置关系、常见误区或来源依据。',
+        '对话后可以建议少量 tag，但不要替用户做学习诊断，不要输出掌握度、薄弱点、学习状态。',
+        'tag 是用户可采纳的轻量标记，最多 4 个，标签应简短。'
+      ].join('\n'),
+      schema: {
+        type: 'object',
+        properties: {
+          reply: { type: 'string' },
+          suggestedTags: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string' },
+                rationale: { type: 'string' }
+              }
+            }
+          }
+        }
+      },
+      input: {
+        question: input.question || '请解释这个节点，并建议是否需要打标签。',
+        concept: {
+          title: concept.title,
+          description: concept.description || '',
+          category: concept.category || '',
+          tags: concept.tags || []
+        },
+        history: Array.isArray(input.history) ? input.history.slice(-6) : [],
+        neighbors,
+        sourceSnippets
+      },
+      useCase: 'chat',
+      timeoutMs: 45000
+    });
+
+    const suggestedTags = (Array.isArray(result.data.suggestedTags) ? result.data.suggestedTags : [])
+      .map((tag) => ({
+        label: normalizeTagLabel(tag.label),
+        rationale: clip(tag.rationale || '', 260)
+      }))
+      .filter((tag) => tag.label && !SYSTEM_CANDIDATE_TAGS.has(tag.label))
+      .slice(0, 4);
+
+    return {
+      reply: result.data.reply || '',
+      suggestedTags,
+      model: result.model,
+      provider: result.provider
+    };
+  }
+
+  async getGraph(input: { workspaceId: string; limit?: number; sourceIds?: string[]; tagQuery?: string }) {
+    const sourceIds = unique(input.sourceIds || []);
     const rawConcepts = await prisma.courseKnowledgeConcept.findMany({
-      where: { workspaceId: input.workspaceId, status: 'active' },
+      where: {
+        workspaceId: input.workspaceId,
+        status: 'active',
+        ...(sourceIds.length
+          ? { bindings: { some: { bindingType: 'resource', fileObjectId: { in: sourceIds } } } }
+          : {})
+      },
       orderBy: [{ activationScore: 'desc' }, { updatedAt: 'desc' }],
       take: Math.min(Math.max((input.limit || 80) * 3, 20), 500),
       include: {
-        bindings: { take: 8, orderBy: { updatedAt: 'desc' } },
+        bindings: {
+          take: 24,
+          orderBy: { updatedAt: 'desc' },
+          include: {
+            fileObject: {
+              select: {
+                id: true,
+                name: true,
+                path: true,
+                resourceType: true,
+                origin: true,
+                mimeType: true,
+                extension: true,
+                updatedAt: true
+              }
+            }
+          }
+        },
         misconceptions: { take: 5, orderBy: { severity: 'desc' } },
         learnerStates: { where: { stateScope: 'workspace', status: 'active' }, take: 1 }
       }
     });
-    const concepts = rawConcepts
+    let concepts = rawConcepts
       .filter((concept) => isCourseConceptCandidate(concept.title))
       .slice(0, Math.min(Math.max(input.limit || 80, 1), 300));
-    const ids = concepts.map((concept) => concept.id);
-    const relations = await prisma.courseKnowledgeRelation.findMany({
+    const initialIds = concepts.map((concept) => concept.id);
+    let relations = await prisma.courseKnowledgeRelation.findMany({
       where: {
         workspaceId: input.workspaceId,
-        fromConceptId: { in: ids },
-        toConceptId: { in: ids }
+        fromConceptId: { in: initialIds },
+        toConceptId: { in: initialIds }
       },
       orderBy: { confidence: 'desc' },
       take: 600
     });
+    const degreeById = new Map<string, number>();
+    relations.forEach((relation) => {
+      degreeById.set(relation.fromConceptId, (degreeById.get(relation.fromConceptId) || 0) + 1);
+      degreeById.set(relation.toConceptId, (degreeById.get(relation.toConceptId) || 0) + 1);
+    });
+    await this.ensureSystemCandidateTags({
+      workspaceId: input.workspaceId,
+      concepts,
+      degreeById
+    });
+    const tagRows = initialIds.length
+      ? await prisma.$queryRawUnsafe<Array<any>>(
+          `SELECT "id", "label", "normalizedLabel", "state", "sourcesJson", "rationale", "createdAt", "updatedAt", "conceptId"
+           FROM "CourseKnowledgeConceptTag"
+           WHERE "workspaceId" = ? AND "conceptId" IN (${initialIds.map(() => '?').join(',')})
+           ORDER BY CASE WHEN "state" = 'applied' THEN 0 ELSE 1 END, "updatedAt" DESC`,
+          input.workspaceId,
+          ...initialIds
+        )
+      : [];
+    const tagsByConceptId = new Map<string, Array<ReturnType<typeof serializeTag>>>();
+    tagRows.forEach((row) => {
+      const items = tagsByConceptId.get(row.conceptId) || [];
+      items.push(serializeTag(row));
+      tagsByConceptId.set(row.conceptId, items);
+    });
+    const tagQuery = normalizedTagKey(input.tagQuery || '');
+    if (tagQuery) {
+      concepts = concepts.filter((concept) =>
+        (tagsByConceptId.get(concept.id) || []).some((tag) => tag.state === 'applied' && tag.normalizedLabel.includes(tagQuery))
+      );
+      const filteredIds = new Set(concepts.map((concept) => concept.id));
+      relations = relations.filter((relation) => filteredIds.has(relation.fromConceptId) && filteredIds.has(relation.toConceptId));
+    }
+    const sourceById = new Map<string, {
+      id: string;
+      name: string;
+      path: string;
+      resourceType?: string | null;
+      origin?: string | null;
+      mimeType?: string | null;
+      extension?: string | null;
+      updatedAt?: string | null;
+      nodeCount: number;
+      edgeCount: number;
+    }>();
+    const touchSource = (source: {
+      id: string;
+      name?: string | null;
+      path?: string | null;
+      resourceType?: string | null;
+      origin?: string | null;
+      mimeType?: string | null;
+      extension?: string | null;
+      updatedAt?: Date | string | null;
+    }, kind: 'node' | 'edge') => {
+      if (!source.id) return;
+      const current = sourceById.get(source.id) || {
+        id: source.id,
+        name: source.name || 'Unknown source',
+        path: source.path || '',
+        resourceType: source.resourceType || null,
+        origin: source.origin || null,
+        mimeType: source.mimeType || null,
+        extension: source.extension || null,
+        updatedAt: source.updatedAt instanceof Date ? source.updatedAt.toISOString() : source.updatedAt || null,
+        nodeCount: 0,
+        edgeCount: 0
+      };
+      if (kind === 'node') current.nodeCount += 1;
+      if (kind === 'edge') current.edgeCount += 1;
+      sourceById.set(source.id, current);
+    };
+    const sourceRefsFromEvidence = (evidence: Record<string, any>) => {
+      const refs = Array.isArray(evidence.resourceEvidence) ? evidence.resourceEvidence : [];
+      const byId = new Map<string, any>();
+      refs.forEach((item) => {
+        const id = normalizeText(item.fileObjectId);
+        if (!id) return;
+        const current = byId.get(id);
+        if (!current) {
+          byId.set(id, {
+            id,
+            name: item.fileName || 'Unknown source',
+            path: item.path || '',
+            snippets: item.snippet ? [{
+              chunkId: item.chunkId || null,
+              chunkIndex: item.chunkIndex ?? null,
+              sectionId: item.sectionId || null,
+              quote: clip(item.snippet, 260),
+              rationale: item.rationale || '',
+              confidence: item.confidence ?? null
+            }] : []
+          });
+          return;
+        }
+        if (item.snippet && current.snippets.length < 3) {
+          current.snippets.push({
+            chunkId: item.chunkId || null,
+            chunkIndex: item.chunkIndex ?? null,
+            sectionId: item.sectionId || null,
+            quote: clip(item.snippet, 260),
+            rationale: item.rationale || '',
+            confidence: item.confidence ?? null
+          });
+        }
+      });
+      return Array.from(byId.values());
+    };
     return {
       schema: 'course_knowledge_graph.v1',
-      nodes: concepts.map((concept) => ({
-        id: concept.id,
-        conceptKey: concept.conceptKey,
-        title: concept.title,
-        description: concept.description,
-        aliases: parseJson<string[]>(concept.aliasesJson, []),
-        category: concept.category,
-        difficulty: concept.difficulty,
-        activationScore: concept.activationScore,
-        learnerState: concept.learnerStates[0]
+      nodes: concepts.map((concept) => {
+        const evidence = parseJson<Record<string, any>>(concept.evidenceJson, {});
+        const bindingSources = concept.bindings
+          .filter((binding) => binding.bindingType === 'resource' && binding.fileObjectId && binding.fileObject)
+          .map((binding) => ({
+            id: binding.fileObjectId as string,
+            name: binding.fileObject?.name || 'Unknown source',
+            path: binding.fileObject?.path || '',
+            resourceType: binding.fileObject?.resourceType || null,
+            origin: binding.fileObject?.origin || null,
+            mimeType: binding.fileObject?.mimeType || null,
+            extension: binding.fileObject?.extension || null,
+            role: binding.role,
+            strength: binding.strength,
+            confidence: binding.confidence,
+            updatedAt: binding.fileObject?.updatedAt?.toISOString?.() || null
+          }));
+        const evidenceSources = sourceRefsFromEvidence(evidence);
+        const sources = bindingSources.map((source) => {
+          const evidenceSource = evidenceSources.find((item) => item.id === source.id);
+          return { ...source, snippets: evidenceSource?.snippets || [] };
+        });
+        evidenceSources
+          .filter((item) => !sources.some((source) => source.id === item.id))
+          .forEach((item) => sources.push({ ...item, role: 'evidence', strength: null, confidence: null }));
+        const uniqueSources = Array.from(new Map(sources.map((source) => [source.id, source])).values());
+        uniqueSources.forEach((source) => touchSource(source, 'node'));
+        return {
+          id: concept.id,
+          conceptKey: concept.conceptKey,
+          title: concept.title,
+          description: concept.description,
+          aliases: parseJson<string[]>(concept.aliasesJson, []),
+          category: concept.category,
+          difficulty: concept.difficulty,
+          source: concept.source,
+          tags: tagsByConceptId.get(concept.id) || [],
+          sourceIds: uniqueSources.map((source) => source.id),
+          sources: uniqueSources,
+          activationScore: concept.activationScore,
+          aiEvidence: {
+            sourceLayer: evidence.sourceLayer,
+            aiPipeline: evidence.aiPipeline || null,
+            resourceEvidence: Array.isArray(evidence.resourceEvidence) ? evidence.resourceEvidence.slice(0, 6) : [],
+            canonicalization: evidence.canonicalization || null,
+            review: evidence.review || null
+          },
+          learnerState: concept.learnerStates[0]
+            ? {
+                masteryEstimate: concept.learnerStates[0].masteryEstimate,
+                weaknessEstimate: concept.learnerStates[0].weaknessEstimate,
+                readinessEstimate: concept.learnerStates[0].readinessEstimate
+              }
+            : null,
+          lastActivatedAt: concept.lastActivatedAt?.toISOString() || null,
+          bindings: concept.bindings.map((binding) => ({
+            targetType: binding.targetType,
+            targetId: binding.targetId,
+            role: binding.role,
+            strength: binding.strength,
+            fileObjectId: binding.fileObjectId || null,
+            fileName: binding.fileObject?.name || null,
+            path: binding.fileObject?.path || null
+          })),
+          misconceptions: concept.misconceptions.map((item) => ({
+            title: item.title,
+            repairHint: item.repairHint,
+            severity: item.severity
+          }))
+        };
+      }),
+      edges: relations.map((relation) => {
+        const evidence = parseJson<Record<string, any>>(relation.evidenceJson, {});
+        const sources = sourceRefsFromEvidence(evidence);
+        sources.forEach((source) => touchSource(source, 'edge'));
+        return {
+          id: relation.id,
+          from: relation.fromConceptId,
+          to: relation.toConceptId,
+          relationType: relation.relationType,
+          weight: relation.weight,
+          confidence: relation.confidence,
+          source: relation.source,
+          sourceIds: sources.map((source) => source.id),
+          sources,
+          aiEvidence: {
+            sourceLayer: evidence.sourceLayer,
+            description: evidence.description || '',
+            resourceEvidence: Array.isArray(evidence.resourceEvidence) ? evidence.resourceEvidence.slice(0, 4) : [],
+            review: evidence.review || null
+          }
+        };
+      }),
+      sources: Array.from(sourceById.values())
+        .sort((left, right) => right.nodeCount - left.nodeCount || left.name.localeCompare(right.name))
+    };
+  }
+
+  async getConceptExercises(input: { workspaceId: string; conceptId: string; limit?: number }) {
+    const limit = Math.min(Math.max(input.limit || 12, 1), 50);
+    const rows = await prisma.$queryRawUnsafe<Array<any>>(
+      `SELECT
+        e."id",
+        e."title",
+        e."prompt",
+        e."exerciseType",
+        e."difficulty",
+        e."answerJson",
+        e."explanation",
+        e."source",
+        e."evidenceJson",
+        e."fileObjectId",
+        e."updatedAt",
+        b."role",
+        b."strength",
+        b."confidence",
+        f."name" AS "fileName",
+        f."path" AS "path",
+        f."resourceType" AS "resourceType",
+        f."origin" AS "origin"
+      FROM "CourseKnowledgeExerciseBinding" b
+      JOIN "CourseKnowledgeExercise" e ON e."id" = b."exerciseId"
+      LEFT JOIN "FileSystemObject" f ON f."id" = e."fileObjectId"
+      WHERE b."workspaceId" = ? AND b."conceptId" = ? AND e."status" = 'active'
+      ORDER BY b."confidence" DESC, e."updatedAt" DESC
+      LIMIT ?`,
+      input.workspaceId,
+      input.conceptId,
+      limit
+    );
+    return rows.map((row) => {
+      const evidence = parseJson<Record<string, any>>(row.evidenceJson, {});
+      return {
+        id: row.id,
+        title: row.title,
+        prompt: row.prompt,
+        exerciseType: row.exerciseType,
+        difficulty: row.difficulty,
+        answer: parseJson(row.answerJson, null),
+        explanation: row.explanation,
+        source: row.source,
+        role: row.role,
+        strength: row.strength,
+        confidence: row.confidence,
+        updatedAt: row.updatedAt,
+        sourceRef: row.fileObjectId
           ? {
-              masteryEstimate: concept.learnerStates[0].masteryEstimate,
-              weaknessEstimate: concept.learnerStates[0].weaknessEstimate,
-              readinessEstimate: concept.learnerStates[0].readinessEstimate
+              id: row.fileObjectId,
+              name: row.fileName || 'Unknown source',
+              path: row.path || '',
+              resourceType: row.resourceType || null,
+              origin: row.origin || null
             }
           : null,
-        lastActivatedAt: concept.lastActivatedAt?.toISOString() || null,
-        bindings: concept.bindings.map((binding) => ({
-          targetType: binding.targetType,
-          targetId: binding.targetId,
-          role: binding.role,
-          strength: binding.strength
-        })),
-        misconceptions: concept.misconceptions.map((item) => ({
-          title: item.title,
-          repairHint: item.repairHint,
-          severity: item.severity
-        }))
-      })),
-      edges: relations.map((relation) => ({
-        id: relation.id,
-        from: relation.fromConceptId,
-        to: relation.toConceptId,
-        relationType: relation.relationType,
-        weight: relation.weight,
-        confidence: relation.confidence
-      }))
-    };
+        evidence: {
+          sourceLayer: evidence.sourceLayer,
+          resourceEvidence: Array.isArray(evidence.resourceEvidence) ? evidence.resourceEvidence.slice(0, 4) : [],
+          review: evidence.review || null
+        }
+      };
+    });
   }
 }
 

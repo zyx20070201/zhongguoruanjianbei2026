@@ -6,40 +6,45 @@ import { authSessionService } from '../services/authSessionService';
 import { clearAuthCookie, getAuthCookieValue, setAuthCookie } from '../middleware/auth';
 import { hashPassword, verifyPassword } from '../utils/password';
 
-const GENERIC_RESET_RESPONSE = {
-  message: 'If an account exists for that identifier, a password reset link has been sent.'
-};
+const isValidUsername = (value: string) => /^[A-Za-z0-9_]{3,24}$/.test(value);
 
-const toSafeUser = (user: { id: string; username: string; email: string | null; emailVerifiedAt?: Date | string | null }) => ({
+const toSafeUser = (user: { id: string; username: string; email: string | null }) => ({
   id: user.id,
   username: user.username,
-  email: user.email,
-  emailVerified: Boolean(user.emailVerifiedAt)
+  email: user.email
 });
 export const register = async (req: Request, res: Response) => {
   const { username, email, password } = req.body;
 
   if (!username || !email || !password) {
-    throw badRequest('Username, email and password are required');
+    throw badRequest('请填写用户名、邮箱和密码');
   }
 
-  const normalizedEmail = String(email).trim().toLowerCase();
   const normalizedUsername = String(username).trim();
+  const normalizedEmail = String(email).trim().toLowerCase();
+
+  if (!normalizedUsername) {
+    throw badRequest('请填写用户名');
+  }
+
+  if (!isValidUsername(normalizedUsername)) {
+    throw badRequest('用户名需为 3-24 位，只能包含字母、数字或下划线', 'INVALID_USERNAME');
+  }
 
   if (!authSecurityService.isValidEmail(normalizedEmail)) {
-    throw badRequest('Please enter a valid email address', 'INVALID_EMAIL');
+    throw badRequest('请输入有效的邮箱地址', 'INVALID_EMAIL');
   }
 
-  validatePasswordStrength(String(password), [normalizedUsername, normalizedEmail]);
+  validatePasswordStrength(String(password));
 
   const existingUser = await prisma.user.findFirst({
     where: {
-      OR: [{ email: normalizedEmail }, { username: normalizedUsername }]
+      OR: [{ username: normalizedUsername }, { email: normalizedEmail }]
     }
   });
 
   if (existingUser) {
-    throw conflict('Email or username is already in use', 'ACCOUNT_EXISTS');
+    throw conflict('用户名或邮箱已被使用', 'ACCOUNT_EXISTS');
   }
 
   const user = await prisma.user.create({
@@ -49,8 +54,6 @@ export const register = async (req: Request, res: Response) => {
       password: hashPassword(String(password))
     }
   });
-
-  await authSecurityService.issueEmailVerification(user);
 
   const session = authSessionService.create(user.id);
   setAuthCookie(res, session.id, session.expiresAt);
@@ -62,7 +65,7 @@ export const login = async (req: Request, res: Response) => {
   const { identifier, password } = req.body;
 
   if (!identifier || !password) {
-    throw badRequest('Email/username and password are required');
+    throw badRequest('请填写邮箱或用户名和密码');
   }
 
   const normalizedIdentifier = String(identifier).trim();
@@ -75,7 +78,7 @@ export const login = async (req: Request, res: Response) => {
   });
 
   if (!user || !verifyPassword(String(password), user.password)) {
-    throw unauthorized('Invalid credentials', 'INVALID_CREDENTIALS');
+    throw unauthorized('邮箱、用户名或密码错误', 'INVALID_CREDENTIALS');
   }
 
   const session = authSessionService.create(user.id);
@@ -89,8 +92,8 @@ export const getCurrentUser = async (req: Request, res: Response) => {
     throw unauthorized();
   }
 
-  const users = await prisma.$queryRaw<Array<{ id: string; username: string; email: string | null; emailVerifiedAt: Date | string | null }>>`
-    SELECT "id", "username", "email", "emailVerifiedAt"
+  const users = await prisma.$queryRaw<Array<{ id: string; username: string; email: string | null }>>`
+    SELECT "id", "username", "email"
     FROM "User"
     WHERE "id" = ${req.authUser.id}
     LIMIT 1
@@ -107,82 +110,4 @@ export const logout = async (req: Request, res: Response) => {
 
   clearAuthCookie(res);
   res.json({ success: true });
-};
-
-export const requestPasswordReset = async (req: Request, res: Response) => {
-  const identifier = String(req.body?.identifier || '').trim();
-  if (!identifier) {
-    throw badRequest('Email or username is required');
-  }
-
-  await authSecurityService.issuePasswordReset(identifier);
-  res.json(GENERIC_RESET_RESPONSE);
-};
-
-export const resetPassword = async (req: Request, res: Response) => {
-  const token = String(req.body?.token || '').trim();
-  const password = String(req.body?.password || '');
-
-  if (!token || !password) {
-    throw badRequest('Reset token and new password are required');
-  }
-
-  const user = await authSecurityService.resetPassword(token, password);
-  if (!user) {
-    throw badRequest('This password reset link is invalid or expired', 'INVALID_RESET_TOKEN');
-  }
-
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      password: hashPassword(password)
-    }
-  });
-  await prisma.$executeRaw`
-    UPDATE "User"
-    SET "passwordChangedAt" = ${new Date()}
-    WHERE "id" = ${user.id}
-  `;
-  authSessionService.destroyUserSessions(user.id);
-
-  res.json({ success: true });
-};
-
-export const verifyEmail = async (req: Request, res: Response) => {
-  const token = String(req.body?.token || '').trim();
-  if (!token) {
-    throw badRequest('Verification token is required');
-  }
-
-  const user = await authSecurityService.verifyEmail(token);
-  if (!user) {
-    throw badRequest('This verification link is invalid or expired', 'INVALID_VERIFICATION_TOKEN');
-  }
-
-  res.json({ user: toSafeUser(user) });
-};
-
-export const resendEmailVerification = async (req: Request, res: Response) => {
-  if (!req.authUser) {
-    throw unauthorized();
-  }
-
-  const users = await prisma.$queryRaw<Array<{ id: string; email: string | null; emailVerifiedAt: Date | string | null }>>`
-    SELECT "id", "email", "emailVerifiedAt"
-    FROM "User"
-    WHERE "id" = ${req.authUser.id}
-    LIMIT 1
-  `;
-  const user = users[0];
-
-  if (!user) {
-    throw unauthorized();
-  }
-
-  if (user.emailVerifiedAt) {
-    return res.json({ message: 'Email is already verified' });
-  }
-
-  await authSecurityService.issueEmailVerification(user);
-  return res.json({ message: 'Verification link sent' });
 };

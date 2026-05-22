@@ -116,6 +116,12 @@ router.post('/chat/welcome', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/models', (_req: Request, res: Response) => {
+  return res.json({
+    models: aiModelProviderService.configuredChatModels()
+  });
+});
+
 router.post('/note-edit', async (req: Request, res: Response) => {
   const { action, workspaceId, workbenchId, file, selection, documentContext } = req.body ?? {};
 

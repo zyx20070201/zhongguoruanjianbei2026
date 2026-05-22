@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SSH_HOST="${CONTEXT_SSH_HOST:-connect.cqa1.seetacloud.com}"
-SSH_PORT="${CONTEXT_SSH_PORT:-35512}"
+SSH_PORT="${CONTEXT_SSH_PORT:-23428}"
 SSH_USER="${CONTEXT_SSH_USER:-root}"
 LOCAL_QDRANT_PORT="${CONTEXT_LOCAL_QDRANT_PORT:-16333}"
 LOCAL_EMBEDDING_PORT="${CONTEXT_LOCAL_EMBEDDING_PORT:-18000}"
@@ -10,15 +10,40 @@ LOCAL_RERANKER_PORT="${CONTEXT_LOCAL_RERANKER_PORT:-18001}"
 REMOTE_QDRANT_PORT="${CONTEXT_REMOTE_QDRANT_PORT:-6333}"
 REMOTE_EMBEDDING_PORT="${CONTEXT_REMOTE_EMBEDDING_PORT:-8000}"
 REMOTE_RERANKER_PORT="${CONTEXT_REMOTE_RERANKER_PORT:-8001}"
+SSH_PASSWORD="${CONTEXT_SSH_PASSWORD:-}"
 
-ssh -fN \
-  -o ServerAliveInterval=15 \
-  -o ServerAliveCountMax=6 \
-  -L "$LOCAL_QDRANT_PORT:127.0.0.1:$REMOTE_QDRANT_PORT" \
-  -L "$LOCAL_EMBEDDING_PORT:127.0.0.1:$REMOTE_EMBEDDING_PORT" \
-  -L "$LOCAL_RERANKER_PORT:127.0.0.1:$REMOTE_RERANKER_PORT" \
-  -p "$SSH_PORT" \
-  "$SSH_USER@$SSH_HOST"
+if [[ -n "$SSH_PASSWORD" ]]; then
+  askpass_file="${TMPDIR:-/tmp}/pp1-context-askpass.sh"
+  cat > "$askpass_file" <<EOF
+#!/bin/sh
+printf %s "$SSH_PASSWORD"
+EOF
+  chmod 700 "$askpass_file"
+  SSH_ASKPASS="$askpass_file" \
+  SSH_ASKPASS_REQUIRE=force \
+  DISPLAY="${DISPLAY:-:0}" \
+  ssh -fN \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/tmp/pp1-context-known-hosts \
+    -o PreferredAuthentications=password \
+    -o PubkeyAuthentication=no \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=6 \
+    -L "$LOCAL_QDRANT_PORT:127.0.0.1:$REMOTE_QDRANT_PORT" \
+    -L "$LOCAL_EMBEDDING_PORT:127.0.0.1:$REMOTE_EMBEDDING_PORT" \
+    -L "$LOCAL_RERANKER_PORT:127.0.0.1:$REMOTE_RERANKER_PORT" \
+    -p "$SSH_PORT" \
+    "$SSH_USER@$SSH_HOST" < /dev/null
+else
+  ssh -fN \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=6 \
+    -L "$LOCAL_QDRANT_PORT:127.0.0.1:$REMOTE_QDRANT_PORT" \
+    -L "$LOCAL_EMBEDDING_PORT:127.0.0.1:$REMOTE_EMBEDDING_PORT" \
+    -L "$LOCAL_RERANKER_PORT:127.0.0.1:$REMOTE_RERANKER_PORT" \
+    -p "$SSH_PORT" \
+    "$SSH_USER@$SSH_HOST"
+fi
 
 echo "Context tunnel started:"
 echo "  Qdrant    http://127.0.0.1:$LOCAL_QDRANT_PORT -> 127.0.0.1:$REMOTE_QDRANT_PORT"

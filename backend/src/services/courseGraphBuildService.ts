@@ -15,7 +15,48 @@ const stringify = (value: unknown, fallback: unknown = {}) => {
   }
 };
 
+const parseJson = <T>(value: string | null | undefined, fallback: T): T => {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+};
+
 const unique = <T,>(items: T[]) => Array.from(new Set(items));
+const locallyExtractableExtensions = new Set([
+  'pdf',
+  'docx',
+  'pptx',
+  'md',
+  'markdown',
+  'txt',
+  'csv',
+  'json',
+  'yaml',
+  'yml',
+  'xml',
+  'html',
+  'css',
+  'js',
+  'ts',
+  'tsx',
+  'jsx',
+  'py',
+  'java',
+  'cpp',
+  'c',
+  'go',
+  'rs',
+  'sql'
+]);
+
+const isLocallyExtractableFile = (file: ResourceFile) => {
+  const extension = String(file.extension || file.name.split('.').pop() || '').toLowerCase().replace(/^\./, '');
+  const mimeType = String(file.mimeType || '').toLowerCase();
+  return locallyExtractableExtensions.has(extension) || mimeType.startsWith('text/') || mimeType.includes('pdf');
+};
 
 type ResourceFile = {
   id: string;
@@ -296,6 +337,7 @@ export class CourseGraphBuildService {
       };
 
       try {
+        let indexFailureReason: string | null = null;
         fileReport.knowledgeChunkCountBefore = await prisma.knowledgeChunk.count({
           where: { workspaceId: input.workspaceId, fileObjectId: file.id }
         });
@@ -303,7 +345,10 @@ export class CourseGraphBuildService {
           where: { workspaceId: input.workspaceId, fileObjectId: file.id, bindingType: 'resource' }
         });
 
-        if (input.reindex || fileReport.knowledgeChunkCountBefore === 0) {
+        if (!isLocallyExtractableFile(file) && (input.reindex || fileReport.knowledgeChunkCountBefore === 0)) {
+          indexFailureReason = 'unsupported_file_type';
+          fileReport.indexStatus = 'unsupported';
+        } else if (input.reindex || fileReport.knowledgeChunkCountBefore === 0) {
           const job = await knowledgeIndexingService.indexFile({
             workspaceId: input.workspaceId,
             fileObjectId: file.id,
@@ -313,6 +358,13 @@ export class CourseGraphBuildService {
           fileReport.indexed = Boolean(job && job.status !== 'skipped');
           fileReport.indexStatus = job?.status || null;
           if (fileReport.indexed) indexedFileCount += 1;
+          const lifecycle = parseJson<Record<string, any>>(job?.errorMessage, {});
+          if (job?.status === 'failed') {
+            indexFailureReason = String(lifecycle.vectorError || lifecycle.courseKnowledgeGraphError || lifecycle.reason || 'index_failed');
+          }
+          if (sourceEligible && lifecycle.courseKnowledgeGraphError) {
+            throw new Error(lifecycle.courseKnowledgeGraphError);
+          }
         } else {
           fileReport.indexStatus = 'cached';
         }
@@ -320,12 +372,33 @@ export class CourseGraphBuildService {
         fileReport.knowledgeChunkCountAfter = await prisma.knowledgeChunk.count({
           where: { workspaceId: input.workspaceId, fileObjectId: file.id }
         });
+        const resourceBindingCountAfterIndex = await prisma.courseKnowledgeBinding.count({
+          where: { workspaceId: input.workspaceId, fileObjectId: file.id, bindingType: 'resource' }
+        });
 
         if (sourceEligible) {
           sourceFileCount += 1;
         }
 
-        if (sourceEligible && fileReport.resourceBindingCountBefore === 0) {
+        if (sourceEligible && fileReport.knowledgeChunkCountAfter === 0) {
+          skippedFileCount += 1;
+          fileReport.skippedReason = indexFailureReason || 'not_indexed';
+        } else if (sourceEligible && resourceBindingCountAfterIndex > fileReport.resourceBindingCountBefore) {
+          const boundConcepts = await prisma.courseKnowledgeConcept.findMany({
+            where: {
+              workspaceId: input.workspaceId,
+              bindings: { some: { fileObjectId: file.id, bindingType: 'resource' } }
+            },
+            select: { id: true },
+            take: 200
+          });
+          fileReport.ingested = true;
+          fileReport.conceptsExtracted = boundConcepts.length;
+          fileReport.bindingsCreated = Math.max(0, resourceBindingCountAfterIndex - fileReport.resourceBindingCountBefore);
+          ingestedFileCount += 1;
+          conceptCount += fileReport.conceptsExtracted;
+          bindingCount += fileReport.bindingsCreated;
+        } else if (sourceEligible && fileReport.resourceBindingCountBefore === 0) {
           const ingestResult = await courseKnowledgeGraphService.ingestResourceFile({
             workspaceId: input.workspaceId,
             fileObjectId: file.id,
@@ -347,7 +420,7 @@ export class CourseGraphBuildService {
           fileReport.skippedReason = fileReport.resourceBindingCountBefore > 0 ? 'already_ingested' : 'no_source_bindings';
         } else if (fileReport.knowledgeChunkCountAfter === 0) {
           skippedFileCount += 1;
-          fileReport.skippedReason = 'not_indexed';
+          fileReport.skippedReason = indexFailureReason || 'not_indexed';
         }
 
         const sampleConcepts = fileReport.ingested
@@ -374,6 +447,15 @@ export class CourseGraphBuildService {
 
         fileReports.push(fileReport);
       } catch (error) {
+        if (sourceEligible && error instanceof Error && error.message.includes('has no indexed chunks')) {
+          skippedFileCount += 1;
+          fileReport.skippedReason = 'not_indexed';
+          fileReports.push(fileReport);
+          continue;
+        }
+        if (sourceEligible && error instanceof Error && error.message.includes('AI KG extraction failed')) {
+          throw error;
+        }
         failedFileCount += 1;
         fileReport.error = error instanceof Error ? error.message : String(error);
         fileReports.push(fileReport);

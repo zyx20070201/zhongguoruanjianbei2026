@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import api, { workspaceApi } from '../api/client';
 import { LearningTerminalMessage, Workspace, WorkspaceOverview, Workbench, WorkbenchItem } from '../types';
-
 import { fileSystemApi } from '../services/fileSystemApi';
 import WorkspaceSettingsDialog from '../components/workspace/WorkspaceSettingsDialog';
 import { workbenchApi } from '../services/workbenchApi';
@@ -12,7 +11,10 @@ import { workbenchTableApi } from '../services/workbenchTableApi';
 import { useAuthStore } from '../store/authStore';
 import LearningTerminal from '../components/workspace/LearningTerminal';
 import MemoryDebugPanel from '../components/workspace/MemoryDebugPanel';
-import LearningIntelligenceDashboard from '../components/workspace/LearningIntelligenceDashboard';
+import LearningIntelligenceDashboard, {
+  IntelligenceSection,
+  learningIntelligenceSectionItems
+} from '../components/workspace/LearningIntelligenceDashboard';
 import { learningApi } from '../services/learningApi';
 import {
   ArrowLeft,
@@ -47,14 +49,12 @@ import {
   Workflow,
   BrainCircuit
 } from 'lucide-react';
-
 interface WorkspaceChatSession {
   id: string;
   title: string;
   updatedAt: string;
   messages: LearningTerminalMessage[];
 }
-
 type WorkspaceView = 'status' | 'workbenches' | 'assets' | 'intelligence' | 'terminal';
 type WorkbenchFilter = 'all' | 'active' | 'recent';
 type WorkbenchSort = 'updated_desc' | 'updated_asc' | 'title_asc';
@@ -68,7 +68,6 @@ type WorkbenchPropertyType =
   | 'date'
   | 'checkbox'
   | 'ai_summary';
-
 interface WorkbenchTableProperty {
   id: string;
   name: string;
@@ -79,12 +78,10 @@ interface WorkbenchTableProperty {
   widthPx?: number;
   options?: string[];
 }
-
 interface WorkbenchTableConfig {
   properties: WorkbenchTableProperty[];
   values: Record<string, Record<string, string | number | boolean | string[] | null>>;
 }
-
 interface CourseHomeSummary {
   latestTopic: string;
   latestActivitySummary: string;
@@ -92,10 +89,8 @@ interface CourseHomeSummary {
   reinforcementReminders: Array<{ label: string; prompt: string }>;
   aiActions: Array<{ label: string; prompt: string }>;
 }
-
 type CourseAsset = NonNullable<Workspace['fileObjects']>[number];
 type CourseAssetSection = 'source' | 'file' | 'generated';
-
 interface CourseAssetProperty {
   id: string;
   name: string;
@@ -106,19 +101,16 @@ interface CourseAssetProperty {
   options?: string[];
   widthPx?: number;
 }
-
 const DEFAULT_COURSE_ASSET_PROPERTIES: CourseAssetProperty[] = [
   { id: 'path', name: '路径', source: 'system', type: 'text', widthPx: 380 },
   { id: 'updatedAt', name: '时间', source: 'system', type: 'date', widthPx: 180 }
 ];
-
 const DEFAULT_WORKBENCH_TABLE_PROPERTIES: WorkbenchTableProperty[] = [
   { id: 'topic', name: '主题', type: 'text', source: 'system', visible: true, orderIndex: 0, widthPx: 220 },
   { id: 'status', name: '状态', type: 'status', source: 'custom', visible: true, orderIndex: 1, widthPx: 160, options: ['进行中', '待整理', '已完成'] },
   { id: 'updatedAt', name: '最近活动', type: 'date', source: 'system', visible: true, orderIndex: 2, widthPx: 160 },
   { id: 'content', name: '内容', type: 'text', source: 'system', visible: true, orderIndex: 3, widthPx: 180 }
 ];
-
 const WORKBENCH_PROPERTY_PRESETS: WorkbenchTableProperty[] = [
   { id: 'summary', name: '学习小结', type: 'ai_summary', source: 'custom', visible: true },
   { id: 'dueDate', name: '计划日期', type: 'date', source: 'custom', visible: true },
@@ -126,7 +118,6 @@ const WORKBENCH_PROPERTY_PRESETS: WorkbenchTableProperty[] = [
   { id: 'priority', name: '重要程度', type: 'select', source: 'custom', visible: true, options: ['高', '中', '低'] },
   { id: 'note', name: '备注', type: 'text', source: 'custom', visible: true }
 ];
-
 const WORKBENCH_PROPERTY_TYPES: Array<{ type: WorkbenchPropertyType; label: string; icon: string }> = [
   { type: 'text', label: '文本', icon: '☰' },
   { type: 'number', label: '数字', icon: '#' },
@@ -137,17 +128,14 @@ const WORKBENCH_PROPERTY_TYPES: Array<{ type: WorkbenchPropertyType; label: stri
   { type: 'checkbox', label: '复选框', icon: '☑' },
   { type: 'ai_summary', label: 'AI 摘要', icon: '☰' }
 ];
-
 const getWorkbenchPropertyTypeMeta = (type: WorkbenchPropertyType | string) =>
   WORKBENCH_PROPERTY_TYPES.find((item) => item.type === type) ||
   (type === 'ai_summary' ? { type: 'ai_summary', label: '总结', icon: '☰' } : null) ||
   { type: 'text', label: '文本', icon: '☰' };
-
 const getCourseAssetSection = (file: CourseAsset): CourseAssetSection => {
   const resourceType = (file.resourceType || file.type || '').toLowerCase();
   const fileCategory = (file.fileCategory || '').toLowerCase();
   const extension = (file.extension || file.name.split('.').pop() || '').toLowerCase();
-
   if (resourceType === 'generated' || fileCategory.includes('generated')) return 'generated';
   if (
     resourceType === 'source' ||
@@ -158,20 +146,16 @@ const getCourseAssetSection = (file: CourseAsset): CourseAssetSection => {
   ) {
     return 'source';
   }
-
   return 'file';
 };
-
 const getCourseAssetSectionLabel = (section: CourseAssetSection) => {
   if (section === 'source') return 'Sources';
   if (section === 'generated') return 'Generated';
   return 'Files';
 };
-
 const getCourseAssetIcon = (file: CourseAsset, className = 'h-4 w-4') => {
   const extension = (file.extension || file.name.split('.').pop() || '').toLowerCase();
   const section = getCourseAssetSection(file);
-
   if (section === 'generated') return <FolderKanban className={className} />;
   if (section === 'source' && file.origin === 'web') return <LibraryBig className={className} />;
   if (['ts', 'tsx', 'js', 'jsx', 'py', 'java', 'cpp', 'c', 'html', 'css', 'yaml', 'yml'].includes(extension)) return <FileCode2 className={className} />;
@@ -186,7 +170,6 @@ const getCourseAssetIcon = (file: CourseAsset, className = 'h-4 w-4') => {
   if (['xml', 'sql'].includes(extension)) return <Code className={className} />;
   return <File className={`${className} text-[#8b8f95]`} />;
 };
-
 const getCourseAssetHost = (file: CourseAsset) => {
   const sourceUrl = String(file.metadata?.sourceUrl || file.metadata?.url || '');
   if (!sourceUrl) return '';
@@ -197,7 +180,6 @@ const getCourseAssetHost = (file: CourseAsset) => {
     return '';
   }
 };
-
 const getCourseAssetFaviconUrl = (file: CourseAsset) => {
   const sourceUrl = String(file.metadata?.sourceUrl || file.metadata?.url || '');
   if (!sourceUrl) return '';
@@ -208,7 +190,6 @@ const getCourseAssetFaviconUrl = (file: CourseAsset) => {
     return '';
   }
 };
-
 const getCourseAssetCoverUrl = (file: CourseAsset) => {
   const metadata = file.metadata || {};
   const explicitCover =
@@ -220,7 +201,6 @@ const getCourseAssetCoverUrl = (file: CourseAsset) => {
     metadata.imageUrl ||
     metadata.ogImage;
   if (typeof explicitCover === 'string' && explicitCover.trim()) return explicitCover.trim();
-
   const images = metadata.images;
   if (Array.isArray(images)) {
     const firstImage = images.find((image) => {
@@ -233,10 +213,8 @@ const getCourseAssetCoverUrl = (file: CourseAsset) => {
       if (typeof src === 'string' && src.trim()) return src.trim();
     }
   }
-
   return '';
 };
-
 const getCourseAssetMeta = (file: CourseAsset) => {
   const extension = (file.extension || file.name.split('.').pop() || '').toLowerCase();
   if (file.origin === 'web') return 'Web source';
@@ -245,10 +223,10 @@ const getCourseAssetMeta = (file: CourseAsset) => {
   if (file.resourceType === 'note' || file.fileCategory?.includes('note')) return 'Note';
   return extension ? extension.toUpperCase() : file.type || 'File';
 };
-
 export default function WorkspaceDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [workbenches, setWorkbenches] = useState<Workbench[]>([]);
   const [loading, setLoading] = useState(true);
@@ -260,6 +238,7 @@ export default function WorkspaceDetailPage() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [developerModeEnabled, setDeveloperModeEnabled] = useState(false);
   const [activeView, setActiveView] = useState<WorkspaceView>('status');
+  const [activeIntelligenceSection, setActiveIntelligenceSection] = useState<IntelligenceSection>('overview');
   const [assetQuery, setAssetQuery] = useState('');
   const [isAssetSearchOpen, setIsAssetSearchOpen] = useState(false);
   const [assetProperties, setAssetProperties] = useState<CourseAssetProperty[]>(DEFAULT_COURSE_ASSET_PROPERTIES);
@@ -325,37 +304,29 @@ export default function WorkspaceDetailPage() {
   const enteredCourseRecordedRef = useRef<string | null>(null);
   const [courseHomeSummary, setCourseHomeSummary] = useState<CourseHomeSummary | null>(null);
   const [courseHomeLoading, setCourseHomeLoading] = useState(false);
-  const [terminalDraftPrompt, setTerminalDraftPrompt] = useState('');
+  const [terminalDraftPrompt, setTerminalDraftPrompt] = useState(searchParams.get('terminalPrompt') || '');
   const user = useAuthStore((state) => state.user);
   const hydrated = useAuthStore((state) => state.hydrated);
   const hydrate = useAuthStore((state) => state.hydrate);
-
   useEffect(() => {
     void hydrate();
   }, [hydrate]);
-
   useEffect(() => {
     if (!hydrated) return;
-
     if (user === null) {
       navigate('/', { replace: true });
     }
   }, [hydrated, navigate, user]);
-
   useEffect(() => {
     if (!hydrated) return;
-
     if (!user) {
       setLoading(false);
       return;
     }
-
     void fetchWorkspace();
   }, [hydrated, id, user]);
-
   useEffect(() => {
     if (!id) return;
-
     const storageKey = `workspace:${id}:chats`;
     const stored = localStorage.getItem(storageKey);
     const parsed = stored ? JSON.parse(stored) as WorkspaceChatSession[] : [];
@@ -367,22 +338,29 @@ export default function WorkspaceDetailPage() {
           updatedAt: new Date().toISOString(),
           messages: []
         }];
-
     setChatSessions(initialChats);
     setCurrentChatId(initialChats[0]?.id || null);
   }, [id]);
-
   useEffect(() => {
     if (!id || chatSessions.length === 0) return;
-
     localStorage.setItem(`workspace:${id}:chats`, JSON.stringify(chatSessions));
   }, [chatSessions, id]);
-
+  useEffect(() => {
+    const terminalPrompt = searchParams.get('terminalPrompt');
+    const openView = searchParams.get('openView');
+    if (openView !== 'terminal') return;
+    setActiveView('terminal');
+    if (terminalPrompt) setTerminalDraftPrompt(terminalPrompt);
+    setSearchParams((params) => {
+      params.delete('openView');
+      params.delete('terminalPrompt');
+      return params;
+    }, { replace: true });
+  }, [searchParams, setSearchParams]);
   useEffect(() => {
     if (!id || !workspace) return;
     void loadCourseHome(workbenches[0]?.id);
   }, [id, workspace?.id, workbenches[0]?.id]);
-
   useEffect(() => {
     if (!workspace?.id || enteredCourseRecordedRef.current === workspace.id) return;
     enteredCourseRecordedRef.current = workspace.id;
@@ -393,7 +371,6 @@ export default function WorkspaceDetailPage() {
       confidence: 0.72
     });
   }, [workspace?.id]);
-
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
@@ -406,7 +383,6 @@ export default function WorkspaceDetailPage() {
       const isInsideColumnsMenu = workbenchColumnsMenuRef.current?.contains(target);
       const isInsideWorkbenchMenu = workbenchMenuRef.current?.contains(target);
       const isInsideAssetMenu = assetMenuRef.current?.contains(target);
-
       if (
         !isInsideToolbar &&
         !isInsidePropertyMenu &&
@@ -435,17 +411,13 @@ export default function WorkspaceDetailPage() {
         setAssetMenuPosition(null);
       }
     };
-
     window.addEventListener('pointerdown', handlePointerDown);
     return () => window.removeEventListener('pointerdown', handlePointerDown);
   }, []);
-
   useEffect(() => {
     if (!workspace) return;
-
     void loadWorkbenchTableConfig(workspace.id);
   }, [workspace?.id]);
-
   useEffect(() => {
     if (!workspace?.id) return;
     try {
@@ -479,7 +451,6 @@ export default function WorkspaceDetailPage() {
       setAssetPropertyValues({});
     }
   }, [workspace?.id]);
-
   useEffect(() => {
     if (!workspace?.id) return;
     try {
@@ -491,10 +462,8 @@ export default function WorkspaceDetailPage() {
       // ignore local preference write failures
     }
   }, [assetProperties, assetPropertyValues, workspace?.id]);
-
   useEffect(() => {
     if (!resizingPropertyId) return;
-
     const handlePointerMove = (event: PointerEvent) => {
       const draft = resizeDraftRef.current;
       if (!draft) return;
@@ -507,7 +476,6 @@ export default function WorkspaceDetailPage() {
         )
       }));
     };
-
     const handlePointerUp = () => {
       const draft = resizeDraftRef.current;
       setResizingPropertyId(null);
@@ -519,7 +487,6 @@ export default function WorkspaceDetailPage() {
         });
       }
     };
-
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp, { once: true });
     return () => {
@@ -527,7 +494,6 @@ export default function WorkspaceDetailPage() {
       window.removeEventListener('pointerup', handlePointerUp);
     };
   }, [resizingPropertyId, workspace?.id]);
-
   useEffect(() => {
     if (!hoveredWorkbenchId) return;
     const timer = window.setTimeout(() => {
@@ -535,15 +501,12 @@ export default function WorkspaceDetailPage() {
     }, 180);
     return () => window.clearTimeout(timer);
   }, [hoveredWorkbenchId]);
-
   useEffect(() => {
     if (!creatingWorkbenchInline) return;
     window.setTimeout(() => inlineWorkbenchTitleRef.current?.focus(), 0);
   }, [creatingWorkbenchInline]);
-
   useEffect(() => {
     if (!assetResizingPropertyId) return;
-
     const handlePointerMove = (event: PointerEvent) => {
       const draft = resizeDraftRef.current;
       if (!draft) return;
@@ -555,12 +518,10 @@ export default function WorkspaceDetailPage() {
         )
       );
     };
-
     const handlePointerUp = () => {
       setAssetResizingPropertyId(null);
       resizeDraftRef.current = null;
     };
-
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp, { once: true });
     return () => {
@@ -568,7 +529,6 @@ export default function WorkspaceDetailPage() {
       window.removeEventListener('pointerup', handlePointerUp);
     };
   }, [assetResizingPropertyId]);
-
   const fetchWorkspace = async () => {
     try {
       if (!id) return;
@@ -596,7 +556,6 @@ export default function WorkspaceDetailPage() {
       setLoading(false);
     }
   };
-
   const handleUpdateSettings = async (data: any) => {
     if (!id) return;
     try {
@@ -607,7 +566,6 @@ export default function WorkspaceDetailPage() {
       console.error('Failed to update workspace:', error);
     }
   };
-
   const loadCourseHome = async (workbenchId?: string) => {
     if (!id) return;
     setCourseHomeLoading(true);
@@ -621,7 +579,6 @@ export default function WorkspaceDetailPage() {
       setCourseHomeLoading(false);
     }
   };
-
   const recordUiLearningEvent = (data: {
     eventType: string;
     workbenchId?: string | null;
@@ -652,7 +609,6 @@ export default function WorkspaceDetailPage() {
       console.warn('Failed to record learning event:', error);
     });
   };
-
   const openWorkbenchWithEvent = (
     workbench: Pick<Workbench, 'id' | 'title'> | Pick<WorkbenchItem, 'id' | 'title'>,
     sourceComponent: string
@@ -666,14 +622,12 @@ export default function WorkspaceDetailPage() {
     });
     navigate(`/workbenches/${workbench.id}`);
   };
-
   const startInlineWorkbenchCreate = () => {
     setCreatingWorkbenchInline(true);
     setNewWorkbenchTitle('');
     setActiveView('workbenches');
     setWorkbenchViewMode('list');
   };
-
   const createWorkbench = async (title?: string) => {
     if (!id) return;
     try {
@@ -694,24 +648,19 @@ export default function WorkspaceDetailPage() {
       setCreatingWorkbench(false);
     }
   };
-
   const submitInlineWorkbenchCreate = () => {
     const title = newWorkbenchTitle.trim();
     if (!title) return;
     void createWorkbench(title);
   };
-
   const deleteWorkbench = async (workbenchId: string) => {
     const target = workbenches.find((workbench) => workbench.id === workbenchId);
     const title = target?.title || '这个学习现场';
-
     if (!confirm(`删除「${title}」？相关布局、面板和笔记会一起删除。`)) {
       return;
     }
-
     setDeletingWorkbenchId(workbenchId);
     setWorkbenchActionError(null);
-
     try {
       await workbenchApi.delete(workbenchId);
       await fetchWorkspace();
@@ -732,20 +681,16 @@ export default function WorkspaceDetailPage() {
       setDeletingWorkbenchId(null);
     }
   };
-
   const deleteSelectedWorkbenches = async () => {
     const ids = Array.from(selectedWorkbenchIds).filter((workbenchId) =>
       workbenches.some((workbench) => workbench.id === workbenchId)
     );
     if (!ids.length) return;
-
     if (!confirm(`删除选中的 ${ids.length} 个学习现场？相关布局、面板和笔记会一起删除。`)) {
       return;
     }
-
     setBulkDeletingWorkbenches(true);
     setWorkbenchActionError(null);
-
     try {
       await Promise.all(ids.map((workbenchId) => workbenchApi.delete(workbenchId)));
       setSelectedWorkbenchIds(new Set());
@@ -762,7 +707,6 @@ export default function WorkspaceDetailPage() {
       setBulkDeletingWorkbenches(false);
     }
   };
-
   const handleUpload = () => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -785,7 +729,6 @@ export default function WorkspaceDetailPage() {
     };
     input.click();
   };
-
   const createChat = () => {
     const nextChat: WorkspaceChatSession = {
       id: crypto.randomUUID(),
@@ -796,12 +739,10 @@ export default function WorkspaceDetailPage() {
     setChatSessions((sessions) => [nextChat, ...sessions]);
     setCurrentChatId(nextChat.id);
   };
-
   const openTerminalWithPrompt = (prompt: string) => {
     setTerminalDraftPrompt(prompt);
     setActiveView('terminal');
   };
-
   const deleteChat = (chatId: string) => {
     setChatSessions((sessions) => {
       const remaining = sessions.filter((session) => session.id !== chatId);
@@ -813,19 +754,15 @@ export default function WorkspaceDetailPage() {
             updatedAt: new Date().toISOString(),
             messages: []
           }];
-
       if (currentChatId === chatId) {
         setCurrentChatId(nextSessions[0]?.id || null);
       }
-
       return nextSessions;
     });
   };
-
   const updateCurrentChatMessages = (messages: WorkspaceChatSession['messages']) => {
     const targetChatId = currentChatId;
     if (!targetChatId) return;
-
     setChatSessions((sessions) =>
       sessions.map((session) =>
         session.id === targetChatId
@@ -838,11 +775,9 @@ export default function WorkspaceDetailPage() {
       )
     );
   };
-
   const nameCurrentChat = (title: string) => {
     const targetChatId = currentChatId;
     if (!targetChatId) return;
-
     setChatSessions((sessions) =>
       sessions.map((session) =>
         session.id === targetChatId && session.title === 'New chat'
@@ -855,7 +790,6 @@ export default function WorkspaceDetailPage() {
       )
     );
   };
-
   const normalizeWorkbenchTableConfig = (raw: any): WorkbenchTableConfig => ({
     properties: Array.isArray(raw?.properties)
       ? raw.properties.map((property: any): WorkbenchTableProperty => ({
@@ -871,7 +805,6 @@ export default function WorkspaceDetailPage() {
       : DEFAULT_WORKBENCH_TABLE_PROPERTIES,
     values: raw?.values && typeof raw.values === 'object' ? raw.values : {}
   });
-
   const loadWorkbenchTableConfig = async (workspaceId: string) => {
     try {
       const config = await workbenchTableApi.getConfig(workspaceId);
@@ -881,7 +814,6 @@ export default function WorkspaceDetailPage() {
       setWorkbenchTableConfig({ properties: DEFAULT_WORKBENCH_TABLE_PROPERTIES, values: {} });
     }
   };
-
   const addWorkbenchProperty = (property: WorkbenchTableProperty) => {
     setIsWorkbenchPropertyMenuOpen(false);
     setWorkbenchPropertyMenuPosition(null);
@@ -903,10 +835,8 @@ export default function WorkspaceDetailPage() {
       setCustomPropertyDraft({ name: '', type: 'text' });
       return;
     }
-
     const exists = workbenchTableConfig.properties.some((item) => item.id === property.id);
     if (!workspace || exists) return;
-
     void workbenchTableApi.createProperty(workspace.id, {
       name: property.name,
       type: property.type,
@@ -914,7 +844,6 @@ export default function WorkspaceDetailPage() {
       widthPx: property.widthPx
     }).then(() => loadWorkbenchTableConfig(workspace.id));
   };
-
   const updateAssetProperty = (
     propertyId: string,
     data: { name?: string; type?: WorkbenchPropertyType; visible?: boolean; orderIndex?: number; widthPx?: number; options?: string[] }
@@ -931,11 +860,9 @@ export default function WorkspaceDetailPage() {
       )
     );
   };
-
   const deleteAssetProperty = (property: CourseAssetProperty) => {
     if (property.source === 'system') return;
     if (!confirm(`删除属性「${property.name}」？这一列中填写的内容也会一起删除。`)) return;
-
     setAssetProperties((properties) => properties.filter((item) => item.id !== property.id));
     setAssetPropertyValues((values) => {
       const next: typeof values = {};
@@ -948,22 +875,18 @@ export default function WorkspaceDetailPage() {
     setEditingAssetPropertyId(null);
     setAssetPropertyEditorPosition(null);
   };
-
   const addAssetPropertyOption = (property: CourseAssetProperty, optionText?: string) => {
     const option = (optionText ?? propertyOptionDrafts[property.id] ?? '').trim();
     if (!option) return;
-
     const nextOptions = [...new Set([...(property.options || []), option])];
     setPropertyOptionDrafts((drafts) => ({ ...drafts, [property.id]: '' }));
     updateAssetProperty(property.id, { options: nextOptions });
   };
-
   const updateWorkbenchProperty = async (
     propertyId: string,
     data: { name?: string; type?: WorkbenchPropertyType; visible?: boolean; orderIndex?: number; widthPx?: number; options?: string[] }
   ) => {
     if (!workspace) return;
-
     setWorkbenchTableConfig((config) => ({
       ...config,
       properties: config.properties.map((property) =>
@@ -976,7 +899,6 @@ export default function WorkspaceDetailPage() {
           : property
       )
     }));
-
     try {
       await workbenchTableApi.updateProperty(workspace.id, propertyId, data);
       await loadWorkbenchTableConfig(workspace.id);
@@ -986,11 +908,9 @@ export default function WorkspaceDetailPage() {
       await loadWorkbenchTableConfig(workspace.id);
     }
   };
-
   const deleteWorkbenchProperty = async (property: WorkbenchTableProperty) => {
     if (!workspace || property.source === 'system') return;
     if (!confirm(`删除属性「${property.name}」？这一列中填写的内容也会一起删除。`)) return;
-
     try {
       await workbenchTableApi.deleteProperty(workspace.id, property.id);
       setEditingWorkbenchPropertyId(null);
@@ -1001,28 +921,23 @@ export default function WorkspaceDetailPage() {
       setWorkbenchActionError('删除属性失败，请稍后重试。');
     }
   };
-
   const addWorkbenchPropertyOption = async (property: WorkbenchTableProperty, optionText?: string) => {
     const option = (optionText ?? propertyOptionDrafts[property.id] ?? '').trim();
     if (!option) return;
-
     const nextOptions = [...new Set([...(property.options || []), option])];
     setPropertyOptionDrafts((drafts) => ({ ...drafts, [property.id]: '' }));
     await updateWorkbenchProperty(property.id, { options: nextOptions });
   };
-
   const reorderWorkbenchProperty = async (propertyId: string, direction: -1 | 1) => {
     if (!workspace) return;
     const sorted = [...workbenchTableConfig.properties].sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
     const currentIndex = sorted.findIndex((property) => property.id === propertyId);
     const nextIndex = currentIndex + direction;
     if (currentIndex < 0 || nextIndex < 0 || nextIndex >= sorted.length) return;
-
     const reordered = [...sorted];
     [reordered[currentIndex], reordered[nextIndex]] = [reordered[nextIndex], reordered[currentIndex]];
     const nextProperties = reordered.map((property, index) => ({ ...property, orderIndex: index }));
     setWorkbenchTableConfig((config) => ({ ...config, properties: nextProperties }));
-
     try {
       await Promise.all(
         nextProperties.map((property) =>
@@ -1036,7 +951,6 @@ export default function WorkspaceDetailPage() {
       await loadWorkbenchTableConfig(workspace.id);
     }
   };
-
   const beginResizeWorkbenchProperty = (event: React.PointerEvent, property: WorkbenchTableProperty) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1050,23 +964,18 @@ export default function WorkspaceDetailPage() {
     };
     setResizingPropertyId(property.id);
   };
-
   const moveWorkbenchPropertyTo = async (sourcePropertyId: string, targetPropertyId: string) => {
     if (!workspace || sourcePropertyId === targetPropertyId) return;
-
     const sorted = [...workbenchTableConfig.properties].sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
     const sourceIndex = sorted.findIndex((property) => property.id === sourcePropertyId);
     const targetIndex = sorted.findIndex((property) => property.id === targetPropertyId);
     if (sourceIndex < 0 || targetIndex < 0) return;
-
     const reordered = [...sorted];
     const [moved] = reordered.splice(sourceIndex, 1);
     reordered.splice(targetIndex, 0, moved);
     const nextProperties = reordered.map((property, index) => ({ ...property, orderIndex: index }));
-
     setWorkbenchTableConfig((config) => ({ ...config, properties: nextProperties }));
     setDragOverWorkbenchPropertyId(null);
-
     try {
       await Promise.all(
         nextProperties.map((property) =>
@@ -1080,11 +989,9 @@ export default function WorkspaceDetailPage() {
       await loadWorkbenchTableConfig(workspace.id);
     }
   };
-
   const addCustomWorkbenchProperty = () => {
     const name = customPropertyDraft.name.trim();
     if (!name) return;
-
     addWorkbenchProperty({
       id: `custom_${Date.now()}`,
       name,
@@ -1095,7 +1002,6 @@ export default function WorkspaceDetailPage() {
     });
     setCustomPropertyDraft({ name: '', type: 'text' });
   };
-
   const startCustomWorkbenchProperty = () => {
     setCustomPropertyDraft((draft) => ({
       name: draft.name || '',
@@ -1103,7 +1009,6 @@ export default function WorkspaceDetailPage() {
     }));
     window.setTimeout(() => customPropertyNameInputRef.current?.focus(), 0);
   };
-
   const updateWorkbenchPropertyValue = (
     workbenchId: string,
     propertyId: string,
@@ -1127,7 +1032,6 @@ export default function WorkspaceDetailPage() {
       });
     }
   };
-
   const generateWorkbenchSummaryValue = async (workbenchId: string, propertyId: string) => {
     if (!workspace) return;
     const key = `${workbenchId}:${propertyId}`;
@@ -1152,10 +1056,8 @@ export default function WorkspaceDetailPage() {
       setGeneratingSummaryKey(null);
     }
   };
-
   const openFileInWorkbench = async (fileId: string) => {
     if (!id || !workspace) return;
-
     let workbenchId = '';
     if (workbenches.length > 0) {
       workbenchId = workbenches[0].id;
@@ -1174,7 +1076,6 @@ export default function WorkspaceDetailPage() {
         return;
       }
     }
-
     const sourceFile = (workspace.fileObjects || []).find((file) => file.id === fileId);
     recordUiLearningEvent({
       workbenchId,
@@ -1191,7 +1092,6 @@ export default function WorkspaceDetailPage() {
     });
     navigate(`/workbenches/${workbenchId}?resourceId=${encodeURIComponent(fileId)}`);
   };
-
   if (loading || (!loadError && !workspace)) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--app-bg)]">
@@ -1199,7 +1099,6 @@ export default function WorkspaceDetailPage() {
       </div>
     );
   }
-
   if (loadError || !workspace) {
     return (
       <div className="workspace-shell flex min-h-0 flex-1 items-center justify-center bg-[#fbfbfa] px-6 text-[#202124]">
@@ -1228,26 +1127,20 @@ export default function WorkspaceDetailPage() {
       </div>
     );
   }
-
   const formatActivityTime = (value?: string) => {
     if (!value) return 'never';
-
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return 'unknown';
-
     const diffMs = Date.now() - date.getTime();
     const minute = 60 * 1000;
     const hour = 60 * minute;
     const day = 24 * hour;
-
     if (diffMs < minute) return 'just now';
     if (diffMs < hour) return `${Math.floor(diffMs / minute)} min ago`;
     if (diffMs < day) return `${Math.floor(diffMs / hour)} hours ago`;
     if (diffMs < day * 7) return `${Math.floor(diffMs / day)} days ago`;
-
     return date.toLocaleDateString();
   };
-
   // Convert raw data to UI models
   const latestWorkbench = workbenches[0];
   const overview: WorkspaceOverview = {
@@ -1262,7 +1155,6 @@ export default function WorkspaceDetailPage() {
       ? `Workbench updated ${formatActivityTime(latestWorkbench.updatedAt)}`
       : `Workspace updated ${formatActivityTime(workspace.updatedAt)}`
   };
-
   const workbenchItems: WorkbenchItem[] = workbenches.map((wb) => ({
     id: wb.id,
     title: wb.title,
@@ -1362,7 +1254,6 @@ export default function WorkspaceDetailPage() {
         setWorkbenchMenuPosition(null);
         return null;
       }
-
       setWorkbenchMenuPosition({
         left: Math.min(Math.max(rect.right - 160, 16), window.innerWidth - 176),
         top: Math.min(rect.bottom + 8, window.innerHeight - 84)
@@ -1396,7 +1287,6 @@ export default function WorkspaceDetailPage() {
   const getWorkbenchPropertyValue = (workbench: WorkbenchItem, property: WorkbenchTableProperty) => {
     const stored = workbenchTableConfig.values[workbench.id]?.[property.id];
     if (stored !== undefined && stored !== null && stored !== '') return stored;
-
     if (property.source === 'system' && property.name === '主题') return getInferredWorkbenchTopic(workbench);
     if (property.source === 'system' && property.name === '最近活动') return workbench.updatedAt;
     if (property.source === 'system' && property.name === '内容') return `${workbench.panelCount} 面板 · ${getWorkbenchResourceCount(workbench.id)} 资源`;
@@ -1499,7 +1389,6 @@ export default function WorkspaceDetailPage() {
   const deleteCourseAsset = async (file: CourseAsset) => {
     if (!id) return;
     if (!confirm(`删除课程资产「${file.name}」？`)) return;
-
     setDeletingAssetId(file.id);
     setOpenAssetMenuId(null);
     setAssetMenuPosition(null);
@@ -1524,11 +1413,9 @@ export default function WorkspaceDetailPage() {
   };
   const renderAssetPropertyCell = (file: CourseAsset, property: CourseAssetProperty) => {
     const value = getAssetPropertyValue(file, property);
-
     if (property.source === 'system') {
       return <span className="block h-9 truncate leading-9">{String(value || '空')}</span>;
     }
-
     if (property.type === 'checkbox') {
       return (
         <input
@@ -1539,7 +1426,6 @@ export default function WorkspaceDetailPage() {
         />
       );
     }
-
     if (property.type === 'date') {
       return (
         <input
@@ -1550,7 +1436,6 @@ export default function WorkspaceDetailPage() {
         />
       );
     }
-
     if (property.type === 'number') {
       return (
         <input
@@ -1562,7 +1447,6 @@ export default function WorkspaceDetailPage() {
         />
       );
     }
-
     if (property.type === 'select' || property.type === 'status') {
       const stringValue = typeof value === 'string' ? value : '';
       return (
@@ -1579,7 +1463,6 @@ export default function WorkspaceDetailPage() {
         </button>
       );
     }
-
     if (property.type === 'multi_select') {
       const selected = Array.isArray(value)
         ? value
@@ -1603,7 +1486,6 @@ export default function WorkspaceDetailPage() {
         </button>
       );
     }
-
     return (
       <input
         type="text"
@@ -1638,7 +1520,6 @@ export default function WorkspaceDetailPage() {
       setDragOverPropertyId,
       resizeLabelPrefix
     } = options;
-
     return (
       <div
         key={property.id}
@@ -1699,11 +1580,9 @@ export default function WorkspaceDetailPage() {
   const renderWorkbenchPropertyCell = (workbench: WorkbenchItem, property: WorkbenchTableProperty) => {
     const value = getWorkbenchPropertyValue(workbench, property);
     const isSystemReadonly = property.source === 'system' && property.name !== '主题';
-
     if (isSystemReadonly) {
       return <span className="block truncate text-[#777b80]">{String(value || '空')}</span>;
     }
-
     if (property.type === 'checkbox') {
       return (
         <input
@@ -1714,7 +1593,6 @@ export default function WorkspaceDetailPage() {
         />
       );
     }
-
     if (property.type === 'ai_summary') {
       const key = `${workbench.id}:${property.id}`;
       return (
@@ -1734,7 +1612,6 @@ export default function WorkspaceDetailPage() {
         </div>
       );
     }
-
     if (property.type === 'select' || property.type === 'status') {
       return (
         <button
@@ -1748,7 +1625,6 @@ export default function WorkspaceDetailPage() {
         </button>
       );
     }
-
     if (property.type === 'multi_select') {
       const selected = Array.isArray(value) ? value : String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
       return (
@@ -1768,7 +1644,6 @@ export default function WorkspaceDetailPage() {
         </button>
       );
     }
-
     if (property.type === 'date') {
       return (
         <input
@@ -1779,7 +1654,6 @@ export default function WorkspaceDetailPage() {
         />
       );
     }
-
     if (property.type === 'number') {
       return (
         <input
@@ -1791,7 +1665,6 @@ export default function WorkspaceDetailPage() {
         />
       );
     }
-
     return (
       <input
         type="text"
@@ -1876,7 +1749,6 @@ export default function WorkspaceDetailPage() {
               const selected = Array.isArray(currentValue)
                 ? currentValue
                 : String(currentValue || '').split(',').map((item) => item.trim()).filter(Boolean);
-
               return (
                 <>
                   <button
@@ -1894,7 +1766,6 @@ export default function WorkspaceDetailPage() {
                     const isSelected = valueMenuProperty.type === 'multi_select'
                       ? selected.includes(option)
                       : String(currentValue || '') === option;
-
                     return (
                       <button
                         key={option}
@@ -2001,7 +1872,6 @@ export default function WorkspaceDetailPage() {
               const selected = Array.isArray(currentValue)
                 ? currentValue
                 : String(currentValue || '').split(',').map((item) => item.trim()).filter(Boolean);
-
               return (
                 <>
                   <button
@@ -2019,7 +1889,6 @@ export default function WorkspaceDetailPage() {
                     const isSelected = assetValueMenuProperty.type === 'multi_select'
                       ? selected.includes(option)
                       : String(currentValue || '') === option;
-
                     return (
                       <button
                         key={option}
@@ -2129,7 +1998,6 @@ export default function WorkspaceDetailPage() {
               </select>
             </label>
           </div>
-
           <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
             <p className="px-1 pb-2 text-xs font-medium text-[#777b80]">推荐属性</p>
             <div className="grid grid-cols-2 gap-1 pb-1">
@@ -2156,7 +2024,6 @@ export default function WorkspaceDetailPage() {
                 <span className="text-xs text-[#96999d]">文本</span>
               </button>
             </div>
-
             <p className="px-1 pt-4 pb-2 text-xs font-medium text-[#777b80]">更多属性类型</p>
             <div className="grid grid-cols-2 gap-1">
               {WORKBENCH_PROPERTY_TYPES.map((item) => (
@@ -2174,7 +2041,6 @@ export default function WorkspaceDetailPage() {
               ))}
             </div>
           </div>
-
           <div className="shrink-0 border-t border-[#eeeeeb] bg-white p-3">
             <button
               type="button"
@@ -2240,7 +2106,6 @@ export default function WorkspaceDetailPage() {
               </select>
             </label>
           </div>
-
           {['select', 'multi_select', 'status'].includes(editingWorkbenchProperty.type) ? (
             <div className="border-t border-[#eeeeeb] p-2">
               <p className="mb-2 text-xs font-medium text-[#777b80]">选项</p>
@@ -2283,7 +2148,6 @@ export default function WorkspaceDetailPage() {
               </div>
             </div>
           ) : null}
-
           <div className="border-t border-[#eeeeeb] p-1">
             {editingWorkbenchProperty.source === 'system' ? (
               <p className="px-2 py-2 text-xs leading-5 text-[#96999d]">系统属性用于展示课程现场的基础信息，不能删除或改类型。</p>
@@ -2353,7 +2217,6 @@ export default function WorkspaceDetailPage() {
               </select>
             </label>
           </div>
-
           {['select', 'multi_select', 'status'].includes(editingAssetProperty.type || '') ? (
             <div className="border-t border-[#eeeeeb] p-2">
               <p className="mb-2 text-xs font-medium text-[#777b80]">选项</p>
@@ -2396,7 +2259,6 @@ export default function WorkspaceDetailPage() {
               </div>
             </div>
           ) : null}
-
           <div className="border-t border-[#eeeeeb] p-1">
             {editingAssetProperty.source === 'system' ? (
               <p className="px-2 py-2 text-xs leading-5 text-[#96999d]">系统属性用于展示课程资产的基础信息，不能删除或改类型。</p>
@@ -2496,72 +2358,108 @@ export default function WorkspaceDetailPage() {
         document.body
       )
     : null;
-
   return (
-    <div className="workspace-shell min-h-0 flex-1 overflow-y-auto bg-[#fbfbfa] text-[#202124]">
-      <div className="mx-auto w-full max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
-        <header className="mb-8 border-b border-[#e8e8e4] pb-7">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <button
-              onClick={() => navigate('/workspaces')}
-              className="inline-flex h-9 items-center gap-2 rounded-lg px-2 text-sm text-[#666a70] transition hover:bg-[#f1f1ef] hover:text-[#202124]"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Workspaces
-            </button>
+    <div className="workspace-shell flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fbfbfa] text-[#202124] lg:flex-row">
+      <aside className="flex shrink-0 flex-col border-b border-[#e8e8e4] bg-[#f6f6f4] px-3 py-3 lg:h-full lg:w-[272px] lg:border-b-0 lg:border-r">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigate('/workspaces')}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#666a70] transition hover:bg-[#eeeeeb] hover:text-[#202124]"
+            title="Back to workspaces"
+            aria-label="Back to workspaces"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-semibold text-[#202124]">{overview.courseName}</h1>
+            <p className="truncate text-xs text-[#777b80]">{overview.major}</p>
           </div>
-
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-            <div className="min-w-0">
-              <h1 className="text-3xl font-semibold tracking-normal text-[#202124] sm:text-4xl">{overview.courseName}</h1>
-              {overview.description ? (
-                <p className="mt-3 max-w-3xl text-sm leading-6 text-[#666a70]">{overview.description}</p>
-              ) : null}
+        </div>
+        {overview.description ? (
+          <p className="mt-3 hidden text-xs leading-5 text-[#666a70] lg:line-clamp-3">{overview.description}</p>
+        ) : null}
+        <dl className="mt-3 hidden grid-cols-3 gap-2 lg:grid">
+          {statusItems.map((item) => (
+            <div key={item.label} className="min-w-0 rounded-lg bg-white/70 px-2 py-2">
+              <dt className="truncate text-[10px] text-[#96999d]">{item.label}</dt>
+              <dd className="mt-1 truncate text-xs font-medium text-[#202124]">{item.value}</dd>
             </div>
-            <div className="flex flex-wrap items-end justify-start gap-3 lg:justify-end">
-              <dl className="flex flex-wrap items-end justify-start gap-x-8 gap-y-3 text-left lg:justify-end lg:text-right">
-                {statusItems.map((item) => (
-                  <div key={item.label} className="min-w-[72px]">
-                    <dt className="text-[11px] text-[#96999d]">{item.label}</dt>
-                    <dd className="mt-1 truncate text-sm font-medium text-[#202124]">{item.value}</dd>
-                  </div>
-                ))}
-              </dl>
-              <button
-                onClick={() => setIsSettingsOpen(true)}
-                className="inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#f1f1ef]"
-                title="Workspace settings"
-              >
-                <Settings className="h-4 w-4" />
-                设置
-              </button>
-            </div>
-          </div>
-        </header>
-
-        <nav className="-mt-3 mb-8 flex flex-wrap items-center gap-2 border-b border-[#e8e8e4] pb-3">
+          ))}
+        </dl>
+        <nav className="mt-3 flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0">
           {workspaceViews.map((view) => {
             const Icon = view.icon;
             const isActive = activeView === view.id;
-
             return (
-              <button
-                key={view.id}
-                onClick={() => setActiveView(view.id)}
-                className={`inline-flex h-10 items-center gap-2 rounded-full px-4 text-sm font-medium transition ${
-                  isActive
-                    ? 'bg-[#f1f1ef] text-[#202124]'
-                    : 'text-[#777b80] hover:bg-[#f6f6f4] hover:text-[#34373c]'
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {view.label}
-              </button>
+              <div key={view.id} className="shrink-0 lg:w-full">
+                <button
+                  onClick={() => setActiveView(view.id)}
+                  className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-lg px-3 text-sm font-medium transition lg:w-full ${
+                    isActive
+                      ? 'bg-white text-[#202124] shadow-[0_1px_3px_rgba(32,33,36,0.08)]'
+                      : 'text-[#666a70] hover:bg-[#eeeeeb] hover:text-[#202124]'
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="whitespace-nowrap">{view.label}</span>
+                </button>
+                {view.id === 'intelligence' ? (
+                  <div className={`${activeView === 'intelligence' ? 'flex' : 'hidden'} mt-1 gap-1 pl-0 lg:block lg:space-y-0.5 lg:pl-3`}>
+                    {learningIntelligenceSectionItems.map((item) => {
+                      const SubIcon = item.icon;
+                      const selected = activeView === 'intelligence' && activeIntelligenceSection === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveView('intelligence');
+                            setActiveIntelligenceSection(item.id);
+                          }}
+                          className={`flex h-8 shrink-0 items-center gap-2 rounded-md px-3 text-left text-xs font-medium transition lg:w-full ${
+                            selected
+                              ? 'bg-white/80 text-[#202124]'
+                              : 'text-[#777b80] hover:bg-[#eeeeeb] hover:text-[#202124]'
+                          }`}
+                          title={item.description}
+                        >
+                          <SubIcon className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{item.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
             );
           })}
         </nav>
-
-        <main>
+        <div className="mt-auto hidden gap-2 pt-4 lg:grid">
+          <button
+            onClick={handleUpload}
+            className="inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#eeeeeb]"
+          >
+            <Upload className="h-4 w-4" />
+            上传资料
+          </button>
+          <button
+            onClick={startInlineWorkbenchCreate}
+            className="inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#eeeeeb]"
+          >
+            <Plus className="h-4 w-4" />
+            新建学习现场
+          </button>
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#eeeeeb]"
+          >
+            <Settings className="h-4 w-4" />
+            设置
+          </button>
+        </div>
+      </aside>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <main className="w-full px-4 py-5 sm:px-6 lg:px-8">
           {activeView === 'status' ? (
             <section>
             <div className="grid gap-4">
@@ -2592,7 +2490,6 @@ export default function WorkspaceDetailPage() {
                   </div>
                 )}
               </article>
-
               <article className="rounded-xl border border-[#e6e6e1] bg-white p-5">
                 <h3 className="text-sm font-semibold text-[#202124]">最近学习现场</h3>
                 <div className="mt-3 grid gap-2">
@@ -2607,7 +2504,6 @@ export default function WorkspaceDetailPage() {
                   )) : <p className="text-sm text-[#777b80]">暂无学习现场。</p>}
                 </div>
               </article>
-
               <div className="grid gap-4 lg:grid-cols-3">
                 <article className="rounded-xl border border-[#e6e6e1] bg-white p-4">
                   <h3 className="text-sm font-semibold text-[#202124]">你现在在课程里的位置</h3>
@@ -2658,7 +2554,6 @@ export default function WorkspaceDetailPage() {
             </div>
           </section>
           ) : null}
-
           {activeView === 'workbenches' ? (
             <section>
               <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
@@ -2679,7 +2574,6 @@ export default function WorkspaceDetailPage() {
                   新建工作台
                 </button>
               </div>
-
               <div ref={workbenchToolbarRef} className="mb-5 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -2707,7 +2601,6 @@ export default function WorkspaceDetailPage() {
                   <LayoutGrid className="h-4 w-4" />
                   画廊
                 </button>
-
                 <div className="ml-auto flex items-center gap-2">
                   <div className="relative">
                     <button
@@ -2738,7 +2631,6 @@ export default function WorkspaceDetailPage() {
                       </label>
                     </div>
                   </div>
-
                   <div className="relative" ref={workbenchColumnsMenuRef}>
                     <button
                       type="button"
@@ -2798,7 +2690,6 @@ export default function WorkspaceDetailPage() {
                       </div>
                     </div>
                   </div>
-
                   <div className="relative">
                     <button
                       type="button"
@@ -2850,13 +2741,11 @@ export default function WorkspaceDetailPage() {
                   </div>
                 </div>
               </div>
-
               {workbenchActionError ? (
                 <div className="mb-4 rounded-xl border border-[#f4c7c3] bg-[#fff7f6] px-4 py-3 text-sm text-[#b42318]">
                   {workbenchActionError}
                 </div>
               ) : null}
-
               <div className={workbenchViewMode === 'grid' ? 'grid gap-4 md:grid-cols-2 xl:grid-cols-3' : ''}>
                 {filteredWorkbenchItems.length === 0 && !creatingWorkbenchInline ? (
                   <button
@@ -3175,7 +3064,6 @@ export default function WorkspaceDetailPage() {
               </div>
             </section>
           ) : null}
-
           {activeView === 'assets' ? (
             <section>
               <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -3210,7 +3098,6 @@ export default function WorkspaceDetailPage() {
                   </button>
                 </div>
               </div>
-
               {courseAssetFiles.length > 0 ? (
                 <div className="overflow-visible">
                   <div className="max-h-[68vh] overflow-auto">
@@ -3251,7 +3138,6 @@ export default function WorkspaceDetailPage() {
                         const coverUrl = getCourseAssetCoverUrl(file);
                         const faviconUrl = getCourseAssetFaviconUrl(file);
                         const sectionLabel = getCourseAssetSectionLabel(section);
-
                         return (
                           <div
                             key={file.id}
@@ -3313,7 +3199,6 @@ export default function WorkspaceDetailPage() {
                   {assetQuery.trim() ? 'No resources match this filter.' : 'No course assets yet.'}
                 </div>
               )}
-
               {(workspace.fileObjects || []).filter((file) => file.nodeType === 'file').length === 0 ? (
                 <button
                   onClick={handleUpload}
@@ -3328,18 +3213,19 @@ export default function WorkspaceDetailPage() {
               ) : null}
             </section>
           ) : null}
-
           {activeView === 'intelligence' ? (
             <LearningIntelligenceDashboard
               workspaceId={id || ''}
               workbenchId={latestWorkbench?.id}
               workbenches={workbenches.map((workbench) => ({ id: workbench.id, title: workbench.title }))}
+              activeSection={activeIntelligenceSection}
+              hideSectionNav
+              onSectionChange={setActiveIntelligenceSection}
               onOpenWorkbench={(workbenchId) => navigate(`/workbenches/${workbenchId}`)}
               onPlanApplied={fetchWorkspace}
               onOpenTerminal={openTerminalWithPrompt}
             />
           ) : null}
-
           {activeView === 'terminal' ? (
             <section>
             <div className="mb-4 flex items-center justify-between gap-3">
@@ -3354,7 +3240,6 @@ export default function WorkspaceDetailPage() {
                 New chat
               </button>
             </div>
-
             <LearningTerminal
               workspaceId={id || ''}
               sessionId={currentChat?.id}
@@ -3386,7 +3271,6 @@ export default function WorkspaceDetailPage() {
           ) : null}
         </main>
       </div>
-
       {/* Overlays */}
       {workbenchValueEditor}
       {assetValueEditor}

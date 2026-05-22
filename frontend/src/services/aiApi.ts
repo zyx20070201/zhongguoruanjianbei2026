@@ -8,6 +8,7 @@ export interface AiChatMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt?: string;
+  attachments?: AiChatAttachment[];
 }
 
 export type AiChatAttachmentKind = 'text' | 'image' | 'pdf' | 'document' | 'file';
@@ -20,6 +21,17 @@ export interface AiChatAttachment {
   kind: AiChatAttachmentKind;
   createdAt: string;
   textContent?: string;
+  summary?: string;
+  parsedTextHash?: string;
+  parsedAt?: string;
+  extractionStatus?: 'ready' | 'metadata_only' | 'error';
+  chunks?: Array<{
+    chunkId: string;
+    text: string;
+    locator?: Record<string, any>;
+    headingPath?: string[];
+    score?: number;
+  }>;
   dataUrl?: string;
   base64Data?: string;
   fileObjectId?: string;
@@ -57,7 +69,7 @@ export type AiContextMode =
   | 'viewport'
   | 'active_file'
   | 'workbench'
-  | 'workspace';
+  | 'model_knowledge';
 
 export type AiStudioResourceType =
   | 'report'
@@ -219,6 +231,14 @@ export interface AiContextSelectionRange {
   page?: number;
   pageStart?: number;
   pageEnd?: number;
+  timestampStart?: number;
+  timestampEnd?: number;
+  segmentIds?: string[];
+  sourceType?: string;
+  url?: string;
+  lineStart?: number;
+  lineEnd?: number;
+  scrollRatio?: number;
   charStart?: number;
   charEnd?: number;
   textLength?: number;
@@ -252,6 +272,8 @@ export interface AiLockedSelectionContext {
 export interface AiChatContext {
   userId?: string;
   sessionId?: string;
+  preferredProvider?: string;
+  preferredModel?: string;
   workbenchTitle?: string;
   workbenchDescription?: string;
   workspaceId?: string;
@@ -459,6 +481,12 @@ export interface AiStreamResult {
   profile?: unknown;
 }
 
+export interface AiAvailableModel {
+  provider: string;
+  model: string;
+  configured: boolean;
+}
+
 interface AiStreamHandlers {
   onDelta?: (delta: string) => void;
   onReplace?: (content: string) => void;
@@ -497,6 +525,11 @@ export const aiApi = {
     context?: AiChatContext;
   }): Promise<AiWelcomeContent> => {
     const response = await client.post('/ai/chat/welcome', payload, { timeout: 10000 });
+    return response.data;
+  },
+
+  listModels: async (): Promise<{ models: AiAvailableModel[] }> => {
+    const response = await client.get('/ai/models', { timeout: 10000 });
     return response.data;
   },
 

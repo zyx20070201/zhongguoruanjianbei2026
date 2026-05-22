@@ -48,7 +48,7 @@ interface EnsureStateInput {
   workspaceId: string;
   workbenchId?: string | null;
   goalId?: string | null;
-  scope?: 'workspace';
+  scope?: string;
 }
 
 interface GovernLifecycleInput {
@@ -212,6 +212,13 @@ const signalScore = (value: unknown) => {
 const buildSummary = (state: CentralLearnerStateV2) => buildReadableSummary(state);
 
 const sqlDate = (value?: string | Date | null) => value ? new Date(value).toISOString() : null;
+
+const learnerStateScopeFor = (input: { workbenchId?: string | null; goalId?: string | null; scope?: string }) => {
+  if (input.scope) return input.scope;
+  if (input.goalId) return `goal:${input.goalId}`;
+  if (input.workbenchId) return `workbench:${input.workbenchId}`;
+  return 'workspace';
+};
 
 const signalFromRow = (row: SignalRow): LearnerSignalRecord => ({
   id: row.signalKey || row.observationKey || row.id,
@@ -554,7 +561,7 @@ export class LearnerStateService {
   async ensureState(input: EnsureStateInput): Promise<CentralLearnerState> {
     const workspace = await prisma.workspace.findUnique({ where: { id: input.workspaceId } });
     if (!workspace) throw new Error('Workspace not found');
-    const scope = input.scope || 'workspace';
+    const scope = learnerStateScopeFor(input);
     const existing = await this.loadCoreRow(input.workspaceId, scope);
     if (existing) return this.loadState(existing);
 
@@ -563,8 +570,8 @@ export class LearnerStateService {
     const summary = buildSummary(coreState);
     const coreId = await prisma.$transaction(async (tx) => {
       const inserted = await tx.$queryRawUnsafe<Array<{ id: string }>>(
-        `INSERT INTO "LearnerStateCore" ("id","scope","version","summary","governanceJson","currentPositionJson","workspaceId","userId")
-         VALUES (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),?,?,?,?,?,?,?)
+        `INSERT INTO "LearnerStateCore" ("id","scope","version","summary","governanceJson","currentPositionJson","workspaceId","userId","createdAt","updatedAt")
+         VALUES (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
          RETURNING "id"`,
         scope,
         1,
@@ -780,7 +787,14 @@ export class LearnerStateService {
 
     const [profile, goals, traces, activePlan, dueCards, reviewCount, eventCount] = await Promise.all([
       prisma.profile.findFirst({ where: { userId: workspace.userId, workspaceId } }),
-      prisma.learningGoal.findMany({ where: { workspaceId }, orderBy: { updatedAt: 'desc' }, take: 5 }),
+      prisma.learningGoal.findMany({
+        where: {
+          workspaceId,
+          ...(workbenchId ? { workbenches: { some: { id: workbenchId } } } : {})
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 5
+      }),
       prisma.learningTrace.findMany({
         where: { workspaceId, ...(workbenchId ? { workbenchId } : {}), ...(goalId ? { goalId } : {}) },
         orderBy: { updatedAt: 'desc' },
@@ -790,9 +804,9 @@ export class LearnerStateService {
         where: { workspaceId, status: 'active', ...(workbenchId ? { workbenchId } : {}), ...(goalId ? { goalId } : {}) },
         orderBy: [{ version: 'desc' }, { updatedAt: 'desc' }]
       }),
-      optionalCount(prisma.flashcard.count({ where: { workspaceId, suspended: false, dueAt: { lte: new Date() } } })),
-      optionalCount(prisma.flashcardReviewLog.count({ where: { workspaceId } })),
-      prisma.learningEvent.count({ where: { workspaceId } })
+      optionalCount(prisma.flashcard.count({ where: { workspaceId, ...(workbenchId ? { workbenchId } : {}), suspended: false, dueAt: { lte: new Date() } } })),
+      optionalCount(prisma.flashcardReviewLog.count({ where: { workspaceId, ...(workbenchId ? { card: { workbenchId } } : {}) } })),
+      prisma.learningEvent.count({ where: { workspaceId, ...(workbenchId ? { workbenchId } : {}) } })
     ]);
 
     const preferences = parseJson<Record<string, unknown>>(profile?.preferences, {});

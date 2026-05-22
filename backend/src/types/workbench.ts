@@ -111,6 +111,8 @@ export interface WorkbenchSummary {
 export interface WorkbenchPayload {
   title?: string;
   description?: string;
+  workspaceId?: string;
+  resourceIds?: string[];
 }
 
 export interface WorkbenchResourceGroups {

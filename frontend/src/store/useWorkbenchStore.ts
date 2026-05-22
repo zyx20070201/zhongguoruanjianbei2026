@@ -57,7 +57,13 @@ const LIVE_CONTEXT_VIEW_STATE_KEYS = new Set([
   'visibleBlockIds',
   'scrollRatio',
   'selectedText',
+  'selectedRange',
+  'visibleContent',
   'approxChunkIndex',
+  'videoCurrentTime',
+  'videoActiveChapterId',
+  'videoActiveSlideId',
+  'videoContextText',
   'contextUpdatedAt',
   'contextVersion'
 ]);
@@ -149,14 +155,6 @@ const sanitizeChatAttachment = (attachment: any) => ({
   kind: ['text', 'image', 'pdf', 'document', 'file'].includes(attachment?.kind) ? attachment.kind : 'file',
   createdAt: typeof attachment?.createdAt === 'string' ? attachment.createdAt : new Date().toISOString(),
   textContent: typeof attachment?.textContent === 'string' ? attachment.textContent.slice(0, 12000) : undefined,
-  dataUrl:
-    typeof attachment?.dataUrl === 'string' && attachment.dataUrl.startsWith('data:') && attachment.dataUrl.length <= 6_000_000
-      ? attachment.dataUrl
-      : undefined,
-  base64Data:
-    typeof attachment?.base64Data === 'string' && attachment.base64Data.length <= 5_500_000
-      ? attachment.base64Data
-      : undefined,
   fileObjectId: typeof attachment?.fileObjectId === 'string' ? attachment.fileObjectId : undefined,
   savedToWorkbench: Boolean(attachment?.savedToWorkbench),
   status: ['ready', 'metadata_only', 'error'].includes(attachment?.status) ? attachment.status : undefined,

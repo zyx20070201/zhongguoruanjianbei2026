@@ -160,7 +160,9 @@ const resourceStyleHints = (signals: ReturnType<typeof extractSignals>) => {
   if (prefs.includes('examples')) hints.push('Lead with a concrete example before abstraction.');
   if (prefs.includes('code_or_project')) hints.push('Ground explanations in code, procedures, or a small project artifact.');
   if (prefs.includes('visual_explanation')) hints.push('Use diagrams, structure, or stepwise visual framing when possible.');
-  if (prefs.includes('practice_or_quiz')) hints.push('End with a quick check question or practice task.');
+  if (prefs.includes('practice_or_quiz')) {
+    hints.push('Offer a quick check question or practice task only when the user explicitly asks for practice, review, quiz, or self-test.');
+  }
   if (prefs.includes('flashcards_or_review')) hints.push('Convert important points into recall-friendly bullets or flashcard-ready prompts.');
   if (prefs.includes('step_by_step')) hints.push('Break the explanation into short ordered steps.');
   if (prefs.includes('concise_summary')) hints.push('Keep the answer compact and move quickly to the point.');
@@ -181,7 +183,7 @@ const audienceHints = (audience: LearnerContextAudience, signals: ReturnType<typ
   }
   if (audience === 'tutor') {
     hints.push('Explain from the learner question first; use learner state as personalization, not as a label.');
-    hints.push('Default to a short explanation, one worked example, then a check for understanding.');
+    hints.push('Default to a short explanation and one worked example. Do not append a check question unless the user asks for practice, review, quiz, or self-test.');
   }
   if (audience === 'quiz') hints.push('Use short-term observations to choose checks, but do not treat one answer as final mastery.');
   if (audience === 'flashcard') hints.push('Prioritize review pressure and repeated weak observations before broadening scope.');

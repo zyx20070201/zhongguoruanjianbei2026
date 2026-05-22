@@ -298,7 +298,9 @@ const STAGE_PERCENT: Record<ResourceIntelligenceStage, number> = {
 };
 
 const MAX_RESOURCE_SECTIONS = Math.max(20, Number(process.env.RESOURCE_INTELLIGENCE_MAX_SECTIONS || 120));
-const MAX_LLM_PROPOSALS = Math.max(20, Number(process.env.RESOURCE_INTELLIGENCE_LLM_PROPOSALS || 80));
+const MAX_LLM_PROPOSALS = Math.max(8, Number(process.env.RESOURCE_INTELLIGENCE_LLM_PROPOSALS || 80));
+const RESOURCE_INTELLIGENCE_TIMEOUT_MS = Number(process.env.RESOURCE_INTELLIGENCE_TIMEOUT_MS || 120000);
+const MAX_LLM_SLIDE_INPUTS = Math.max(8, Number(process.env.RESOURCE_INTELLIGENCE_LLM_SLIDE_INPUTS || 80));
 
 const getExtension = (name?: string | null) => name?.split('.').pop()?.toLowerCase() || '';
 
@@ -1987,7 +1989,7 @@ export class ResourceIntelligenceService {
             level: node.level,
             pageStart: node.pageStart,
             pageEnd: node.pageEnd,
-            evidence: node.evidenceSnippets?.slice(0, 2).map((snippet) => snippet.text)
+            evidence: node.evidenceSnippets?.slice(0, 2).map((snippet) => clip(snippet.text, 500))
           })),
           transcriptPreview: transcript.slice(0, 18).map((segment) => ({
             id: segment.id,
@@ -1996,13 +1998,13 @@ export class ResourceIntelligenceService {
             text: clip(segment.text, 420)
           })),
           slideInputs: slideDeck && structure?.pages
-            ? structure.pages.map((page) => {
+            ? structure.pages.slice(0, MAX_LLM_SLIDE_INPUTS).map((page) => {
                 const analysis = pageAnalysis.find((item) => item.page === page.page);
                 return {
                   page: page.page,
                   titleCandidates: analysis?.titleCandidates || [],
                   pageType: analysis?.pageType,
-                  text: clip(page.text, 1200)
+                  text: clip(page.text, 700)
                 };
               })
             : undefined,
@@ -2011,11 +2013,11 @@ export class ResourceIntelligenceService {
             backendTitle: proposal.title,
             rangeLabel: proposal.rangeLabel,
             pageTypes: proposal.pageTypes,
-            evidence: proposal.evidenceSnippets.slice(0, 3).map((snippet) => snippet.text),
-            text: proposal.text
+            evidence: proposal.evidenceSnippets.slice(0, 2).map((snippet) => clip(snippet.text, 320)),
+            text: clip(proposal.text, 800)
           }))
         },
-        timeoutMs: 45000
+        timeoutMs: RESOURCE_INTELLIGENCE_TIMEOUT_MS
       });
       const normalized = normalizeOutput(response.data, proposals);
       const slideDeckOutput = slideDeck && structure?.pages

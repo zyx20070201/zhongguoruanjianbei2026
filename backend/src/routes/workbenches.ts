@@ -22,13 +22,13 @@ router.get('/', requireWorkspaceAccess, async (req: Request, res: Response) => {
 });
 
 router.post('/', requireWorkspaceAccess, async (req: Request, res: Response) => {
-  const { workspaceId, title, description } = req.body ?? {};
+  const { workspaceId, title, description, resourceIds } = req.body ?? {};
 
   if (!workspaceId || typeof workspaceId !== 'string') {
     return res.status(400).json({ error: 'workspaceId is required' });
   }
 
-  const workbench = await workbenchService.create(workspaceId, { title, description });
+  const workbench = await workbenchService.create(workspaceId, { title, description, resourceIds });
   return res.status(201).json({ workbench });
 });
 
@@ -90,6 +90,38 @@ router.patch('/:id', requireWorkbenchAccess, async (req: Request, res: Response)
 
   if (!workbench) {
     return res.status(404).json({ error: 'Workbench not found' });
+  }
+
+  return res.json({ workbench });
+});
+
+router.post('/:id/clone', requireWorkbenchAccess, async (req: Request, res: Response) => {
+  const workbenchId = getSingleValue(req.params.id);
+  if (!workbenchId) {
+    return res.status(400).json({ error: 'Workbench id is required' });
+  }
+
+  const workbench = await workbenchService.clone(workbenchId, req.body ?? {});
+  if (!workbench) {
+    return res.status(404).json({ error: 'Workbench not found' });
+  }
+
+  return res.status(201).json({ workbench });
+});
+
+router.patch('/:id/move', requireWorkbenchAccess, async (req: Request, res: Response) => {
+  const workbenchId = getSingleValue(req.params.id);
+  const workspaceId = req.body?.workspaceId;
+  if (!workbenchId) {
+    return res.status(400).json({ error: 'Workbench id is required' });
+  }
+  if (!workspaceId || typeof workspaceId !== 'string') {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+
+  const workbench = await workbenchService.move(workbenchId, workspaceId);
+  if (!workbench) {
+    return res.status(404).json({ error: 'Workbench or target workspace not found' });
   }
 
   return res.json({ workbench });

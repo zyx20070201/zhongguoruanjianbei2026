@@ -55,18 +55,37 @@ const normalizeMemoryText = (value: string) =>
     .replace(/^请你?记住[:：,，\s]*/i, '')
     .replace(/^记住[:：,，\s]*/i, '')
     .replace(/^以后(?:都|请|回答时|讲解时)?[:：,，\s]*/i, '以后')
+    .replace(/[，,]?(?:请帮我|帮我|请你)?记住(?:一下)?(?:这个|该|上述|以上)?(?:讲解)?偏好?[。！？!?\s]*$/i, '')
+    .replace(/(?:这个|该|上述|以上)?(?:讲解)?偏好也?请记住[。！？!?\s]*$/i, '')
+    .replace(/[。！？!?\s]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+const isUsefulMemoryText = (value: string) =>
+  Boolean(value && value.length >= 4 && !/^[\s。！？!?.,，、]+$/.test(value) && !/^(这个|该|上述|以上)?(?:讲解)?偏好$/.test(value));
 
 const explicitMemoryText = (message: string) => {
   const text = message.trim();
   const direct = text.match(/(?:请你?|帮我)?记住(?:一下)?[：:\s]*(.+)$/i);
-  if (direct?.[1]) return normalizeMemoryText(direct[1]);
+  if (direct?.[1]) {
+    const candidate = normalizeMemoryText(direct[1]);
+    if (isUsefulMemoryText(candidate)) return candidate;
+  }
+  const sentenceBeforeRemember = text.match(/^(.{4,180}?)(?:请帮我|帮我|请你)?记住/i);
+  if (sentenceBeforeRemember?.[1]) {
+    const candidate = normalizeMemoryText(sentenceBeforeRemember[1]);
+    if (isUsefulMemoryText(candidate)) return candidate;
+  }
   if (/以后|之后|接下来|从现在开始/.test(text) && /我(?:更|比较)?喜欢|我偏好|不要再|请始终|总是|默认|最好/.test(text)) {
     return normalizeMemoryText(text);
   }
   if (/我(?:更|比较)?喜欢|我偏好/.test(text) && /记住|以后|默认|始终|最好/.test(text)) return normalizeMemoryText(text);
   return '';
+};
+
+const hasExplicitMemoryIntent = (message: string) => {
+  const text = message.trim();
+  return /记住|以后|之后|接下来|从现在开始|请始终|总是|默认/.test(text) && /偏好|喜欢|不要|先|最后|讲解|回答|练习|自测|检查点|例子/.test(text);
 };
 
 const categorize = (text: string) => {
@@ -217,15 +236,32 @@ const coerceExtraction = (value: any, fallback: MemoryExtractionResult): MemoryE
     .filter(Boolean) as MemoryExtractionResult['learnerStateSignals'];
 
   const candidateText = clip(value?.savedMemoryCandidate?.text, 360);
-  const candidate = value?.savedMemoryCandidate && typeof value.savedMemoryCandidate === 'object' && !isToolGeneratedLearningRequest(candidateText)
+  const llmPromotionPolicy = value?.savedMemoryCandidate?.promotionPolicy || value?.savedMemoryCandidate?.promotion_policy;
+  const llmCategory = String(value?.savedMemoryCandidate?.category || '');
+  const llmCandidate = value?.savedMemoryCandidate && typeof value.savedMemoryCandidate === 'object' && isUsefulMemoryText(candidateText) && !isToolGeneratedLearningRequest(candidateText)
     ? {
         text: candidateText,
-        category: categorize(String(value.savedMemoryCandidate.text || '')),
+        category: ['preference', 'background', 'note'].includes(llmCategory) ? llmCategory : categorize(String(value.savedMemoryCandidate.text || '')),
         confidence: Math.max(0, Math.min(1, Number(value.savedMemoryCandidate.confidence ?? 0.7))),
         reason: clip(value.savedMemoryCandidate.reason || 'Extractor candidate.', 180),
-        promotionPolicy: value.shouldAskUserToSave ? 'ask_user_to_save' as const : 'do_not_save' as const
+        promotionPolicy:
+          llmPromotionPolicy === 'explicit_user_request'
+            ? 'explicit_user_request' as const
+            : value.shouldAskUserToSave
+              ? 'ask_user_to_save' as const
+              : 'do_not_save' as const
       }
-    : fallback.savedMemoryCandidate;
+    : null;
+  const candidate =
+    llmCandidate?.text
+      ? {
+          ...llmCandidate,
+          promotionPolicy:
+            fallback.savedMemoryCandidate?.promotionPolicy === 'explicit_user_request'
+              ? 'explicit_user_request' as const
+              : llmCandidate.promotionPolicy
+        }
+      : fallback.savedMemoryCandidate;
 
   return {
     savedMemoryCandidate: candidate?.text ? candidate : null,
@@ -258,10 +294,11 @@ export class MemoryExtractorService {
       '目标：少记但记准；区分 Saved Memories、Reference chat history 和 Learner State Signals。',
       '如果消息是内部工具提示词、source guide/resource summary 生成请求、带 URL/资源名称/只输出正文等结构化资源处理任务，不要提取 saved memory 或 learner state signal。',
       'Saved memory 只能保存长期偏好、稳定背景或用户明确要求记住的内容。',
+      '如果用户明确说“记住/帮我记住/请记住”，请把它改写成一条完整、自然的长期记忆，不要原样返回“这个偏好”之类的空泛短语。',
       '单次话题必须输出为 recent_topic，不能当 learning goal；只有用户明确说目标/考试/项目/计划/希望掌握时才输出 active_learning_goal。',
       '不要把 quiz/flashcard 弱项升级成 saved memory。',
       'JSON schema:',
-      '{"savedMemoryCandidate":null|{"text":"自然语言长期记忆","category":"preference|background|note","confidence":0-1,"reason":"..."},"learnerStateSignals":[{"taxonomy":"recent_topic|active_learning_goal|candidate_weak_concept|stable_weak_concept|explanation_preference|review_pressure|evidence_quality","value":"自然语言或短标签","confidence":0-1,"rationale":"..."}],"conversationSummary":"一句话历史摘要","shouldAskUserToSave":false,"askUserToSaveText":null,"rejectedCandidates":[{"text":"...","reason":"..."}]}',
+      '{"savedMemoryCandidate":null|{"text":"自然语言长期记忆","category":"preference|background|note","confidence":0-1,"reason":"...","promotionPolicy":"explicit_user_request|ask_user_to_save|do_not_save"},"learnerStateSignals":[{"taxonomy":"recent_topic|active_learning_goal|candidate_weak_concept|stable_weak_concept|explanation_preference|review_pressure|evidence_quality","value":"自然语言或短标签","confidence":0-1,"rationale":"..."}],"conversationSummary":"一句话历史摘要","shouldAskUserToSave":false,"askUserToSaveText":null,"rejectedCandidates":[{"text":"...","reason":"..."}]}',
       '',
       `Messages:\n${input.messages.map((message) => `${message.role}: ${clip(message.content, 1000)}`).join('\n')}`,
       '',

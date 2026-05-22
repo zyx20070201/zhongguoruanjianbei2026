@@ -199,7 +199,6 @@ export interface User {
   id: string;
   username: string;
   email?: string | null;
-  emailVerified?: boolean;
 }
 
 export type WorkspaceStatus = 'active' | 'review' | 'idle' | 'archived';
@@ -383,11 +382,13 @@ export interface WorkspaceCardData {
   major: string;
   updatedAt: string;
   status: WorkspaceStatus;
+  taskCount?: number;
   workbenchCount: number;
   fileCount: number;
   noteCount: number;
   codeCount: number;
   recentTask?: string;
+  recentWorkbench?: string;
   recentLearningState?: string;
   archived?: boolean;
 }

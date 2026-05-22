@@ -7,7 +7,7 @@ export const workbenchApi = {
     return response.data.workbenches;
   },
 
-  create: async (data: { workspaceId: string; title?: string; description?: string }): Promise<Workbench> => {
+  create: async (data: { workspaceId: string; title?: string; description?: string; resourceIds?: string[] }): Promise<Workbench> => {
     const response = await client.post('/workbenches', data);
     return response.data.workbench;
   },
@@ -29,6 +29,16 @@ export const workbenchApi = {
 
   update: async (id: string, data: { title?: string; description?: string }): Promise<Workbench> => {
     const response = await client.patch(`/workbenches/${id}`, data);
+    return response.data.workbench;
+  },
+
+  clone: async (id: string, data?: { workspaceId?: string; title?: string }): Promise<Workbench> => {
+    const response = await client.post(`/workbenches/${id}/clone`, data || {});
+    return response.data.workbench;
+  },
+
+  move: async (id: string, data: { workspaceId: string }): Promise<Workbench> => {
+    const response = await client.patch(`/workbenches/${id}/move`, data);
     return response.data.workbench;
   },
 

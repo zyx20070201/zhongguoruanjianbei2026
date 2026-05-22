@@ -69,6 +69,8 @@ model Workspace {
   courseKnowledgeConcepts CourseKnowledgeConcept[]
   courseKnowledgeRelations CourseKnowledgeRelation[]
   courseKnowledgeBindings CourseKnowledgeBinding[]
+  courseKnowledgeExercises CourseKnowledgeExercise[]
+  courseKnowledgeExerciseBindings CourseKnowledgeExerciseBinding[]
   courseKnowledgeMisconceptions CourseKnowledgeMisconception[]
   courseKnowledgeActivations CourseKnowledgeActivation[]
   courseKnowledgeLearnerStates CourseKnowledgeLearnerState[]
@@ -132,6 +134,7 @@ model FileSystemObject {
   knowledgeChunks    KnowledgeChunk[]
   knowledgeIndexJobs KnowledgeIndexJob[]
   knowledgeBindings  CourseKnowledgeBinding[]
+  courseKnowledgeExercises CourseKnowledgeExercise[]
   flashcardDecks     FlashcardDeck[]
   studioArtifacts    StudioArtifact[]
 
@@ -420,13 +423,36 @@ model CourseKnowledgeConcept {
   outgoingRelations CourseKnowledgeRelation[] @relation("KnowledgeRelationFrom")
   incomingRelations CourseKnowledgeRelation[] @relation("KnowledgeRelationTo")
   bindings          CourseKnowledgeBinding[]
+  exerciseBindings  CourseKnowledgeExerciseBinding[]
   misconceptions    CourseKnowledgeMisconception[]
   activations       CourseKnowledgeActivation[]
   learnerStates     CourseKnowledgeLearnerState[]
+  tags              CourseKnowledgeConceptTag[]
 
   @@unique([workspaceId, conceptKey])
   @@index([workspaceId, status, updatedAt])
   @@index([workspaceId, activationScore])
+}
+
+model CourseKnowledgeConceptTag {
+  id              String   @id @default(uuid())
+  label           String
+  normalizedLabel String
+  state           String   @default("candidate")
+  sourcesJson     String   @default("[]")
+  rationale       String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  conceptId String
+  concept   CourseKnowledgeConcept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, conceptId, normalizedLabel])
+  @@index([workspaceId, state, normalizedLabel])
+  @@index([conceptId, state])
 }
 
 model CourseKnowledgeRelation {
@@ -483,6 +509,57 @@ model CourseKnowledgeBinding {
   @@unique([workspaceId, conceptId, targetType, targetId, role])
   @@index([workspaceId, targetType, targetId])
   @@index([conceptId, bindingType])
+}
+
+model CourseKnowledgeExercise {
+  id           String   @id @default(uuid())
+  exerciseKey  String
+  title        String
+  prompt       String   @default("")
+  exerciseType String   @default("question")
+  difficulty   Float    @default(0.5)
+  answerJson   String   @default("{}")
+  explanation  String   @default("")
+  source       String   @default("ai_kg_extraction")
+  evidenceJson String   @default("{}")
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  fileObjectId String?
+  fileObject   FileSystemObject? @relation(fields: [fileObjectId], references: [id], onDelete: SetNull)
+
+  bindings CourseKnowledgeExerciseBinding[]
+
+  @@unique([workspaceId, exerciseKey])
+  @@index([workspaceId, status, updatedAt])
+  @@index([fileObjectId])
+}
+
+model CourseKnowledgeExerciseBinding {
+  id          String   @id @default(uuid())
+  role        String   @default("assesses")
+  strength    Float    @default(0.65)
+  confidence  Float    @default(0.65)
+  evidenceJson String  @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  exerciseId String
+  exercise   CourseKnowledgeExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+
+  conceptId String
+  concept   CourseKnowledgeConcept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, exerciseId, conceptId, role])
+  @@index([conceptId, role])
+  @@index([exerciseId])
 }
 
 model CourseKnowledgeMisconception {

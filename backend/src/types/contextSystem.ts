@@ -4,7 +4,7 @@ export type ContextMode =
   | 'viewport'
   | 'active_file'
   | 'workbench'
-  | 'workspace';
+  | 'model_knowledge';
 
 export type ContextResourceType =
   | 'pdf'
@@ -53,6 +53,9 @@ export interface ContextLocator {
   };
   timestampStart?: number;
   timestampEnd?: number;
+  segmentIds?: string[];
+  sourceType?: string;
+  url?: string;
 }
 
 export interface SelectionContext {
@@ -107,6 +110,16 @@ export interface ChatSessionAttachmentContext {
   createdAt?: string;
   textContent?: string;
   summary?: string;
+  parsedTextHash?: string;
+  parsedAt?: string;
+  extractionStatus?: 'ready' | 'metadata_only' | 'error';
+  chunks?: Array<{
+    chunkId: string;
+    text: string;
+    locator?: ContextLocator;
+    headingPath?: string[];
+    score?: number;
+  }>;
   dataUrl?: string;
   base64Data?: string;
   fileObjectId?: string;
@@ -250,10 +263,10 @@ export interface ContextPolicyDecision {
   includeViewport: boolean;
   includeActiveFileFullText: boolean;
   includeActiveFileSummary: boolean;
-  ragScope: 'active_file' | 'workbench' | 'workspace' | 'none';
+  ragScope: 'active_file' | 'workbench' | 'none';
   includeResourceSummaries: boolean;
   maxRetrievedChunks: number;
-  intent?: 'local_reference' | 'summarize_current' | 'cross_resource' | 'workspace_search' | 'code_help' | 'general_qa';
+  intent?: 'local_reference' | 'summarize_current' | 'cross_resource' | 'code_help' | 'general_qa';
   layerScores?: Record<string, number>;
   requiredLayers?: string[];
   reasons: string[];

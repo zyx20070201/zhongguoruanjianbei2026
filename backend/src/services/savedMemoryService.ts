@@ -29,13 +29,27 @@ const normalizeMemoryText = (value: string) =>
     .replace(/^请你?记住[:：,，\s]*/i, '')
     .replace(/^记住[:：,，\s]*/i, '')
     .replace(/^以后(?:都|请|回答时)?[:：,，\s]*/i, '以后')
+    .replace(/[，,]?(?:请帮我|帮我|请你)?记住(?:一下)?(?:这个|该|上述|以上)?(?:讲解)?偏好?[。！？!?\s]*$/i, '')
+    .replace(/(?:这个|该|上述|以上)?(?:讲解)?偏好也?请记住[。！？!?\s]*$/i, '')
+    .replace(/[。！？!?\s]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+const isUsefulMemoryText = (value: string) =>
+  Boolean(value && value.length >= 4 && !/^[\s。！？!?.,，、]+$/.test(value) && !/^(这个|该|上述|以上)?(?:讲解)?偏好$/.test(value));
 
 const explicitMemoryText = (message: string) => {
   const text = message.trim();
   const direct = text.match(/(?:请你?|帮我)?记住(?:一下)?[：:\s]*(.+)$/i);
-  if (direct?.[1]) return normalizeMemoryText(direct[1]);
+  if (direct?.[1]) {
+    const candidate = normalizeMemoryText(direct[1]);
+    if (isUsefulMemoryText(candidate)) return candidate;
+  }
+  const sentenceBeforeRemember = text.match(/^(.{4,180}?)(?:请帮我|帮我|请你)?记住/i);
+  if (sentenceBeforeRemember?.[1]) {
+    const candidate = normalizeMemoryText(sentenceBeforeRemember[1]);
+    if (isUsefulMemoryText(candidate)) return candidate;
+  }
   const preference = text.match(/(?:以后|之后|接下来|从现在开始).{0,12}(?:都|请|回答时|讲解时)?(.{4,160})/i);
   if (/以后|之后|接下来|从现在开始/.test(text) && /我(?:更|比较)?喜欢|我偏好|不要再|请始终|总是|默认/.test(text)) {
     return normalizeMemoryText(preference?.[0] || text);
@@ -63,10 +77,11 @@ const toSavedMemory = (row: any): SavedMemoryItem => ({
 });
 
 export class SavedMemoryService {
-  async list(input: { workspaceId: string; limit?: number; includeDeleted?: boolean }) {
+  async list(input: { workspaceId: string; workbenchId?: string | null; limit?: number; includeDeleted?: boolean }) {
     const rows = await prisma.savedMemory.findMany({
       where: {
         workspaceId: input.workspaceId,
+        ...(input.workbenchId ? { workbenchId: input.workbenchId } : {}),
         ...(input.includeDeleted ? {} : { status: 'active' })
       },
       orderBy: { updatedAt: 'desc' },
@@ -75,7 +90,7 @@ export class SavedMemoryService {
     return rows.map(toSavedMemory);
   }
 
-  async promptContext(input: { workspaceId: string; limit?: number }) {
+  async promptContext(input: { workspaceId: string; workbenchId?: string | null; limit?: number }) {
     const memories = await this.list(input);
     if (!memories.length) return 'Saved memories: none.';
     return [

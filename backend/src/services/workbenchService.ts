@@ -165,14 +165,6 @@ const sanitizeChatAttachment = (attachment: any) => ({
   kind: ['text', 'image', 'pdf', 'document', 'file'].includes(attachment?.kind) ? attachment.kind : 'file',
   createdAt: typeof attachment?.createdAt === 'string' ? attachment.createdAt : new Date().toISOString(),
   textContent: typeof attachment?.textContent === 'string' ? attachment.textContent.slice(0, 12000) : undefined,
-  dataUrl:
-    typeof attachment?.dataUrl === 'string' && attachment.dataUrl.startsWith('data:') && attachment.dataUrl.length <= 6_000_000
-      ? attachment.dataUrl
-      : undefined,
-  base64Data:
-    typeof attachment?.base64Data === 'string' && attachment.base64Data.length <= 5_500_000
-      ? attachment.base64Data
-      : undefined,
   fileObjectId: typeof attachment?.fileObjectId === 'string' ? attachment.fileObjectId : undefined,
   savedToWorkbench: Boolean(attachment?.savedToWorkbench),
   status: ['ready', 'metadata_only', 'error'].includes(attachment?.status) ? attachment.status : undefined,
@@ -646,7 +638,52 @@ export class WorkbenchService {
       }
     };
 
-    return workbenchRepository.save(record);
+    const saved = await workbenchRepository.save(record);
+    await this.bindWorkspaceResources(saved.id, workspaceId, payload.resourceIds || []);
+    return saved;
+  }
+
+  private async bindWorkspaceResources(workbenchId: string, workspaceId: string, resourceIds: string[]) {
+    const uniqueIds = Array.from(new Set(resourceIds.map((item) => String(item || '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) return;
+
+    const resources = await prisma.fileSystemObject.findMany({
+      where: {
+        workspaceId,
+        nodeType: 'file',
+        id: { in: uniqueIds }
+      },
+      orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }]
+    });
+
+    if (resources.length === 0) return;
+
+    await prisma.$transaction(
+      resources.map((resource: any, index: number) =>
+        (prisma as any).workbenchResource.upsert({
+          where: {
+            workbenchId_fileObjectId_role: {
+              workbenchId,
+              fileObjectId: resource.id,
+              role: inferBindingRole(resource)
+            }
+          },
+          create: {
+            workbenchId,
+            fileObjectId: resource.id,
+            role: inferBindingRole(resource),
+            source: resource.origin || 'workspace',
+            orderIndex: index,
+            metadataJson: JSON.stringify({ selectedFrom: 'workspace_knowledge' })
+          },
+          update: {
+            source: resource.origin || 'workspace',
+            orderIndex: index,
+            metadataJson: JSON.stringify({ selectedFrom: 'workspace_knowledge' })
+          }
+        })
+      )
+    );
   }
 
   async getResourceGroups(id: string): Promise<WorkbenchResourceGroups | null> {
@@ -761,6 +798,93 @@ export class WorkbenchService {
     };
 
     return workbenchRepository.save(nextRecord);
+  }
+
+  async clone(id: string, payload: WorkbenchPayload = {}): Promise<WorkbenchRecord | null> {
+    const current = await workbenchRepository.findById(id);
+    if (!current) return null;
+
+    const now = new Date().toISOString();
+    const nextId = crypto.randomUUID();
+    const workspaceId = payload.workspaceId?.trim() || current.workspaceId;
+    const title = payload.title?.trim() || `Clone of ${current.title || 'Untitled Workbench'}`;
+    const rootPath = await this.createWorkbenchRootPath(workspaceId, title);
+    const nextState = normalizeState(nextId, {
+      ...current.state,
+      workbenchId: nextId
+    });
+
+    const record: WorkbenchRecord = {
+      id: nextId,
+      workspaceId,
+      title,
+      description: payload.description?.trim() ?? current.description,
+      rootPath,
+      createdAt: now,
+      updatedAt: now,
+      lastOpenedAt: now,
+      state: nextState
+    };
+
+    const cloned = await workbenchRepository.save(record);
+
+    const resources = await (prisma as any).workbenchResource.findMany({
+      where: { workbenchId: id },
+      select: { fileObjectId: true, role: true, source: true, orderIndex: true, metadataJson: true }
+    }).catch(() => []);
+
+    if (resources.length > 0) {
+      await prisma.$transaction(
+        resources.map((resource: any) =>
+          (prisma as any).workbenchResource.create({
+            data: {
+              workbenchId: nextId,
+              fileObjectId: resource.fileObjectId,
+              role: resource.role || 'resource',
+              source: resource.source || 'clone',
+              orderIndex: resource.orderIndex ?? 0,
+              metadataJson: resource.metadataJson || JSON.stringify({})
+            }
+          })
+        )
+      ).catch(() => undefined);
+    }
+
+    return cloned;
+  }
+
+  async move(id: string, workspaceId: string): Promise<WorkbenchRecord | null> {
+    const current = await workbenchRepository.findById(id);
+    if (!current) return null;
+
+    const targetWorkspaceId = workspaceId.trim();
+    if (!targetWorkspaceId || targetWorkspaceId === current.workspaceId) return current;
+
+    const targetWorkspace = await prisma.workspace.findUnique({
+      where: { id: targetWorkspaceId },
+      select: { id: true }
+    });
+    if (!targetWorkspace) return null;
+
+    const now = new Date().toISOString();
+    const rootPath = await this.createWorkbenchRootPath(targetWorkspaceId, current.title);
+    const moved = await prisma.workbench.update({
+      where: { id },
+      data: {
+        workspaceId: targetWorkspaceId,
+        rootPath,
+        updatedAt: new Date(now),
+        lastOpenedAt: new Date(now)
+      }
+    });
+
+    return normalizeRecord({
+      ...current,
+      workspaceId: moved.workspaceId,
+      rootPath: moved.rootPath || rootPath,
+      updatedAt: now,
+      lastOpenedAt: now
+    });
   }
 
   async saveState(id: string, state: Partial<WorkbenchState>): Promise<WorkbenchRecord | null> {

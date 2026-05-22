@@ -31,6 +31,8 @@ const tempStorage = multer.diskStorage({
 
 const upload = multer({ storage: tempStorage });
 
+router.post('/discover-sources', requireAuth, discoverWebSources);
+
 router.use('/workspace/:workspaceId', requireAuth, requireWorkspaceAccess);
 
 // New File System API

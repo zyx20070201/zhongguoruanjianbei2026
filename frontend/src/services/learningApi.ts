@@ -184,9 +184,57 @@ export const learningApi = {
     return response.data;
   },
 
-  getKnowledgeGraph: async (workspaceId: string, params?: { limit?: number }) => {
+  getKnowledgeGraph: async (workspaceId: string, params?: { limit?: number; sourceIds?: string[]; tagQuery?: string }) => {
     const response = await client.get('/learning/knowledge/graph', {
-      params: { workspaceId, ...(params || {}) }
+      params: {
+        workspaceId,
+        limit: params?.limit,
+        tagQuery: params?.tagQuery,
+        ...(params?.sourceIds?.length ? { sourceIds: params.sourceIds.join(',') } : {})
+      }
+    });
+    return response.data;
+  },
+
+  getConceptTags: async (workspaceId: string, conceptId: string) => {
+    const response = await client.get(`/learning/knowledge/graph/concepts/${conceptId}/tags`, {
+      params: { workspaceId }
+    });
+    return response.data;
+  },
+
+  addConceptTag: async (data: {
+    workspaceId: string;
+    conceptId: string;
+    label: string;
+    source?: 'system_candidate' | 'ai_suggested' | 'user';
+    state?: 'candidate' | 'applied';
+    rationale?: string;
+  }) => {
+    const response = await client.post(`/learning/knowledge/graph/concepts/${data.conceptId}/tags`, data);
+    return response.data;
+  },
+
+  deleteConceptTag: async (workspaceId: string, conceptId: string, tagId: string) => {
+    const response = await client.delete(`/learning/knowledge/graph/concepts/${conceptId}/tags/${tagId}`, {
+      params: { workspaceId }
+    });
+    return response.data;
+  },
+
+  suggestConceptTags: async (data: {
+    workspaceId: string;
+    conceptId: string;
+    question?: string;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  }) => {
+    const response = await client.post(`/learning/knowledge/graph/concepts/${data.conceptId}/tag-suggestions`, data);
+    return response.data;
+  },
+
+  getConceptExercises: async (workspaceId: string, conceptId: string, params?: { limit?: number }) => {
+    const response = await client.get(`/learning/knowledge/graph/concepts/${conceptId}/exercises`, {
+      params: { workspaceId, limit: params?.limit }
     });
     return response.data;
   },
@@ -394,6 +442,14 @@ export const learningApi = {
   ) => {
     const response = await client.get('/learning/learner-state/context', {
       params: { workspaceId, ...(params || {}) }
+    });
+    return response.data;
+  },
+
+  getLearnerProfileView: async (workspaceId: string, params?: { workbenchId?: string; limit?: number; force?: boolean; forcePortrait?: boolean }) => {
+    const response = await client.get('/learning/learner-state/profile-view', {
+      params: { workspaceId, ...(params || {}) },
+      timeout: 0
     });
     return response.data;
   },

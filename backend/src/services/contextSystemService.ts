@@ -13,6 +13,7 @@ import { findWorkbenchResourceFiles } from './workbenchResourceScope';
 import { videoAnalysisService } from './videoAnalysisService';
 import { stableHash } from './chunkSchema';
 import { LocalStorageService } from './storage/localStorageService';
+import { aiModelProviderService } from './aiModelProviderService';
 import {
   ActiveFileContext,
   ChatMessage,
@@ -56,6 +57,9 @@ export interface ClientPanelContext {
     pageEnd?: number;
     timestampStart?: number;
     timestampEnd?: number;
+    segmentIds?: string[];
+    sourceType?: string;
+    url?: string;
     charStart?: number;
     charEnd?: number;
     textLength?: number;
@@ -74,6 +78,8 @@ export interface ClientPanelContext {
 export interface ClientWorkbenchContext {
   userId?: string;
   sessionId?: string;
+  preferredProvider?: string;
+  preferredModel?: string;
   workspaceId: string;
   workbenchId?: string | null;
   folderId?: string | null;
@@ -119,9 +125,17 @@ export interface ClientWorkbenchContext {
   recentMessages?: ChatMessage[];
 }
 
+interface ContextRouteDecision {
+  mode: ContextMode;
+  reason?: string;
+  confidence?: number;
+}
+
 const DEFAULT_TOKEN_BUDGET = Number(process.env.CONTEXT_TOKEN_BUDGET || 12000);
 const FULL_TEXT_LIMIT = Number(process.env.CONTEXT_ACTIVE_FILE_FULL_TEXT_TOKENS || 20000);
 const SUMMARY_LIMIT = Number(process.env.CONTEXT_ACTIVE_FILE_SUMMARY_TOKENS || 100000);
+const CHAT_ATTACHMENT_CACHE_TTL_MS = Number(process.env.CHAT_ATTACHMENT_CACHE_TTL_MS || 1000 * 60 * 60 * 6);
+const CHAT_ATTACHMENT_CACHE_MAX = Number(process.env.CHAT_ATTACHMENT_CACHE_MAX || 80);
 
 const clip = (value: string | null | undefined, maxLength = 500) => {
   const text = String(value || '').trim();
@@ -167,6 +181,64 @@ const sanitizeChatSessionAttachment = (attachment: any): ChatSessionAttachmentCo
     status: ['ready', 'metadata_only', 'error'].includes(attachment.status) ? attachment.status : undefined,
     error: typeof attachment.error === 'string' ? clip(attachment.error, 240) : undefined
   };
+};
+
+const inferAttachmentExtension = (attachment: ChatSessionAttachmentContext) => {
+  const nameExt = String(attachment.name || '').split('.').pop()?.toLowerCase() || '';
+  if (nameExt) return nameExt;
+  const mime = String(attachment.mimeType || '').toLowerCase();
+  if (mime.includes('pdf')) return 'pdf';
+  if (mime.includes('wordprocessingml') || mime.includes('msword')) return 'docx';
+  if (mime.includes('presentationml') || mime.includes('powerpoint')) return 'pptx';
+  if (mime.includes('markdown')) return 'md';
+  if (mime.startsWith('text/')) return 'txt';
+  return '';
+};
+
+const attachmentBuffer = (attachment: ChatSessionAttachmentContext) => {
+  const raw = attachment.base64Data || attachment.dataUrl?.match(/^data:[^;]+;base64,(.+)$/)?.[1] || '';
+  if (!raw) return null;
+  try {
+    return Buffer.from(raw, 'base64');
+  } catch {
+    return null;
+  }
+};
+
+type CachedChatAttachment = {
+  expiresAt: number;
+  attachment: ChatSessionAttachmentContext;
+};
+
+const chatAttachmentCache = new Map<string, CachedChatAttachment>();
+
+const pruneChatAttachmentCache = () => {
+  const now = Date.now();
+  for (const [key, value] of chatAttachmentCache.entries()) {
+    if (value.expiresAt <= now) chatAttachmentCache.delete(key);
+  }
+  while (chatAttachmentCache.size > CHAT_ATTACHMENT_CACHE_MAX) {
+    const firstKey = chatAttachmentCache.keys().next().value;
+    if (!firstKey) break;
+    chatAttachmentCache.delete(firstKey);
+  }
+};
+
+const chatAttachmentCacheKey = (sessionId: string | undefined, attachment: ChatSessionAttachmentContext) => {
+  const payloadHash = crypto
+    .createHash('sha1')
+    .update([
+      sessionId || 'sessionless',
+      attachment.id,
+      attachment.name,
+      attachment.mimeType,
+      attachment.size,
+      attachment.base64Data ? attachment.base64Data.slice(0, 128) : '',
+      attachment.dataUrl ? attachment.dataUrl.slice(0, 160) : '',
+      attachment.textContent ? stableHash(attachment.textContent) : ''
+    ].join('|'))
+    .digest('hex');
+  return `${sessionId || 'sessionless'}:${attachment.id}:${payloadHash}`;
 };
 
 const parseJsonObject = (value?: string | null): Record<string, unknown> => {
@@ -309,7 +381,9 @@ const selectionTypeFromPanel = (panelType: string, resourceType?: ContextResourc
   if (resourceType === 'pdf') return 'pdf_text';
   if (resourceType === 'docx') return 'docx';
   if (resourceType === 'markdown') return 'markdown';
+  if (resourceType === 'video' || panelType === 'video') return 'video_transcript';
   if (panelType === 'code' || resourceType === 'code') return 'code';
+  if (resourceType === 'web' || panelType === 'web') return 'text';
   return 'block';
 };
 
@@ -359,16 +433,23 @@ const secondsToClock = (seconds: number) => {
 
 export class ContextPolicyEngine {
   private inferIntent(query: string, contextMode: ContextMode): NonNullable<ContextPolicyDecision['intent']> {
+    if (
+      /当前\s*Workbench|workbench|这些资料|这些文件|所有(文件|资源)|全部(文件|资源)|结合.*(资料|文件|资源)|参考.*(资料|文件|资源)|其他(资料|文件|资源)|别的(资料|文件|资源)|对比|比较|关联/i.test(query)
+    ) {
+      return 'cross_resource';
+    }
+    if (/整个课程|全部资料|全局|workspace|所有资料|知识库/i.test(query)) return 'cross_resource';
     if (/这里|这段|这页|这个公式|这段代码|当前可见|visible|above|below/i.test(query)) return 'local_reference';
-    if (/这篇|当前文件|整篇文档|当前代码|summarize current|current file|总结|概括|摘要|提炼/i.test(query)) {
+    if (
+      /这篇|当前文件|整篇文档|当前代码|summarize current|current file/i.test(query) ||
+      (/(总结|概括|摘要|提炼)/i.test(query) && /(这篇|这份|当前|这个文件|本文|此文档|这份文档)/i.test(query))
+    ) {
       return 'summarize_current';
     }
-    if (/这些资料|当前文件夹|当前\s*Workbench|workbench|结合这些文件|结合当前.*资料/i.test(query)) return 'cross_resource';
-    if (/整个课程|全部资料|全局|workspace|所有资料|知识库/i.test(query)) return 'workspace_search';
     if (/代码|code|bug|复杂度|函数|class|方法|报错|stack trace|exception/i.test(query)) return 'code_help';
-    if (contextMode === 'workspace') return 'workspace_search';
     if (contextMode === 'workbench') return 'cross_resource';
     if (contextMode === 'active_file') return 'summarize_current';
+    if (contextMode === 'model_knowledge') return 'general_qa';
     return 'general_qa';
   }
 
@@ -421,32 +502,37 @@ export class ContextPolicyEngine {
     if (input.hasSelection) {
       decision.includeSelection = true;
       decision.includeViewport = input.hasViewport;
-      decision.ragScope = 'active_file';
-      decision.maxRetrievedChunks = 4;
       layerScores.selection += 0.35;
-      decision.requiredLayers?.push('selection');
-      reasons.push('存在 L0 选区，优先注入 selection 并限制到当前文件检索');
+      layerScores.retrieval += 0.15;
+      decision.requiredLayers?.push('selection', 'retrieval');
+      reasons.push('存在 L0 选区，作为 focused retrieval 的 query anchor，不限制检索边界');
     } else if (input.hasViewport) {
       decision.includeViewport = true;
       layerScores.viewport += 0.25;
-      reasons.push('无选区，默认注入 L1 viewport');
+      decision.requiredLayers?.push('retrieval');
+      reasons.push('无选区，默认注入 L1 viewport，并在当前 Workbench 资源池内做 focused retrieval');
     }
 
     if (intent === 'local_reference') {
       decision.includeSelection = input.hasSelection;
       decision.includeViewport = input.hasViewport;
-      decision.ragScope = 'active_file';
-      decision.maxRetrievedChunks = Math.min(decision.maxRetrievedChunks, 4);
       layerScores.selection += 0.3;
       layerScores.viewport += 0.35;
-      reasons.push('问题指向当前位置，强制使用 selection/viewport');
+      decision.requiredLayers?.push('retrieval');
+      reasons.push('问题指向当前位置，selection/viewport 作为焦点；auto 模式仍使用 Workbench focused retrieval');
     }
 
     if (intent === 'summarize_current') {
-      enableActiveFile();
       layerScores.activeFile += 0.45;
       layerScores.retrieval += 0.2;
-      reasons.push('问题指向当前文件，启用 L3 active file 策略');
+      if (input.contextMode === 'active_file') {
+        enableActiveFile();
+        reasons.push('用户显式选择当前文件，启用 L3 active file 策略');
+      } else {
+        decision.includeActiveFileSummary = true;
+        decision.requiredLayers?.push('retrieval');
+        reasons.push('问题提到当前文件，当前文件摘要作为焦点；auto 模式仍使用 Workbench focused retrieval');
+      }
     }
 
     if (
@@ -454,10 +540,10 @@ export class ContextPolicyEngine {
       (input.resourceCount || 0) <= 1 &&
       /总结|概括|内容|分析|讲讲|说明|提炼|重点|摘要|summarize|summary/i.test(query)
     ) {
-      enableActiveFile();
+      decision.includeActiveFileSummary = true;
       decision.includeResourceSummaries = true;
       layerScores.activeFile += 0.2;
-      reasons.push('当前 Workbench 只有一个资源，自动把泛化总结/分析问题绑定到当前文件');
+      reasons.push('当前 Workbench 只有一个资源，补充当前文件摘要；检索范围仍由 Workbench 资源池承载');
     }
 
     if (intent === 'cross_resource') {
@@ -470,24 +556,14 @@ export class ContextPolicyEngine {
       reasons.push('问题指向 Workbench 资料池，启用 scoped RAG');
     }
 
-    if (intent === 'workspace_search') {
-      decision.ragScope = 'workspace';
-      decision.includeResourceSummaries = true;
-      decision.maxRetrievedChunks = 10;
-      layerScores.resourceScope += 0.25;
-      layerScores.retrieval += 0.45;
-      decision.requiredLayers?.push('retrieval');
-      reasons.push('问题指向 Workspace 全局资料');
-    }
-
     if (intent === 'code_help') {
       decision.includeSelection = input.hasSelection;
       decision.includeViewport = input.hasViewport;
-      decision.ragScope = 'active_file';
       decision.maxRetrievedChunks = 6;
       layerScores.viewport += 0.25;
       layerScores.activeFile += 0.25;
-      reasons.push('问题指向代码/调试场景，优先当前文件、可视行号和邻近代码块');
+      decision.requiredLayers?.push('retrieval');
+      reasons.push('问题指向代码/调试场景，当前文件/可视行号作为焦点，Workbench 资源池作为检索范围');
     }
 
     if (input.contextMode !== 'auto') {
@@ -519,13 +595,16 @@ export class ContextPolicyEngine {
         decision.includeResourceSummaries = true;
         decision.maxRetrievedChunks = 8;
         decision.requiredLayers?.push('retrieval');
-      } else if (input.contextMode === 'workspace') {
-        decision.includeSelection = input.hasSelection;
-        decision.includeViewport = input.hasViewport;
-        decision.ragScope = 'workspace';
-        decision.includeResourceSummaries = true;
-        decision.maxRetrievedChunks = 10;
-        decision.requiredLayers?.push('retrieval');
+      } else if (input.contextMode === 'model_knowledge') {
+        decision.includeSelection = false;
+        decision.includeViewport = false;
+        decision.includeActiveFileFullText = false;
+        decision.includeActiveFileSummary = false;
+        decision.ragScope = 'none';
+        decision.includeResourceSummaries = false;
+        decision.maxRetrievedChunks = 0;
+        decision.requiredLayers = [];
+        reasons.push('用户选择模型知识：Workbench 资料仅作为背景，不作为 grounding 约束');
       }
     }
 
@@ -553,7 +632,16 @@ export class WorkbenchContextService {
     const activePanel = openPanels.find((panel) => panel.panelId === activePanelId) || openPanels[0] || null;
     const lockedSelectionPanel = this.panelFromLockedSelection(input.context.lockedSelection);
     const activeFileId = input.context.activeFileId || activePanel?.fileId || input.context.activeFile?.id || null;
-    const mode = input.context.contextMode || 'auto';
+    const requestedMode = input.context.contextMode || 'auto';
+    const latestUserQuery = [...input.messages].reverse().find((message) => message.role === 'user')?.content || '';
+    const routeDecision = await this.resolveContextRoute({
+      requestedMode,
+      latestUserQuery,
+      recentMessages: input.context.recentMessages || input.messages,
+      workbenchTitle: input.context.workbenchTitle,
+      activePanelTitle: openPanels.find((panel) => panel.panelId === activePanelId)?.fileName || openPanels.find((panel) => panel.panelId === activePanelId)?.title
+    });
+    const mode = routeDecision.mode;
     const enabledChips = new Set(
       (input.context.activeContextChips || []).filter((chip) => chip.enabled !== false).map((chip) => chip.kind)
     );
@@ -567,10 +655,11 @@ export class WorkbenchContextService {
       ...new Set((input.context.selectedResourceIds || []).filter((value): value is string => typeof value === 'string' && Boolean(value)))
     ];
     const selectedResourceFocus = input.context.sourcePriority === 'selected_resources';
-    const chatSessionAttachments = (input.context.chatSessionAttachments || [])
+    let chatSessionAttachments = (input.context.chatSessionAttachments || [])
       .map(sanitizeChatSessionAttachment)
       .filter((attachment): attachment is ChatSessionAttachmentContext => Boolean(attachment))
       .slice(-8);
+    chatSessionAttachments = await this.enrichChatSessionAttachments(chatSessionAttachments, input.context.sessionId);
 
     let fileRecords = await this.loadResourceRecords(input.context, openPanels, activeFileId);
     fileRecords = await this.ensureIndexedRecords(input.context.workspaceId, fileRecords);
@@ -600,9 +689,16 @@ export class WorkbenchContextService {
       activePanel && chipEnabled('viewport')
         ? await this.buildViewport(input.context.workspaceId, activePanel, activeRecord, fallbackReasons)
         : undefined;
+    const retrievalQuery = this.buildRetrievalQuery({
+      userQuery: latestUserQuery,
+      selection: selection?.content,
+      viewport: viewport?.content,
+      activePanelTitle: activePanel?.fileName || activePanel?.title,
+      activeFileName: activeRecord?.name || input.context.activeFile?.name
+    });
 
     const policy = this.policyEngine.decide({
-      userQuery: [...input.messages].reverse().find((message) => message.role === 'user')?.content || '',
+      userQuery: latestUserQuery,
       contextMode: mode,
       hasSelection: Boolean(selection),
       hasViewport: Boolean(viewport?.content || viewport?.locator),
@@ -610,6 +706,9 @@ export class WorkbenchContextService {
       resourceCount: fileRecords.length,
       tokenBudget
     });
+    if (routeDecision.reason && requestedMode === 'auto') {
+      policy.reasons.push(`semantic route: ${routeDecision.reason}${typeof routeDecision.confidence === 'number' ? ` (${routeDecision.confidence})` : ''}`);
+    }
 
     if (!chipEnabled('selection') || selectedResourceFocus) policy.includeSelection = false;
     if (!chipEnabled('viewport') || selectedResourceFocus) policy.includeViewport = false;
@@ -619,7 +718,7 @@ export class WorkbenchContextService {
     }
     if (!chipEnabled('resource_scope')) {
       policy.includeResourceSummaries = false;
-      if (policy.ragScope === 'workbench' || policy.ragScope === 'workspace') policy.ragScope = 'active_file';
+      if (policy.ragScope === 'workbench') policy.ragScope = 'active_file';
     }
 
     const resources = this.buildResources(fileRecords, activeFileId, selectedResourceFocus ? selectedResourceIds : undefined);
@@ -629,7 +728,7 @@ export class WorkbenchContextService {
         : undefined;
 
     let retrievedChunks = await this.retrieve({
-      query: [...input.messages].reverse().find((message) => message.role === 'user')?.content || '',
+      query: retrievalQuery,
       workspaceId: input.context.workspaceId,
       activeFileId: selectedResourceFocus ? null : activeFileId,
       resourceFileIds: resources.map((resource) => resource.fileId),
@@ -639,7 +738,7 @@ export class WorkbenchContextService {
     });
 
     retrievedChunks = [
-      ...this.buildAttachmentChunks(chatSessionAttachments),
+      ...this.retrieveAttachmentChunks(chatSessionAttachments, retrievalQuery, tokenBudget, policy),
       ...this.packRetrievedChunks(retrievedChunks, tokenBudget, policy)
     ].slice(0, Math.max(policy.maxRetrievedChunks, chatSessionAttachments.length));
 
@@ -691,7 +790,7 @@ export class WorkbenchContextService {
     retrievedChunks = retrievedChunks.map((chunk) => {
       const matchedSource = sourceMap.find(
         (source) =>
-          source.sourceType === 'retrieval' &&
+          (source.sourceType === 'retrieval' || source.sourceType === 'chat_attachment') &&
           source.fileId === chunk.fileId &&
           citationLabel(chunk.fileName, chunk.locator) === source.label
       );
@@ -719,7 +818,7 @@ export class WorkbenchContextService {
       retrievedChunks,
       visualEvidence,
       profileSummary: input.profileSummary ? { content: input.profileSummary } : undefined,
-      recentMessages: this.trimRecentMessages(input.context.recentMessages || input.messages.slice(-8), tokenBudget),
+      recentMessages: this.trimRecentMessages(input.context.recentMessages || input.messages, tokenBudget),
       tokenBudget,
       estimatedTokens: 0,
       fallbackReasons,
@@ -817,6 +916,78 @@ export class WorkbenchContextService {
       take: 12,
       include: { knowledgeChunks: { select: { id: true, summary: true, tokenEstimate: true, metadataJson: true }, take: 1 } }
     });
+  }
+
+  private async resolveContextRoute(input: {
+    requestedMode: ContextMode;
+    latestUserQuery: string;
+    recentMessages: ChatMessage[];
+    workbenchTitle?: string;
+    activePanelTitle?: string;
+  }): Promise<ContextRouteDecision> {
+    if (input.requestedMode !== 'auto') {
+      return { mode: input.requestedMode, reason: 'explicit mode' };
+    }
+
+    if (!aiModelProviderService.isConfigured({ useCase: 'chat' })) {
+      return { mode: 'auto', reason: 'classifier unavailable' };
+    }
+
+    try {
+      const transcript = input.recentMessages
+        .slice(-6)
+        .map((message) => `${message.role === 'assistant' ? 'Assistant' : 'User'}: ${clip(message.content, 700)}`)
+        .join('\n');
+      const result = await aiModelProviderService.json<{
+        mode?: ContextMode;
+        confidence?: number;
+        reason?: string;
+      }>({
+        useCase: 'chat',
+        timeoutMs: 8000,
+        instruction: [
+          '你是 Workbench AI Chat 的上下文路由器。',
+          '根据最近对话判断下一轮回答应使用哪种上下文模式。',
+          '不要按关键词机械匹配，要理解用户是否在追问上一轮、是否要求脱离资料、是否要求只看当前文件/当前可见区域。',
+          '可选 mode 只能是：auto, active_file, viewport, workbench, model_knowledge。',
+          'mode 含义：',
+          '- auto: 默认模式。当前选区/可见区域是焦点，当前 Workbench 资源池可检索。',
+          '- active_file: 用户明确要求只看当前文件。',
+          '- viewport: 用户明确要求只看当前页/当前可见区域。',
+          '- workbench: 用户明确要求结合整个 Workbench 资料。',
+          '- model_knowledge: 用户明确表示不要受资料限制、资料没有所以问你、用通用/模型知识回答。',
+          '如果用户是在承接上一轮问题但说“不要管资料/资料没有所以问你/用你的知识”，选择 model_knowledge。',
+          '如果不确定，选 auto。'
+        ].join('\n'),
+        schema: {
+          type: 'object',
+          required: ['mode', 'confidence', 'reason'],
+          properties: {
+            mode: { enum: ['auto', 'active_file', 'viewport', 'workbench', 'model_knowledge'] },
+            confidence: { type: 'number' },
+            reason: { type: 'string' }
+          }
+        },
+        input: {
+          latestUserQuery: input.latestUserQuery,
+          recentConversation: transcript,
+          workbenchTitle: input.workbenchTitle || '',
+          activePanelTitle: input.activePanelTitle || ''
+        }
+      });
+      const mode = result.data?.mode;
+      if (mode === 'active_file' || mode === 'viewport' || mode === 'workbench' || mode === 'model_knowledge') {
+        return {
+          mode,
+          confidence: typeof result.data.confidence === 'number' ? result.data.confidence : undefined,
+          reason: clip(result.data.reason, 220)
+        };
+      }
+    } catch {
+      return { mode: 'auto', reason: 'classifier failed' };
+    }
+
+    return { mode: 'auto', reason: 'classifier chose default' };
   }
 
   private async ensureIndexedRecords(workspaceId: string, fileRecords: any[]) {
@@ -982,6 +1153,9 @@ export class WorkbenchContextService {
         chunkIndex: typeof panel.approxChunkIndex === 'number' ? panel.approxChunkIndex : undefined,
         timestampStart: selectedRange?.timestampStart,
         timestampEnd: selectedRange?.timestampEnd,
+        segmentIds: selectedRange?.segmentIds,
+        sourceType: selectedRange?.sourceType,
+        url: selectedRange?.url,
         charStart: selectedRange?.charStart,
         charEnd: selectedRange?.charEnd,
         textLength: selectedRange?.textLength,
@@ -1520,7 +1694,24 @@ export class WorkbenchContextService {
   }
 
   private trimRecentMessages(messages: ChatMessage[], tokenBudget: number) {
-    return messages.slice(tokenBudget < 8000 ? -4 : -8);
+    const maxTokens = Math.max(1000, Math.min(3600, Math.floor(tokenBudget * 0.18)));
+    const kept: ChatMessage[] = [];
+    let used = 0;
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      const content = String(message?.content || '').trim();
+      if (!content) continue;
+      const estimated = estimateTokens(content) + 12;
+      if (kept.length > 0 && used + estimated > maxTokens) break;
+      kept.unshift({
+        ...message,
+        content: clip(content, 3000)
+      });
+      used += estimated;
+    }
+
+    return kept;
   }
 
   private confidenceForChunk(chunk: RetrievedChunk): 'high' | 'medium' | 'low' {
@@ -1559,6 +1750,60 @@ export class WorkbenchContextService {
     });
   }
 
+  private buildRetrievalQuery(input: {
+    userQuery: string;
+    selection?: string;
+    viewport?: string;
+    activePanelTitle?: string;
+    activeFileName?: string;
+  }) {
+    const query = clip(input.userQuery, 800);
+    const anchors = [
+      input.selection ? `selection: ${clip(input.selection, 400)}` : '',
+      input.viewport ? `viewport: ${clip(input.viewport, 300)}` : '',
+      input.activePanelTitle ? `panel: ${clip(input.activePanelTitle, 120)}` : '',
+      input.activeFileName ? `file: ${clip(input.activeFileName, 120)}` : ''
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
+    return [query, anchors].filter(Boolean).join('\n');
+  }
+
+  private normalizeChunkLocator(chunk: any): Citation['locator'] | undefined {
+    const locator = chunk?.locator && typeof chunk.locator === 'object' ? chunk.locator : chunk;
+    if (!locator || typeof locator !== 'object') return undefined;
+    const page = typeof locator.page === 'number' ? locator.page : typeof locator.pageStart === 'number' ? locator.pageStart : undefined;
+    const pageStart = typeof locator.pageStart === 'number' ? locator.pageStart : page;
+    const pageEnd = typeof locator.pageEnd === 'number' ? locator.pageEnd : pageStart;
+    const lineStart = typeof locator.lineStart === 'number' ? locator.lineStart : typeof locator.startLine === 'number' ? locator.startLine : undefined;
+    const lineEnd = typeof locator.lineEnd === 'number' ? locator.lineEnd : typeof locator.endLine === 'number' ? locator.endLine : lineStart;
+    const headingPath = Array.isArray(locator.headingPath) ? locator.headingPath.filter((value: unknown): value is string => typeof value === 'string') : undefined;
+    const chunkIndex = typeof locator.chunkIndex === 'number' ? locator.chunkIndex : undefined;
+    const blockId = typeof locator.blockId === 'string' ? locator.blockId : undefined;
+    const blockIndex = typeof locator.blockIndex === 'number' ? locator.blockIndex : undefined;
+    const timestampStart = typeof locator.timestampStart === 'number' ? locator.timestampStart : undefined;
+    const timestampEnd = typeof locator.timestampEnd === 'number' ? locator.timestampEnd : timestampStart;
+    const rects = Array.isArray(locator.rects) ? locator.rects : undefined;
+    const bbox = locator.bbox && typeof locator.bbox === 'object' ? locator.bbox : undefined;
+
+    return {
+      page,
+      pageStart,
+      pageEnd,
+      lineStart,
+      lineEnd,
+      headingPath,
+      chunkIndex,
+      blockId,
+      blockIndex,
+      timestampStart,
+      timestampEnd,
+      rects,
+      bbox
+    };
+  }
+
   private buildSourceMap(citations: Citation[]): SourceInspectorItem[] {
     return citations.map((citation, index) => ({
       sourceId: citation.sourceId || `S${index + 1}`,
@@ -1579,14 +1824,28 @@ export class WorkbenchContextService {
     }));
   }
 
-  private buildAttachmentChunks(attachments: ChatSessionAttachmentContext[]): RetrievedChunk[] {
-    return attachments.flatMap((attachment, index) => {
+  private retrieveAttachmentChunks(
+    attachments: ChatSessionAttachmentContext[],
+    query: string,
+    tokenBudget: number,
+    policy: ContextPolicyDecision
+  ): RetrievedChunk[] {
+    const queryTerms = new Set(
+      clip(query, 1000)
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}_]+/u)
+        .map((term) => term.trim())
+        .filter((term) => term.length >= 2)
+    );
+    const ranked = attachments
+      .flatMap((attachment, index) => {
         const content = clip(
           [
             `Chat 附件：${attachment.name}`,
             `类型：${attachment.mimeType || attachment.kind}`,
             `大小：${attachment.size || 0} bytes`,
             attachment.textContent ? `内容：\n${attachment.textContent}` : '',
+            attachment.summary ? `摘要：\n${attachment.summary}` : '',
             !attachment.textContent && attachment.kind === 'image'
               ? '这是当前 AI Chat 会话内上传的图片附件。若当前模型支持多模态，系统会将图片载荷随请求提交；否则只能使用附件元数据回答。'
               : '',
@@ -1600,6 +1859,13 @@ export class WorkbenchContextService {
         );
 
         if (!content) return [];
+        const relevance = attachment.chunks?.length
+          ? attachment.chunks.reduce((maxScore, chunk) => {
+              const chunkText = clip(chunk.text, 800).toLowerCase();
+              const termHits = Array.from(queryTerms).reduce((hits, term) => hits + (chunkText.includes(term) ? 1 : 0), 0);
+              return Math.max(maxScore, termHits * 12 + (chunk.score || 0));
+            }, 0)
+          : Array.from(queryTerms).reduce((hits, term) => hits + (content.toLowerCase().includes(term) ? 1 : 0), 0) * 10;
 
         return [{
           chunkId: `chat-attachment:${attachment.id}`,
@@ -1607,13 +1873,90 @@ export class WorkbenchContextService {
           fileId: `chat-attachment:${attachment.id}`,
           fileName: attachment.name,
           content,
-          score: 95 - index,
+          score: 85 + relevance - index,
           confidence: attachment.textContent || attachment.dataUrl || attachment.base64Data ? 'high' : 'medium',
           source: 'chat_attachment',
           retrievalReason: '当前 AI Chat 会话附件，高优先级显式上下文',
-          locator: { blockId: `chat-attachment:${attachment.id}` }
+          locator: { blockId: `chat-attachment:${attachment.id}` },
+          supportSnippets: attachment.chunks?.slice(0, 3).map((chunk) => ({
+            text: clip(chunk.text, 700),
+            locator: chunk.locator,
+            score: chunk.score
+          }))
         } satisfies RetrievedChunk];
       });
+
+    return ranked.sort((left, right) => right.score - left.score).slice(0, Math.max(3, Math.min(8, policy.maxRetrievedChunks + Math.ceil(tokenBudget / 4000))));
+  }
+
+  private async enrichChatSessionAttachments(attachments: ChatSessionAttachmentContext[], sessionId?: string) {
+    const enriched: ChatSessionAttachmentContext[] = [];
+
+    for (const attachment of attachments) {
+      const cacheKey = chatAttachmentCacheKey(sessionId, attachment);
+      pruneChatAttachmentCache();
+      const cached = chatAttachmentCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        enriched.push(cached.attachment);
+        continue;
+      }
+
+      if (attachment.textContent || (attachment.kind === 'image' && (attachment.dataUrl || attachment.base64Data))) {
+        chatAttachmentCache.set(cacheKey, {
+          expiresAt: Date.now() + CHAT_ATTACHMENT_CACHE_TTL_MS,
+          attachment
+        });
+        enriched.push(attachment);
+        continue;
+      }
+
+      const buffer = attachmentBuffer(attachment);
+      if (!buffer) {
+        enriched.push(attachment);
+        continue;
+      }
+
+      const extension = inferAttachmentExtension(attachment);
+      const tempPath = await LocalStorageService.saveBuffer(buffer);
+      try {
+        const extracted = await documentTextExtractionService.extract({
+          name: attachment.name,
+          extension,
+          mimeType: attachment.mimeType,
+          storageKey: tempPath.storageKey,
+          isBinary: true
+        });
+        const nextAttachment: ChatSessionAttachmentContext = {
+          ...attachment,
+          textContent: extracted.text ? clip(extracted.text, 16000) : attachment.textContent,
+          summary: attachment.summary || clip(extracted.text, 2000),
+          extractionStatus: extracted.text ? 'ready' : attachment.extractionStatus || 'metadata_only',
+          parsedAt: new Date().toISOString(),
+          parsedTextHash: extracted.text ? stableHash(extracted.text) : attachment.parsedTextHash,
+          chunks: Array.isArray(extracted.metadata?.chunks)
+            ? (extracted.metadata.chunks as any[]).slice(0, 12).map((chunk, index) => ({
+                chunkId: String(chunk.chunkIndex ?? index),
+                text: clip(chunk.text || '', 1200),
+                locator: this.normalizeChunkLocator(chunk),
+                headingPath: Array.isArray(chunk.headingPath) ? chunk.headingPath.filter((value: unknown): value is string => typeof value === 'string') : undefined,
+                score: typeof chunk.score === 'number' ? chunk.score : undefined
+              }))
+            : attachment.chunks,
+          status: extracted.text ? 'ready' : attachment.status
+        };
+        chatAttachmentCache.set(cacheKey, {
+          expiresAt: Date.now() + CHAT_ATTACHMENT_CACHE_TTL_MS,
+          attachment: nextAttachment
+        });
+        enriched.push(nextAttachment);
+      } catch {
+        enriched.push(attachment);
+      } finally {
+        await LocalStorageService.deleteFile(tempPath.storageKey).catch(() => undefined);
+      }
+    }
+
+    return enriched;
   }
 
   private async buildVisualEvidence(workspaceId: string, fileRecords: any[]): Promise<VisualEvidenceItem[]> {
@@ -1754,8 +2097,8 @@ export class WorkbenchContextService {
   private enforceBudget(capsule: ContextCapsule) {
     if (capsule.estimatedTokens <= capsule.tokenBudget) return;
     const clippedItems = capsule.clippedItems || [];
-    capsule.recentMessages = (capsule.recentMessages || []).slice(-4);
-    clippedItems.push({ layer: 'recentMessages', reason: '超过 token budget，仅保留最近 4 条消息' });
+    capsule.recentMessages = this.trimRecentMessages(capsule.recentMessages || [], Math.max(4000, Math.floor(capsule.tokenBudget * 0.55)));
+    clippedItems.push({ layer: 'recentMessages', reason: '超过 token budget，按预算保留最近对话' });
     capsule.resources = (capsule.resources || []).map((resource) => ({
       ...resource,
       summary: resource.isActiveFile ? resource.summary : clip(resource.summary, 180)

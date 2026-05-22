@@ -10,6 +10,7 @@ import { learningRunService } from '../services/learningRunService';
 import { learnerStateService } from '../services/learnerStateService';
 import { learnerStateAnalyzer } from '../services/learnerStateAnalyzer';
 import { learnerStateContextAdapter, LearnerContextAudience } from '../services/learnerStateContextAdapter';
+import { learnerProfileViewService } from '../services/learnerProfileViewService';
 import { learnerMemoryControlService } from '../services/learnerMemoryControlService';
 import { savedMemoryService } from '../services/savedMemoryService';
 import { conversationHistoryService } from '../services/conversationHistoryService';
@@ -396,10 +397,108 @@ router.post('/knowledge/search', async (req: Request, res: Response) => {
 router.get('/knowledge/graph', async (req: Request, res: Response) => {
   const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
   const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 80;
+  const tagQuery = typeof req.query.tagQuery === 'string' ? req.query.tagQuery : '';
+  const sourceIds = typeof req.query.sourceIds === 'string'
+    ? req.query.sourceIds.split(',').map((item) => item.trim()).filter(Boolean)
+    : Array.isArray(req.query.sourceIds)
+      ? req.query.sourceIds.map((item) => String(item).trim()).filter(Boolean)
+      : [];
   if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
   try {
-    const graph = await courseKnowledgeGraphService.getGraph({ workspaceId, limit: Number.isFinite(limit) ? limit : 80 });
+    const graph = await courseKnowledgeGraphService.getGraph({
+      workspaceId,
+      limit: Number.isFinite(limit) ? limit : 80,
+      sourceIds,
+      tagQuery
+    });
     return res.json({ graph });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/knowledge/graph/concepts/:conceptId/tags', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const conceptId = typeof req.params.conceptId === 'string' ? req.params.conceptId : '';
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  if (!conceptId) return res.status(400).json({ error: 'conceptId is required' });
+  try {
+    const tags = await courseKnowledgeGraphService.listConceptTags({ workspaceId, conceptId });
+    return res.json({ tags });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/concepts/:conceptId/tags', async (req: Request, res: Response) => {
+  const conceptId = typeof req.params.conceptId === 'string' ? req.params.conceptId : '';
+  const { workspaceId, label, source, state, rationale } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!conceptId) return res.status(400).json({ error: 'conceptId is required' });
+  if (!label || typeof label !== 'string') return res.status(400).json({ error: 'label is required' });
+  try {
+    const tag = await courseKnowledgeGraphService.upsertConceptTag({
+      workspaceId,
+      conceptId,
+      label,
+      source,
+      state,
+      rationale
+    });
+    return res.status(201).json({ tag });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.delete('/knowledge/graph/concepts/:conceptId/tags/:tagId', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const conceptId = typeof req.params.conceptId === 'string' ? req.params.conceptId : '';
+  const tagId = typeof req.params.tagId === 'string' ? req.params.tagId : '';
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  if (!conceptId) return res.status(400).json({ error: 'conceptId is required' });
+  if (!tagId) return res.status(400).json({ error: 'tagId is required' });
+  try {
+    const result = await courseKnowledgeGraphService.deleteConceptTag({ workspaceId, conceptId, tagId });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/concepts/:conceptId/tag-suggestions', async (req: Request, res: Response) => {
+  const conceptId = typeof req.params.conceptId === 'string' ? req.params.conceptId : '';
+  const { workspaceId, question, history } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!conceptId) return res.status(400).json({ error: 'conceptId is required' });
+  try {
+    const result = await courseKnowledgeGraphService.chatAboutConceptForTags({
+      workspaceId,
+      conceptId,
+      question: typeof question === 'string' ? question : undefined,
+      history: Array.isArray(history)
+        ? history.filter((item: any) => item && (item.role === 'user' || item.role === 'assistant') && typeof item.content === 'string')
+        : undefined
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/knowledge/graph/concepts/:conceptId/exercises', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const conceptId = typeof req.params.conceptId === 'string' ? req.params.conceptId : '';
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 12;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  if (!conceptId) return res.status(400).json({ error: 'conceptId is required' });
+  try {
+    const exercises = await courseKnowledgeGraphService.getConceptExercises({
+      workspaceId,
+      conceptId,
+      limit: Number.isFinite(limit) ? limit : 12
+    });
+    return res.json({ exercises });
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
   }
@@ -1159,6 +1258,29 @@ router.get('/learner-state/context', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/learner-state/profile-view', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const workbenchId = typeof req.query.workbenchId === 'string' ? req.query.workbenchId : null;
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 24;
+  const forcePortrait = req.query.force === 'true' || req.query.forcePortrait === 'true';
+
+  if (!workspaceId) {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+
+  try {
+    const profileView = await learnerProfileViewService.build({
+      workspaceId,
+      workbenchId,
+      limit: Number.isFinite(limit) ? limit : 24,
+      forcePortrait
+    });
+    return res.json({ profileView });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
 router.get('/learner-state/memories', async (req: Request, res: Response) => {
   const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
   const workbenchId = typeof req.query.workbenchId === 'string' ? req.query.workbenchId : null;
@@ -1314,11 +1436,12 @@ router.get('/memory/debug', async (req: Request, res: Response) => {
 
 router.get('/saved-memories', async (req: Request, res: Response) => {
   const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const workbenchId = typeof req.query.workbenchId === 'string' ? req.query.workbenchId : null;
   const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 30;
   const includeDeleted = req.query.includeDeleted === 'true';
   if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
   try {
-    const memories = await savedMemoryService.list({ workspaceId, limit, includeDeleted });
+    const memories = await savedMemoryService.list({ workspaceId, workbenchId, limit, includeDeleted });
     return res.json({ memories });
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });

@@ -26,6 +26,8 @@ interface IndexLifecycleSnapshot {
   chunkCount?: number;
   vectorIndexed?: boolean;
   vectorError?: string;
+  courseKnowledgeGraphIndexed?: boolean;
+  courseKnowledgeGraphError?: string;
   timings: Record<string, number>;
   completedStages: IndexStage[];
 }
@@ -227,16 +229,24 @@ export class KnowledgeIndexingService {
         fileObjectId: input.fileObjectId
       });
 
-      const finalStage: IndexStage = vectorError ? 'degraded' : 'indexed';
+      let courseKnowledgeGraphIndexed = false;
+      let courseKnowledgeGraphError: string | undefined;
       snapshot.timings[snapshot.stage] = now() - (stageStartedAt.get(snapshot.stage) || now());
       if (isCourseKnowledgeGraphSourceFile(file)) {
-        await courseKnowledgeGraphService.ingestResourceFile({
-          workspaceId: input.workspaceId,
-          fileObjectId: input.fileObjectId,
-          source: 'knowledge_indexing'
-        }).catch((error) => console.warn('Course KG resource ingestion failed:', error));
+        try {
+          await courseKnowledgeGraphService.ingestResourceFile({
+            workspaceId: input.workspaceId,
+            fileObjectId: input.fileObjectId,
+            source: 'knowledge_indexing'
+          });
+          courseKnowledgeGraphIndexed = true;
+        } catch (error) {
+          courseKnowledgeGraphError = error instanceof Error ? error.message : String(error);
+          console.warn(`AI course KG indexing failed for ${input.fileObjectId}: ${courseKnowledgeGraphError}`);
+        }
       }
 
+      const finalStage: IndexStage = vectorError || courseKnowledgeGraphError ? 'degraded' : 'indexed';
       return prisma.knowledgeIndexJob.update({
         where: { id: job.id },
         data: {
@@ -250,6 +260,8 @@ export class KnowledgeIndexingService {
             chunkCount: verifiedChunkCount.length,
             vectorIndexed,
             vectorError,
+            courseKnowledgeGraphIndexed,
+            courseKnowledgeGraphError,
             completedStages: [...new Set([...snapshot.completedStages, finalStage])]
           })
         }

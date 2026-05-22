@@ -4,12 +4,13 @@ import { FileSystemService } from './fileSystemService';
 import { knowledgeSearchService } from './knowledgeSearchService';
 import { learningRunService } from './learningRunService';
 import { learnerStateAnalyzer } from './learnerStateAnalyzer';
+import { learnerStateService } from './learnerStateService';
 import { LearnerStateAgentContext, learnerStateContextAdapter } from './learnerStateContextAdapter';
 import { conversationHistoryService, RetrievedConversationMemory } from './conversationHistoryService';
 import { savedMemoryService } from './savedMemoryService';
 import { memoryExtractorService } from './memoryExtractorService';
 import { findWorkbenchResourceFiles } from './workbenchResourceScope';
-import { aiModelProviderService } from './aiModelProviderService';
+import { AiModelProviderId, aiModelProviderService } from './aiModelProviderService';
 import {
   ClientPanelContext,
   ClientWorkbenchContext,
@@ -44,6 +45,8 @@ interface BuiltContext {
   userId: string;
   workspaceId: string;
   workbenchId?: string | null;
+  preferredProvider?: string;
+  preferredModel?: string;
   activePanelId?: string | null;
   activeFileId?: string | null;
   selectedText?: string;
@@ -103,6 +106,22 @@ const clip = (value: string | null | undefined, maxLength = 500) => {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 };
 
+const chatModelOptions = (context: BuiltContext) => {
+  const provider = String(context.preferredProvider || '').trim();
+  const model = String(context.preferredModel || '').trim();
+  const allowedProvider =
+    provider === 'openai' || provider === 'gemini' || provider === 'claude' || provider === 'deepseek'
+      ? (provider as AiModelProviderId)
+      : undefined;
+
+  return {
+    useCase: 'chat' as const,
+    provider: allowedProvider,
+    model: model || undefined,
+    attachments: context.chatSessionAttachments
+  };
+};
+
 const parseJson = <T>(value: string | null | undefined, fallback: T): T => {
   if (!value) return fallback;
   try {
@@ -132,6 +151,30 @@ const formatChunkLocator = (chunk: RetrievedChunk) => {
 
 const formatCitationLabels = (context: BuiltContext) =>
   context.capsule.citations.map((citation) => citation.label).join('；') || '无';
+
+const estimateTextTokens = (value: string | null | undefined) => Math.ceil(String(value || '').length / 4);
+
+const formatConversationTranscript = (messages: ChatMessage[], maxTokens = 2800) => {
+  const packed: ChatMessage[] = [];
+  let used = 0;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const content = String(message?.content || '').trim();
+    if (!content) continue;
+    const estimated = estimateTextTokens(content) + 12;
+    if (packed.length > 0 && used + estimated > maxTokens) break;
+    packed.unshift({
+      ...message,
+      content: clip(content, 2400)
+    });
+    used += estimated;
+  }
+
+  return packed
+    .map((message) => `${message.role === 'assistant' ? 'Assistant' : 'User'}: ${message.content}`)
+    .join('\n');
+};
 
 const sourceConfidenceSummary = (context: BuiltContext) =>
   (context.capsule.sourceMap || []).reduce(
@@ -170,6 +213,16 @@ const contentTerms = (value: string) =>
     .map((term) => term.trim())
     .filter((term) => term.length >= 2)
     .slice(0, 30);
+
+const wantsPracticeCheck = (query: string) => /练习|自测|测验|小测|出题|刷题|复习题|检查题|quiz|practice|exercise|test me|self[- ]?test/i.test(query);
+
+const stripUnrequestedSelfCheck = (answer: string, query: string) => {
+  if (wantsPracticeCheck(query)) return answer;
+  return answer
+    .replace(/\n{0,2}(?:\*\*)?自测问题(?:\*\*)?[：:][\s\S]*$/u, '')
+    .replace(/\n{0,2}(?:\*\*)?(?:Quick check|Self[- ]?check)(?:\*\*)?[：:][\s\S]*$/iu, '')
+    .trim();
+};
 
 class AgentRunLogger {
   private timeline: AgentTimelineItem[] = [];
@@ -293,6 +346,8 @@ class ContextService {
       userId,
       workspaceId: input.context.workspaceId,
       workbenchId: input.context.workbenchId || null,
+      preferredProvider: input.context.preferredProvider,
+      preferredModel: input.context.preferredModel,
       activePanelId,
       activeFileId,
       selectedText,
@@ -310,7 +365,7 @@ class ContextService {
         : input.context.workbenchId
           ? { id: input.context.workbenchId, title: input.context.workbenchTitle || '', description: input.context.workbenchDescription || '' }
           : null,
-      recentMessages: input.context.recentMessages || input.messages.slice(-8),
+      recentMessages: input.context.recentMessages || input.messages,
       profile,
       profileSummary: profileSummary(profile),
       learnerAgentContext,
@@ -396,6 +451,10 @@ class ProfileAgent {
 
 class RetrievalAgent {
   async retrieve(input: { query: string; context: BuiltContext }): Promise<RetrievedChunk[]> {
+    if (input.context.capsule.mode === 'model_knowledge' || input.context.contextPolicy.ragScope === 'none') {
+      return [];
+    }
+
     if (input.context.capsule.retrievedChunks?.length || input.context.capsule.selection || input.context.capsule.viewport) {
       const chunks: RetrievedChunk[] = [];
       const pushCapsuleChunk = (
@@ -545,13 +604,8 @@ class RetrievalAgent {
             limit: 4
           })
         : [];
-      const workspace = await knowledgeSearchService.search({
-        workspaceId: input.context.workspaceId,
-        query: input.query,
-        limit: 6
-      });
 
-      [...scoped, ...workspace].forEach((item) => {
+      scoped.forEach((item) => {
         if (chunks.some((chunk) => chunk.content === item.chunkText)) return;
         const page = typeof item.metadata.page === 'number' ? item.metadata.page : undefined;
         const startLine = typeof item.metadata.startLine === 'number' ? item.metadata.startLine : undefined;
@@ -576,6 +630,17 @@ class RetrievalAgent {
 }
 
 class ExplainAgent {
+  private focusInstruction(context: BuiltContext) {
+    const scope = context.contextPolicy.ragScope;
+    if (context.capsule.mode === 'model_knowledge') {
+      return '回答要求：简体中文；优先根据最近对话还原用户真实问题；允许使用模型通用知识回答。Workbench 当前文件/资料只作为背景线索，不作为答案边界；除非确实使用了资料片段，否则不要强行引用来源，也不要说“资料里没有所以不能回答”。';
+    }
+    if (scope === 'workbench') {
+      return '回答要求：简体中文；贴合用户画像与个性化上下文；以当前选区/Panel 作为问题锚点，但可以结合当前 Workbench 内已检索到的证据；引用要克制，每个自然段或条目最多保留 1 个最强来源，连续同源内容合并引用，避免同一句话里重复多个 [S#]。';
+    }
+    return '回答要求：简体中文；贴合用户画像与个性化上下文；解释要围绕当前 Panel/文件；引用要克制，每个自然段或条目最多保留 1 个最强来源，连续同源内容合并引用，避免同一句话里重复多个 [S#]。';
+  }
+
   async answer(input: {
     query: string;
     taskType: TaskType;
@@ -589,14 +654,21 @@ class ExplainAgent {
         return `[${sourceId}] ${chunk.fileName}, ${loc}\n${chunk.content}`;
       })
       .join('\n\n');
+    const transcript = formatConversationTranscript(input.context.recentMessages || []);
 
     if (!aiModelProviderService.isConfigured({ useCase: 'chat' })) {
+      const transcript = formatConversationTranscript(input.context.recentMessages || []);
       return [
-        '当前后端未配置可用的 AI 模型服务，我先基于已采集到的上下文给出资料型回答：',
+        input.context.capsule.mode === 'model_knowledge'
+          ? '当前后端未配置可用的 AI 模型服务，但这轮属于模型知识回答，我先根据最近对话给出通用知识型答复：'
+          : '当前后端未配置可用的 AI 模型服务，我先基于已采集到的上下文给出资料型回答：',
         '',
+        transcript ? `最近对话：\n${transcript}\n` : '',
         input.retrievedChunks.length
           ? clip(input.retrievedChunks[0].content, 900)
-          : '当前资料依据不足。请先选中文本，或打开/滚动到需要解释的文件区域。',
+          : input.context.capsule.mode === 'model_knowledge'
+            ? '当前不依赖资料的模式下，直接根据通用知识回答即可。'
+            : '当前资料依据不足。请先选中文本，或打开/滚动到需要解释的文件区域。',
         '',
         input.retrievedChunks.length ? `来源：${this.formatSources(input.retrievedChunks)}` : ''
       ].join('\n');
@@ -605,6 +677,8 @@ class ExplainAgent {
     const prompt = [
       `任务类型: ${input.taskType}`,
       `用户问题: ${input.query}`,
+      '',
+      `最近对话:\n${transcript || '无'}`,
       '',
       `Context Capsule: ${input.context.capsule.capsuleId}`,
       `Context Mode: ${input.context.capsule.mode}`,
@@ -624,10 +698,15 @@ class ExplainAgent {
       '',
       `最终上下文预览:\n${input.context.promptPreview || '无'}`,
       '',
-      '请只基于下面的资料片段和当前上下文回答；如果依据不足，要明确说不足。',
-      '回答要求：简体中文；贴合用户画像与个性化上下文；解释要围绕当前 Panel/文件；关键事实句后使用 inline citation，格式必须是 [S1]、[S2]，并在结尾给出“来源”。',
+      input.context.capsule.mode === 'model_knowledge'
+        ? '请优先结合最近对话理解用户真实问题，并可使用模型通用知识回答；Workbench 资料只作为背景线索，不要因为资料未覆盖就拒答。'
+        : '请只基于下面的资料片段和当前上下文回答；如果依据不足，要明确说不足。',
+      '如果最新用户消息是追问、省略、纠正上一轮限制或改变回答依据，必须结合“最近对话”还原用户真实问题，不要把最新一句孤立理解。',
+      '引用规则：优先在段落或条目末尾给 1 个引用；同一来源支撑的连续句子合并引用；不要把同一个 [S#] 在相邻短句里反复贴出来。',
+      this.focusInstruction(input.context),
       'Memory policy：Saved memories 是长期偏好/事实，优先遵守；Reference chat history 只用于找回历史对话事实，不要自动当成长期偏好；Learner State 是候选学习状态，不要当成固定标签。',
       '个性化上下文只用于调整讲解方式和下一步建议，不要把其中的候选信号当作用户固定特质。',
+      '不要默认在回答结尾添加“自测问题”、练习题、检查题或无关日程问题；只有用户明确要求练习、复习、测验、自测时才添加。',
       '如果像练习题或作业题，不要直接泄露完整答案，先给思路、检查点和提示。',
       '',
       `Capsule Citations:\n${input.context.capsule.citations.map((citation) => `- [${citation.sourceId || '?'}] ${citation.label}`).join('\n') || '无'}`,
@@ -636,11 +715,8 @@ class ExplainAgent {
       `资料片段:\n${sourceText || '无可用资料片段'}`
     ].join('\n');
 
-    const response = await aiModelProviderService.chat([{ role: 'user', content: prompt }], {
-      useCase: 'chat',
-      attachments: input.context.chatSessionAttachments
-    });
-    return response.reply;
+    const response = await aiModelProviderService.chat([{ role: 'user', content: prompt }], chatModelOptions(input.context));
+    return stripUnrequestedSelfCheck(response.reply, input.query);
   }
 
   async *answerStream(input: {
@@ -661,10 +737,13 @@ class ExplainAgent {
         return `[${sourceId}] ${chunk.fileName}, ${loc}\n${chunk.content}`;
       })
       .join('\n\n');
+    const transcript = formatConversationTranscript(input.context.recentMessages || []);
 
     const prompt = [
       `任务类型: ${input.taskType}`,
       `用户问题: ${input.query}`,
+      '',
+      `最近对话:\n${transcript || '无'}`,
       '',
       `Context Capsule: ${input.context.capsule.capsuleId}`,
       `Context Mode: ${input.context.capsule.mode}`,
@@ -684,10 +763,15 @@ class ExplainAgent {
       '',
       `最终上下文预览:\n${input.context.promptPreview || '无'}`,
       '',
-      '请只基于下面的资料片段和当前上下文回答；如果依据不足，要明确说不足。',
-      '回答要求：简体中文；贴合用户画像与个性化上下文；解释要围绕当前 Panel/文件；关键事实句后使用 inline citation，格式必须是 [S1]、[S2]，并在结尾给出“来源”。',
+      input.context.capsule.mode === 'model_knowledge'
+        ? '请优先结合最近对话理解用户真实问题，并可使用模型通用知识回答；Workbench 资料只作为背景线索，不要因为资料未覆盖就拒答。'
+        : '请只基于下面的资料片段和当前上下文回答；如果依据不足，要明确说不足。',
+      '如果最新用户消息是追问、省略、纠正上一轮限制或改变回答依据，必须结合“最近对话”还原用户真实问题，不要把最新一句孤立理解。',
+      '引用规则：优先在段落或条目末尾给 1 个引用；同一来源支撑的连续句子合并引用；不要把同一个 [S#] 在相邻短句里反复贴出来。',
+      this.focusInstruction(input.context),
       'Memory policy：Saved memories 是长期偏好/事实，优先遵守；Reference chat history 只用于找回历史对话事实，不要自动当成长期偏好；Learner State 是候选学习状态，不要当成固定标签。',
       '个性化上下文只用于调整讲解方式和下一步建议，不要把其中的候选信号当作用户固定特质。',
+      '不要默认在回答结尾添加“自测问题”、练习题、检查题或无关日程问题；只有用户明确要求练习、复习、测验、自测时才添加。',
       '如果像练习题或作业题，不要直接泄露完整答案，先给思路、检查点和提示。',
       '',
       `Capsule Citations:\n${input.context.capsule.citations.map((citation) => `- [${citation.sourceId || '?'}] ${citation.label}`).join('\n') || '无'}`,
@@ -696,10 +780,7 @@ class ExplainAgent {
       `资料片段:\n${sourceText || '无可用资料片段'}`
     ].join('\n');
 
-    for await (const delta of aiModelProviderService.chatStream([{ role: 'user', content: prompt }], {
-      useCase: 'chat',
-      attachments: input.context.chatSessionAttachments
-    })) {
+    for await (const delta of aiModelProviderService.chatStream([{ role: 'user', content: prompt }], chatModelOptions(input.context))) {
       yield delta;
     }
   }
@@ -720,6 +801,7 @@ class QualityAgent {
   async check(input: { query: string; answer: string; retrievedChunks: RetrievedChunk[]; context: BuiltContext }) {
     const issues: string[] = [];
     const answer = input.answer.trim();
+    const isModelKnowledge = input.context.capsule.mode === 'model_knowledge';
     const hasSources = /来源|source|文件|第\s*\d+\s*页|行\s*\d+/i.test(answer);
     const hasGrounding = input.retrievedChunks.length > 0;
     const hasViewportIntent = /这里|这段|这一页|这页|这个表格|这段代码|当前可见/i.test(input.query);
@@ -730,13 +812,13 @@ class QualityAgent {
     const answerTerms = contentTerms(answer);
     const overlap = answerTerms.filter((term) => materialTerms.has(term)).length;
 
-    if (!hasGrounding) issues.push('当前资料依据不足');
-    if (!hasSources) issues.push('缺少来源引用');
+    if (!isModelKnowledge && !hasGrounding) issues.push('当前资料依据不足');
+    if (!isModelKnowledge && !hasSources) issues.push('缺少来源引用');
     if (hasViewportIntent && !hasPriorityContext) issues.push('问题指向当前位置，但 selection/viewport 正文为空');
     if (hasViewportIntent && viewportContent && !input.retrievedChunks.some((chunk) => chunk.source === 'activePanel' || chunk.source === 'selectedText')) {
       issues.push('回答未优先使用 selection/viewport');
     }
-    if (hasGrounding && overlap === 0 && answer.length > 120) issues.push('回答与当前资料重合度过低，存在跑题或幻觉风险');
+    if (!isModelKnowledge && hasGrounding && overlap === 0 && answer.length > 120) issues.push('回答与当前资料重合度过低，存在跑题或幻觉风险');
     if (/答案|直接给|完整代码|作业/.test(input.query) && /```[\s\S]{120,}```/.test(answer)) {
       issues.push('可能对练习直接泄露完整答案');
     }
@@ -744,7 +826,9 @@ class QualityAgent {
     const pass = issues.length === 0 || (issues.length === 1 && issues[0] === '缺少来源引用' && hasGrounding);
     const riskLevel = issues.length === 0 ? 'low' : issues.length <= 2 ? 'medium' : 'high';
     const revisedAnswer =
-      !hasGrounding && !pass
+      isModelKnowledge
+        ? answer
+        : !hasGrounding && !pass
         ? '当前资料依据不足。请先选中需要解释的内容，或打开/滚动到相关 PDF、代码、文档区域后再提问。'
         : hasViewportIntent && !hasPriorityContext
           ? `当前可见范围没有提取到真实正文，暂时无法可靠解释“这里”。请选中具体内容，或切换/滚动到可提取文本的区域后再问。\n\n来源：${formatCitationLabels(input.context)}`
@@ -866,6 +950,9 @@ export class MultiAgentOrchestrator {
             answer,
             sourceId: run.id
           });
+          const learnerState = await learnerStateService.applyPendingPatches(context.workspaceId, {
+            changedBy: 'MultiAgentOrchestrator.chat'
+          });
           return { saved, memoryExtraction };
         },
         (output) => `session=${output.saved.sessionId}, savedMemory=${output.memoryExtraction.savedMemory ? 'yes' : 'no'}, signals=${output.memoryExtraction.extraction.learnerStateSignals.length}`
@@ -942,7 +1029,11 @@ export class MultiAgentOrchestrator {
         quality,
         profile: updatedProfile,
         model: aiModelProviderService.isConfigured({ useCase: 'chat' })
-          ? aiModelProviderService.model(aiModelProviderService.provider({ useCase: 'chat' }), undefined, 'chat')
+          ? aiModelProviderService.model(
+              (chatModelOptions(context).provider || aiModelProviderService.provider({ useCase: 'chat' })),
+              chatModelOptions(context).model,
+              'chat'
+            )
           : 'local-context-fallback',
         usage: null
       };
@@ -1021,7 +1112,11 @@ export class MultiAgentOrchestrator {
           sourceConfidence: sourceConfidenceSummary(context)
         },
         model: aiModelProviderService.isConfigured({ useCase: 'chat' })
-          ? aiModelProviderService.model(aiModelProviderService.provider({ useCase: 'chat' }), undefined, 'chat')
+          ? aiModelProviderService.model(
+              (chatModelOptions(context).provider || aiModelProviderService.provider({ useCase: 'chat' })),
+              chatModelOptions(context).model,
+              'chat'
+            )
           : 'local-context-fallback',
         usage: null
       });
@@ -1050,6 +1145,11 @@ export class MultiAgentOrchestrator {
       } catch (error) {
         await learningRunService.failStep(explainStep.id, error);
         throw error;
+      }
+      const strippedAnswer = stripUnrequestedSelfCheck(answer, query);
+      if (strippedAnswer !== answer) {
+        emit('replace', strippedAnswer);
+        answer = strippedAnswer;
       }
       emit('timeline', logger.getTimeline());
 
@@ -1120,6 +1220,9 @@ export class MultiAgentOrchestrator {
             messages: input.messages,
             answer,
             sourceId: run.id
+          });
+          const learnerState = await learnerStateService.applyPendingPatches(context.workspaceId, {
+            changedBy: 'MultiAgentOrchestrator.chatStream'
           });
           return { saved, memoryExtraction };
         },
@@ -1197,7 +1300,11 @@ export class MultiAgentOrchestrator {
         quality,
         profile: updatedProfile,
         model: aiModelProviderService.isConfigured({ useCase: 'chat' })
-          ? aiModelProviderService.model(aiModelProviderService.provider({ useCase: 'chat' }), undefined, 'chat')
+          ? aiModelProviderService.model(
+              (chatModelOptions(context).provider || aiModelProviderService.provider({ useCase: 'chat' })),
+              chatModelOptions(context).model,
+              'chat'
+            )
           : 'local-context-fallback',
         usage: null
       };

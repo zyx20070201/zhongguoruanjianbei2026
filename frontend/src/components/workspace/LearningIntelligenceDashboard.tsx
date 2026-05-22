@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import cytoscape, { Core, ElementDefinition } from 'cytoscape';
 import fcose from 'cytoscape-fcose';
 import {
@@ -24,8 +23,6 @@ import {
   NotebookTabs,
   Plus,
   PanelRightClose,
-  Pin,
-  PinOff,
   RefreshCw,
   Route,
   Search,
@@ -40,36 +37,64 @@ import {
 import { learningApi } from '../../services/learningApi';
 import { mclApi, type MclExecuteResult, type MclLearningPlanStep } from '../../services/mclApi';
 import MarkdownPreview from '../workbench/MarkdownPreview';
-
-type IntelligenceSection = 'overview' | 'knowledge' | 'diagnosis' | 'planning' | 'memory';
+import CosmosKnowledgeGraphWorkbench from './CosmosKnowledgeGraphWorkbench';
+export type IntelligenceSection = 'overview' | 'knowledge' | 'diagnosis' | 'planning' | 'memory';
 type KnowledgeView = 'graph' | 'list' | 'path';
 type PlanningView = 'plans' | 'steps' | 'feedback';
-type MemoryView = 'events' | 'observations' | 'stable' | 'versions';
-
+type LearnerProfileEntryKind = 'profile' | 'events' | 'memory';
+type PortraitDimension =
+  | 'learningBackground'
+  | 'learningGoal'
+  | 'knowledgeFoundation'
+  | 'cognitiveStyle'
+  | 'learningPreference'
+  | 'errorPattern'
+  | 'learningRisk'
+  | 'metacognitiveStrategy'
+  | 'supportNeed';
 interface LearningIntelligenceDashboardProps {
   workspaceId: string;
   workbenchId?: string;
   workbenches?: Array<{ id: string; title: string }>;
+  activeSection?: IntelligenceSection;
+  hideSectionNav?: boolean;
+  headerTitle?: string;
+  headerDescription?: string;
+  onSectionChange?: (section: IntelligenceSection) => void;
   onOpenWorkbench?: (workbenchId: string) => void;
   onPlanApplied?: () => void;
   onOpenTerminal?: (prompt: string) => void;
 }
-
 export interface ConceptNode {
   id: string;
   title: string;
+  description?: string;
   category?: string;
   difficulty?: number;
+  tags?: Array<{
+    id: string;
+    label: string;
+    normalizedLabel?: string;
+    state: 'candidate' | 'applied';
+    sources?: Array<'system_candidate' | 'ai_suggested' | 'user'>;
+    rationale?: string;
+    createdAt?: string;
+    updatedAt?: string;
+  }>;
+  sourceIds?: string[];
+  sources?: GraphSourceRef[];
+  aiEvidence?: {
+    resourceEvidence?: Array<{ fileObjectId?: string; fileName?: string; path?: string; snippet?: string; quote?: string; chunkIndex?: number; sectionId?: string }>;
+  };
   activationScore?: number;
   learnerState?: {
     masteryEstimate?: number;
     weaknessEstimate?: number;
     readinessEstimate?: number;
   } | null;
-  bindings?: Array<{ targetType: string; targetId: string; role: string; strength?: number }>;
+  bindings?: Array<{ targetType: string; targetId: string; role: string; strength?: number; fileObjectId?: string | null; fileName?: string | null; path?: string | null }>;
   misconceptions?: Array<{ title: string; repairHint?: string; severity?: number }>;
 }
-
 export interface ConceptEdge {
   id: string;
   from: string;
@@ -77,8 +102,34 @@ export interface ConceptEdge {
   relationType: string;
   weight?: number;
   confidence?: number;
+  sourceIds?: string[];
+  sources?: GraphSourceRef[];
 }
-
+export interface GraphSource {
+  id: string;
+  name: string;
+  path?: string;
+  resourceType?: string | null;
+  origin?: string | null;
+  mimeType?: string | null;
+  extension?: string | null;
+  updatedAt?: string | null;
+  nodeCount?: number;
+  edgeCount?: number;
+}
+export interface GraphSourceRef extends GraphSource {
+  role?: string | null;
+  strength?: number | null;
+  confidence?: number | null;
+  snippets?: Array<{
+    chunkId?: string | null;
+    chunkIndex?: number | null;
+    sectionId?: string | null;
+    quote?: string;
+    rationale?: string;
+    confidence?: number | null;
+  }>;
+}
 interface DiagnosisItem {
   concept: { id: string; title: string };
   diagnosis: string;
@@ -89,20 +140,121 @@ interface DiagnosisItem {
   misconceptions?: Array<{ title: string; repairHint?: string; severity?: number }>;
   evidenceNeeds?: string[];
 }
-
-const sectionItems: Array<{
+interface LearnerProfileView {
+  source?: 'llm' | 'fallback';
+  overview?: {
+    stableCount?: number;
+    workingCount?: number;
+    memoryCount?: number;
+    eventCount?: number;
+    activeVersion?: number;
+    summary?: string;
+  };
+  stableProfile?: Array<{ key: string; title: string; summary: string; items: ProfileDisplaySignal[] }>;
+  workingState?: Array<{ key: string; title: string; summary: string; items: ProfileDisplaySignal[] }>;
+  savedMemory?: ProfileDisplaySignal[];
+  recentEvents?: Array<{ id: string; eventType?: string; summary?: string; confidence?: number; observedAt?: string }>;
+  portraitEntities?: LearnerPortraitEntity[];
+  portraitResolution?: LearnerPortraitResolutionView;
+  portraitSummary?: { schema?: string; dimensions?: Record<string, number>; sourceFrameworks?: string[] };
+  portraitPolish?: LearnerPortraitPolishView;
+  dedupeNotes?: string[];
+}
+interface LearnerPortraitEntity {
+  id: string;
+  dimension: PortraitDimension;
+  type: string;
+  title: string;
+  description: string;
+  status: 'stable' | 'active' | 'candidate' | 'needs_review';
+  polarity: 'strength' | 'need' | 'risk' | 'preference' | 'neutral';
+  confidence: number;
+  severity?: 'low' | 'medium' | 'high';
+  evidenceCount: number;
+  evidence?: Array<{ id: string; sourceType: string; summary: string; confidence: number; observedAt?: string; relatedConcepts?: string[] }>;
+  affectedConcepts?: string[];
+  recommendation?: string;
+  updatedAt?: string | null;
+  mergedFrom?: string[];
+  mergeReason?: string;
+  aliases?: string[];
+  resolutionSource?: 'builder' | 'semantic_resolver' | 'resolver_fallback';
+  displayTitle?: string;
+  displayDescription?: string;
+  displayRecommendation?: string;
+}
+interface LearnerPortraitPolishView {
+  schema: 'learner_portrait_polish.v1';
+  source: 'llm' | 'fallback' | 'cache' | 'pending' | 'failed';
+  status: 'ready' | 'pending';
+  entityHash: string;
+  generatedAt?: string | null;
+  model?: string | null;
+  provider?: string | null;
+  message?: string | null;
+  globalSummary: {
+    headline: string;
+    summary: string;
+    priorityInsights: string[];
+    nextBestActions: string[];
+  };
+  dimensionSummaries: Array<{
+    dimension: PortraitDimension;
+    title: string;
+    summary: string;
+    tone: 'stable' | 'active' | 'needs_attention' | 'insufficient_evidence';
+  }>;
+  entities: LearnerPortraitEntity[];
+}
+interface LearnerPortraitResolutionView {
+  schema: 'learner_portrait_resolution.v1';
+  source: 'llm' | 'fallback' | 'cache' | 'pending' | 'failed';
+  status: 'ready' | 'pending';
+  entityHash: string;
+  generatedAt?: string | null;
+  model?: string | null;
+  provider?: string | null;
+  message?: string | null;
+  originalCount: number;
+  resolvedCount: number;
+  mergeCount: number;
+  entities: LearnerPortraitEntity[];
+  clusters: Array<{
+    canonicalEntityId: string;
+    dimension: PortraitDimension;
+    mergedEntityIds: string[];
+    mergeReason: string;
+  }>;
+}
+interface LearningIntelligenceSnapshot {
+  version: 3;
+  savedAt: number;
+  workspaceId: string;
+  workbenchId?: string | null;
+  integration: any;
+  graph: { nodes: ConceptNode[]; edges: ConceptEdge[]; sources?: GraphSource[] };
+  diagnosis: any;
+  kgPlan: any;
+  targetStructure: any;
+  gapAnalysis: any;
+  mclPlan: any;
+  mclPlans: any[];
+  events: any[];
+  sequences: any[];
+  learnerState: any;
+  memories: any[];
+  learnerProfileView: LearnerProfileView | null;
+  planningObjective: string;
+}
+export const learningIntelligenceSectionItems: Array<{
   id: IntelligenceSection;
   label: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = [
   { id: 'overview', label: 'Overview', description: '状态、变化、入口', icon: Sparkles },
-  { id: 'knowledge', label: 'Knowledge', description: '概念对象与路径', icon: Network },
-  { id: 'diagnosis', label: 'Diagnosis', description: '诊断报告对象', icon: Brain },
-  { id: 'planning', label: 'Planning', description: '计划与步骤', icon: Route },
-  { id: 'memory', label: 'Memory', description: '记录与画像变更', icon: History }
+  { id: 'diagnosis', label: 'Diagnosis', description: '诊断报告对象', icon: Brain }
 ];
-
 const pct = (value?: number | null) => `${Math.round(Math.max(0, Math.min(1, Number(value ?? 0))) * 100)}%`;
 const score = (value?: number | null) => Number(value ?? 0).toFixed(2);
 const formatShortDate = (value?: string | null) => {
@@ -116,7 +268,6 @@ const clipText = (value: unknown, max = 110) => {
   if (!text) return '';
   return text.length > max ? `${text.slice(0, max)}...` : text;
 };
-
 const cleanNarrative = (value: unknown) => {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text
@@ -137,7 +288,6 @@ const cleanNarrative = (value: unknown) => {
     .replace(/[;；]+\s*$/, '')
     .trim();
 };
-
 const resourceTypeLabel = (type: string) => {
   if (type === 'document') return '文档';
   if (type === 'video') return '视频';
@@ -145,21 +295,18 @@ const resourceTypeLabel = (type: string) => {
   if (type === 'project') return '实操案例';
   return '资源';
 };
-
 const groundingStatusLabel = (value?: string | null) => {
   if (value === 'grounded') return '资料已命中';
   if (value === 'partial') return '部分命中';
   if (value === 'resource_gap') return '资料不足';
   return '资料待确认';
 };
-
 const groundingStatusTone = (value?: string | null) => {
   if (value === 'grounded') return 'text-[#2f6f46] bg-[#eef7f0] ring-[#cfe8d4]';
   if (value === 'partial') return 'text-[#8b5a00] bg-[#fff7e6] ring-[#fedf9b]';
   if (value === 'resource_gap') return 'text-[#b54708] bg-[#fff7ed] ring-[#fed7aa]';
   return 'text-[#55585d] bg-[#f5f5f3] ring-[#e5e5df]';
 };
-
 const stepPlanNarrative = (step: MclLearningPlanStep) => {
   const fragments = [
     step.stepDetail?.learningGoal,
@@ -170,24 +317,18 @@ const stepPlanNarrative = (step: MclLearningPlanStep) => {
   ]
     .map((value) => cleanNarrative(value))
     .filter(Boolean);
-
   if (!fragments.length) return '这一阶段先处理当前最关键的学习任务。';
-
   const deduped = Array.from(new Set(fragments));
   return deduped.slice(0, 2).join(' ');
 };
-
 const stepNextAction = (step: MclLearningPlanStep) => {
   const nextStep = cleanNarrative(step.stepDetail?.dynamicAdjustment?.nextStep || '');
   if (nextStep) return nextStep;
   return cleanNarrative(step.unlockCondition || step.successCriteria?.[0] || '完成后进入下一步。');
 };
-
 const stepGroundingStatus = (step: MclLearningPlanStep) =>
   step.groundingStatus || step.resourceGrounding?.status || (safeArray(step.resourceOptions).length ? 'partial' : undefined);
-
 type StructuredStage = NonNullable<NonNullable<MclExecuteResult['plan']>['structuredPlan']>['stages'][number];
-
 const planTypeLabel = (value?: string) => {
   if (value === 'time_limited') return '时间受限';
   if (value === 'exam') return '备考冲刺';
@@ -196,7 +337,6 @@ const planTypeLabel = (value?: string) => {
   if (value === 'mixed') return '混合场景';
   return '普通学习';
 };
-
 const planDisplayTitle = (plan: any) => cleanNarrative(plan?.structuredPlan?.objective || plan?.objective || plan?.structuredPlan?.title || '学习计划');
 const planStageCount = (plan: any) => safeArray(plan?.structuredPlan?.stages).length || safeArray(plan?.steps).length;
 const structuredStageId = (stage: { order?: number }, index: number) => `structured-${stage.order || index + 1}`;
@@ -204,12 +344,10 @@ const stageDurationHint = (stage: StructuredStage) => {
   const text = `${stage.title} ${stage.display?.narrative || ''} ${stage.display?.summary || ''}`;
   return text.match(/第?\s*\d+\s*-\s*\d+\s*天/)?.[0] || text.match(/\d+\s*天/)?.[0] || text.match(/\d+\s*周/)?.[0] || '';
 };
-
 const formatMatchScore = (value: number) => {
   const normalized = value > 1 ? value : value * 100;
   return `${Math.round(Math.max(0, Math.min(100, normalized)))}%`;
 };
-
 const normalizeGroundingMatches = (step: MclLearningPlanStep) => {
   const fromGrounding = safeArray<any>(step.resourceGrounding?.matches).map((match, index) => ({
     id: match?.resourceId || match?.resourceUnitId || match?.resourceTitle || `grounding-${index}`,
@@ -222,9 +360,7 @@ const normalizeGroundingMatches = (step: MclLearningPlanStep) => {
     snippets: safeArray<string>(match?.evidenceSnippets),
     missingClaims: safeArray<string>(match?.missingClaims)
   }));
-
   if (fromGrounding.length) return fromGrounding;
-
   const fromOptions = safeArray<any>(step.resourceOptions).map((item, index) => ({
     id: item?.resourceUnitId || item?.resourceTitle || item?.resourceEntryPoint || `option-${index}`,
     title: cleanNarrative(item?.resourceUnitTitle || item?.resourceTitle || '候选资料'),
@@ -236,9 +372,7 @@ const normalizeGroundingMatches = (step: MclLearningPlanStep) => {
     snippets: safeArray<string>(item?.evidenceSnippets),
     missingClaims: safeArray<string>(item?.missingClaims)
   }));
-
   if (fromOptions.length) return fromOptions;
-
   const fromDetail = Object.entries(step.stepDetail?.recommendedResources || {}).flatMap(([type, items]) =>
     safeArray<any>(items).map((item, index) => ({
       id: item?.id || item?.name || `${type}-${index}`,
@@ -252,36 +386,234 @@ const normalizeGroundingMatches = (step: MclLearningPlanStep) => {
       missingClaims: []
     }))
   );
-
   return fromDetail;
 };
-
 const stateTone = (concept?: ConceptNode) => {
   const learner = concept?.learnerState;
   if ((learner?.weaknessEstimate ?? 0) >= 0.62) return 'text-[#b54708] bg-[#fff7ed] ring-[#fed7aa]';
   if ((learner?.masteryEstimate ?? 0) >= 0.72) return 'text-[#2f6f46] bg-[#eef7f0] ring-[#cfe8d4]';
   return 'text-[#55585d] bg-[#f5f5f3] ring-[#e5e5df]';
 };
-
 const diagnosisLabel = (value: string) => {
   if (value === 'weak') return '薄弱';
   if (value === 'mastered') return '已掌握';
   if (value === 'prerequisite_gap') return '前置缺口';
   return '发展中';
 };
-
 const diagnosisTone = (value: string) => {
   if (value === 'weak' || value === 'prerequisite_gap') return 'text-[#b54708] bg-[#fff7ed] ring-[#fed7aa]';
   if (value === 'mastered') return 'text-[#2f6f46] bg-[#eef7f0] ring-[#cfe8d4]';
   return 'text-[#55585d] bg-[#f5f5f3] ring-[#e5e5df]';
 };
-
 const safeArray = <T,>(value: unknown): T[] => Array.isArray(value) ? value as T[] : [];
+type ProfileDisplaySignal = {
+  id: string;
+  label: string;
+  value: string;
+  dimension: string;
+  confidence?: number | null;
+  status?: string | null;
+  evidenceIds?: string[];
+  sources?: string[];
+  rationale?: string;
+  lastObservedAt?: string | null;
+  firstObservedAt?: string | null;
+  sourceType?: string;
+};
+type ProfileLayer = 'stable' | 'working' | 'memory';
+type ProfileVisualNode = {
+  dimension: string;
+  title: string;
+  detail: string;
+  count: number;
+  layerCounts: Record<ProfileLayer, number>;
+  confidence: number;
+  samples: string[];
+  entities?: LearnerPortraitEntity[];
+  polarityCounts?: Record<LearnerPortraitEntity['polarity'], number>;
+  statusCounts?: Record<LearnerPortraitEntity['status'], number>;
+};
+const profileDimensionMeta: Record<string, { title: string; detail: string }> = {
+  profileBase: { title: 'Profile Base', detail: '学习目标、当前课程上下文与阶段性关注点。' },
+  knowledgeState: { title: 'Knowledge State', detail: '已掌握、薄弱、前置缺口等知识状态。' },
+  preferenceStyle: { title: 'Preference Style', detail: '解释方式、资源形态和练习偏好。' },
+  misconceptionState: { title: 'Misconception State', detail: '反复出现的误区、错误模式与纠正线索。' },
+  cognitiveState: { title: 'Cognitive State', detail: '认知负荷、提问模式与学习习惯特征。' },
+  behaviorEngagement: { title: 'Behavior / Engagement', detail: '近期行为、参与度与使用节奏。' },
+  reviewPlanning: { title: 'Review Planning', detail: '复习压力、下一步动作与计划状态。' },
+  savedMemory: { title: 'Saved Memory', detail: '用户可控的长期偏好、背景或明确记住的信息。' }
+};
+const portraitDimensionMeta: Record<PortraitDimension, { title: string; detail: string }> = {
+  learningBackground: { title: '学习背景', detail: '专业、课程、历史经验与学习场景。' },
+  learningGoal: { title: '学习目标', detail: '当前目标、长期目标、成功标准与时间约束。' },
+  knowledgeFoundation: { title: '知识基础', detail: '已掌握、薄弱、前置缺口与可学习状态。' },
+  cognitiveStyle: { title: '认知风格', detail: '示例驱动、视觉化、步骤化、抽象推理等理解方式。' },
+  learningPreference: { title: '学习偏好', detail: '讲解、资源、反馈和互动形式偏好。' },
+  errorPattern: { title: '易错模式', detail: '概念混淆、边界遗漏、推理跳步和修复状态。' },
+  learningRisk: { title: '学习风险', detail: '过载、迁移、遗忘、提示依赖和知识断层风险。' },
+  metacognitiveStrategy: { title: '元认知策略', detail: '计划、监控、反思、求助和策略调整。' },
+  supportNeed: { title: '支持需求', detail: '脚手架、诊断、练习、反馈与资源支持。' }
+};
+const portraitDimensionOrder: PortraitDimension[] = [
+  'learningBackground',
+  'learningGoal',
+  'knowledgeFoundation',
+  'cognitiveStyle',
+  'learningPreference',
+  'errorPattern',
+  'learningRisk',
+  'metacognitiveStrategy',
+  'supportNeed'
+];
+const profileDimensionOrder = [
+  'profileBase',
+  'knowledgeState',
+  'preferenceStyle',
+  'misconceptionState',
+  'cognitiveState',
+  'behaviorEngagement',
+  'reviewPlanning',
+  'savedMemory'
+];
+const normalizeProfileText = (value: unknown) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/epsilon/g, 'ε')
+    .replace(/[\s"'`“”‘’.,，。:：;；!?！？()[\]{}<>《》/\\|-]+/g, '')
+    .trim();
+const isRawPromptLikeProfileText = (value: string) => {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  if (text.length > 180) return true;
+  if (/[?？]$/.test(text)) return true;
+  if (/^(请|帮我|你帮我|请你|我现在主要想|我想让你|能不能|可不可以)/.test(text)) return true;
+  if (/source\s*guide|只输出正文|不要标题|spContent\s*=|https?:\/\//i.test(text)) return true;
+  return false;
+};
+const polishProfileValue = (value: unknown) =>
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^(用户|学生|学习者)(?:表示|希望|想要|提到)[:：,，\s]*/i, '')
+    .replace(/^我(?:想|希望|需要|打算|正在)[:：,，\s]*/i, '')
+    .replace(/[。！？!?\s]+$/g, '')
+    .trim();
+const signalRecency = (signal: ProfileDisplaySignal) => {
+  const time = new Date(signal.lastObservedAt || signal.firstObservedAt || '').getTime();
+  return Number.isFinite(time) ? time : 0;
+};
+const signalRank = (signal: ProfileDisplaySignal) => {
+  const statusWeight = signal.status === 'active' ? 0.2 : signal.status === 'candidate' ? 0.05 : 0;
+  const evidenceWeight = Math.min(0.16, safeArray(signal.evidenceIds).length * 0.04);
+  return Number(signal.confidence || 0) + statusWeight + evidenceWeight + Math.min(0.1, signal.value.length / 1200);
+};
+const dedupeProfileSignals = (signals: ProfileDisplaySignal[], limit = 8, options?: { keepPromptLike?: boolean }) => {
+  const selected: ProfileDisplaySignal[] = [];
+  const sorted = signals
+    .map((signal) => ({ ...signal, value: polishProfileValue(signal.value) }))
+    .filter((signal) => signal.value && (options?.keepPromptLike || !isRawPromptLikeProfileText(signal.value)))
+    .sort((a, b) => signalRank(b) - signalRank(a) || signalRecency(b) - signalRecency(a));
+  for (const signal of sorted) {
+    const normalized = normalizeProfileText(signal.value);
+    if (!normalized) continue;
+    const duplicate = selected.some((existing) => {
+      const other = normalizeProfileText(existing.value);
+      if (!other) return false;
+      return normalized === other || normalized.includes(other) || other.includes(normalized);
+    });
+    if (!duplicate) selected.push(signal);
+    if (selected.length >= limit) break;
+  }
+  return selected;
+};
+const groupProfileSignals = (signals: ProfileDisplaySignal[], limitPerGroup = 5, options?: { keepPromptLike?: boolean }) => {
+  const grouped = new Map<string, ProfileDisplaySignal[]>();
+  signals.forEach((signal) => {
+    const key = signal.dimension || 'profileBase';
+    grouped.set(key, [...(grouped.get(key) || []), signal]);
+  });
+  return Array.from(grouped.entries())
+    .sort((a, b) => profileDimensionOrder.indexOf(a[0]) - profileDimensionOrder.indexOf(b[0]))
+    .map(([dimension, items]) => ({
+      dimension,
+      meta: profileDimensionMeta[dimension] || { title: dimension, detail: '学习画像维度。' },
+      items: dedupeProfileSignals(items, limitPerGroup, options)
+    }))
+    .filter((group) => group.items.length);
+};
+const profileDimensionIcon = (dimension: string) => {
+  if (dimension === 'knowledgeState') return Network;
+  if (dimension === 'preferenceStyle') return SlidersHorizontal;
+  if (dimension === 'misconceptionState') return Target;
+  if (dimension === 'cognitiveState') return Brain;
+  if (dimension === 'behaviorEngagement') return Activity;
+  if (dimension === 'reviewPlanning') return Route;
+  if (dimension === 'savedMemory') return BookOpen;
+  return ShieldCheck;
+};
+const toProfileSignal = (signal: any, dimension: string, fallbackLabel: string, sourceType?: string): ProfileDisplaySignal => ({
+  id: String(signal?.id || signal?.key || signal?.memoryKey || `${dimension}:${fallbackLabel}:${signal?.value || signal?.text || Math.random()}`),
+  label: String(signal?.label || fallbackLabel),
+  value: String(signal?.value || signal?.text || signal?.content || '').trim(),
+  dimension,
+  confidence: typeof signal?.confidence === 'number' ? signal.confidence : null,
+  status: signal?.status || null,
+  evidenceIds: safeArray<string>(signal?.evidenceIds),
+  sources: safeArray<string>(signal?.sources),
+  rationale: signal?.rationale || signal?.reason || '',
+  firstObservedAt: signal?.firstObservedAt || null,
+  lastObservedAt: signal?.lastObservedAt || signal?.updatedAt || signal?.createdAt || null,
+  sourceType
+});
+const profileDimensionColor = (dimension: string) => {
+  if (dimension === 'learningBackground') return { fill: '#eef1f4', stroke: '#7b8794', text: '#34373c' };
+  if (dimension === 'learningGoal') return { fill: '#eaf4ff', stroke: '#5b9ad6', text: '#265f96' };
+  if (dimension === 'knowledgeFoundation') return { fill: '#e8f6ef', stroke: '#48a06a', text: '#24613d' };
+  if (dimension === 'cognitiveStyle') return { fill: '#f2ecff', stroke: '#8f6bdc', text: '#5b3f93' };
+  if (dimension === 'learningPreference') return { fill: '#fff7d7', stroke: '#d4aa20', text: '#765d00' };
+  if (dimension === 'errorPattern') return { fill: '#fff0e3', stroke: '#e28a3b', text: '#944d0b' };
+  if (dimension === 'learningRisk') return { fill: '#ffe9e6', stroke: '#df5b4d', text: '#9d2c22' };
+  if (dimension === 'metacognitiveStrategy') return { fill: '#e8f6f8', stroke: '#45a7b2', text: '#1f6570' };
+  if (dimension === 'supportNeed') return { fill: '#f5efea', stroke: '#a98267', text: '#684936' };
+  if (dimension === 'knowledgeState') return { fill: '#e8f2ff', stroke: '#5b8def', text: '#244f9e' };
+  if (dimension === 'preferenceStyle') return { fill: '#f2ecff', stroke: '#8f6bdc', text: '#5b3f93' };
+  if (dimension === 'misconceptionState') return { fill: '#fff0e3', stroke: '#e79b4f', text: '#9a530d' };
+  if (dimension === 'cognitiveState') return { fill: '#e9f7f0', stroke: '#55a374', text: '#276343' };
+  if (dimension === 'behaviorEngagement') return { fill: '#fff7cf', stroke: '#d1a817', text: '#725a00' };
+  if (dimension === 'reviewPlanning') return { fill: '#e8f6f8', stroke: '#45a7b2', text: '#1f6570' };
+  if (dimension === 'savedMemory') return { fill: '#f5efea', stroke: '#a98267', text: '#684936' };
+  return { fill: '#f1f1ef', stroke: '#8a8e94', text: '#34373c' };
+};
+const portraitPolishBadge = (polish?: LearnerPortraitPolishView | null) => {
+  if (!polish) return { label: '规则版', detail: '当前展示由结构化规则生成。', className: 'bg-[#f5f5f3] text-[#55585d] ring-[#e5e5df]' };
+  if (polish.status === 'pending') return { label: 'AI 精修中', detail: '当前先展示规则版，AI 正在后台润色。', className: 'bg-[#fff7e6] text-[#8b5a00] ring-[#fedf9b]' };
+  if (polish.source === 'llm' || polish.source === 'cache') {
+    const when = polish.generatedAt ? `生成时间：${new Date(polish.generatedAt).toLocaleString()}` : '生成时间未知';
+    const model = polish.model ? `模型：${polish.provider || 'AI'} / ${polish.model}` : '模型信息未记录';
+    return { label: polish.source === 'cache' ? 'AI 精修缓存' : 'AI 已精修', detail: `标题、摘要和建议已由 AI 基于证据润色。${when}；${model}。`, className: 'bg-[#eef7f0] text-[#2f6f46] ring-[#cfe8d4]' };
+  }
+  if (polish.source === 'failed') return { label: '规则版', detail: 'AI 精修超时或失败，当前展示规则版画像。', className: 'bg-[#fff1f1] text-[#b42318] ring-[#ffd6d6]' };
+  return { label: '规则版', detail: '当前展示由结构化规则生成。', className: 'bg-[#f5f5f3] text-[#55585d] ring-[#e5e5df]' };
+};
+const portraitResolutionBadge = (resolution?: LearnerPortraitResolutionView | null) => {
+  if (!resolution) return { label: '候选实体', detail: '当前展示为画像候选实体，尚未进入语义归并。', className: 'bg-[#f5f5f3] text-[#55585d] ring-[#e5e5df]' };
+  if (resolution.status === 'pending') return { label: '语义归并中', detail: '当前先展示候选实体，后台正在按语义合并重叠画像。', className: 'bg-[#fff7e6] text-[#8b5a00] ring-[#fedf9b]' };
+  if (resolution.source === 'llm' || resolution.source === 'cache') {
+    const merged = resolution.mergeCount > 0 ? `已合并 ${resolution.mergeCount} 条重叠信号。` : '未发现需要合并的重叠实体。';
+    const when = resolution.generatedAt ? `生成时间：${new Date(resolution.generatedAt).toLocaleString()}` : '生成时间未知';
+    return { label: resolution.source === 'cache' ? '语义归并缓存' : '语义已归并', detail: `${merged}${when}。`, className: 'bg-[#eef7f0] text-[#2f6f46] ring-[#cfe8d4]' };
+  }
+  if (resolution.source === 'failed') return { label: '候选实体', detail: '语义归并超时或失败，当前展示候选实体。', className: 'bg-[#fff1f1] text-[#b42318] ring-[#ffd6d6]' };
+  return { label: '候选实体', detail: '当前展示为画像候选实体。', className: 'bg-[#f5f5f3] text-[#55585d] ring-[#e5e5df]' };
+};
 const courseGraphBuildJobStorageKey = (workspaceId: string, workbenchId?: string) =>
   `course-graph-build-job:${workspaceId}:${workbenchId || 'workspace'}`;
+const intelligenceSnapshotKey = (workspaceId: string, workbenchId?: string) =>
+  `learning-intelligence:snapshot:${workspaceId}:${workbenchId || 'workspace'}`;
+const INTELLIGENCE_SNAPSHOT_TTL_MS = 15 * 60 * 1000;
+const INTELLIGENCE_SNAPSHOT_VERSION = 3;
+const normalizeWorkbenchKey = (workbenchId?: string | null) => workbenchId || null;
 type GraphScope = 'connected' | 'local' | 'all';
 type GraphGroup = 'weak' | 'ready' | 'mastered' | 'neutral';
-
 interface GraphPrefs {
   scope: GraphScope;
   localDepth: number;
@@ -296,62 +628,37 @@ interface GraphPrefs {
   visibleGroups: GraphGroup[];
   localRootId: string | null;
 }
-
 interface GraphLayoutCache {
   version: 1;
   zoom?: number;
   pan?: { x: number; y: number };
   positions: Record<string, { x: number; y: number }>;
 }
-
-interface GraphEnergyParticle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  size: number;
-  alpha: number;
-  hue: number;
-  phase: number;
-}
-
-interface GraphEnergyState {
-  focusId: string | null;
-  hoverId: string | null;
-  burstStartedAt: number;
-  pulseStartedAt: number;
-  particles: GraphEnergyParticle[];
-}
-
 let cytoscapeFcoseRegistered = false;
 if (!cytoscapeFcoseRegistered) {
   cytoscape.use(fcose);
   cytoscapeFcoseRegistered = true;
 }
-
 const DEFAULT_VISIBLE_RELATIONS = ['prerequisite', 'part_of', 'related', 'assesses', 'remediates', 'supports'];
 const DEFAULT_VISIBLE_GROUPS: GraphGroup[] = ['weak', 'ready', 'mastered', 'neutral'];
 const DEFAULT_GRAPH_PREFS: GraphPrefs = {
   scope: 'connected',
   localDepth: 2,
   showNodeLabels: true,
-  showEdgeLabels: true,
+  showEdgeLabels: false,
   nodeScale: 1,
   edgeScale: 1,
-  repelForce: 1,
-  linkDistance: 1,
-  centerForce: 1,
+  repelForce: 1.25,
+  linkDistance: 1.2,
+  centerForce: 0.55,
   visibleRelations: [...DEFAULT_VISIBLE_RELATIONS],
   visibleGroups: [...DEFAULT_VISIBLE_GROUPS],
   localRootId: null
 };
-
 const graphPrefsKey = (workspaceId: string, workbenchId?: string) =>
   `learning-intelligence:graph-prefs:${workspaceId}:${workbenchId || 'workspace'}`;
-
 const graphLayoutKey = (workspaceId: string, workbenchId?: string) =>
   `learning-intelligence:graph-layout:${workspaceId}:${workbenchId || 'workspace'}`;
-
 const loadGraphPrefs = (workspaceId: string, workbenchId?: string): GraphPrefs => {
   if (typeof window === 'undefined') return DEFAULT_GRAPH_PREFS;
   try {
@@ -368,7 +675,6 @@ const loadGraphPrefs = (workspaceId: string, workbenchId?: string): GraphPrefs =
     return DEFAULT_GRAPH_PREFS;
   }
 };
-
 const loadGraphLayout = (workspaceId: string, workbenchId?: string): GraphLayoutCache => {
   if (typeof window === 'undefined') return { version: 1, positions: {} };
   try {
@@ -380,7 +686,35 @@ const loadGraphLayout = (workspaceId: string, workbenchId?: string): GraphLayout
     return { version: 1, positions: {} };
   }
 };
-
+const loadIntelligenceSnapshot = (workspaceId: string, workbenchId?: string): LearningIntelligenceSnapshot | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(intelligenceSnapshotKey(workspaceId, workbenchId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LearningIntelligenceSnapshot;
+    if (parsed.version !== INTELLIGENCE_SNAPSHOT_VERSION) return null;
+    if (!parsed || parsed.workspaceId !== workspaceId || parsed.workbenchId !== normalizeWorkbenchKey(workbenchId)) return null;
+    if (!Number.isFinite(parsed.savedAt) || Date.now() - parsed.savedAt > INTELLIGENCE_SNAPSHOT_TTL_MS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+const profileViewNeedsRefresh = (profileView?: LearnerProfileView | null) => {
+  if (!profileView) return true;
+  const entityCount =
+    safeArray<LearnerPortraitEntity>(profileView.portraitPolish?.entities).length ||
+    safeArray<LearnerPortraitEntity>(profileView.portraitResolution?.entities).length ||
+    safeArray<LearnerPortraitEntity>(profileView.portraitEntities).length;
+  const signalCount =
+    safeArray<any>(profileView.stableProfile).reduce((sum, group) => sum + safeArray<any>(group?.items).length, 0) +
+    safeArray<any>(profileView.workingState).reduce((sum, group) => sum + safeArray<any>(group?.items).length, 0) +
+    safeArray<any>(profileView.savedMemory).length +
+    safeArray<any>(profileView.recentEvents).length;
+  return profileView.portraitPolish?.status === 'pending' ||
+    profileView.portraitResolution?.status === 'pending' ||
+    (entityCount === 0 && signalCount > 0);
+};
 const saveJson = (key: string, value: unknown) => {
   if (typeof window === 'undefined') return;
   try {
@@ -389,16 +723,14 @@ const saveJson = (key: string, value: unknown) => {
     // ignore localStorage quota and privacy errors
   }
 };
-
 const relationMeta = (type: string) => {
-  if (type === 'prerequisite') return { label: '前置', stroke: '#9bd889', dash: '', marker: 'arrow-prerequisite' };
-  if (type === 'part_of') return { label: '组成', stroke: '#b9a7ff', dash: '5 4', marker: 'arrow-part' };
-  if (type === 'assesses') return { label: '测评', stroke: '#ffb86c', dash: '2 4', marker: 'arrow-assesses' };
-  if (type === 'remediates') return { label: '补救', stroke: '#ff7b72', dash: '7 4', marker: 'arrow-remediates' };
-  if (type === 'supports') return { label: '支持', stroke: '#7cc7ff', dash: '4 4', marker: 'arrow-supports' };
-  return { label: '相关', stroke: '#a5b4c6', dash: '', marker: 'arrow-related' };
+  if (type === 'prerequisite') return { label: '前置', stroke: '#5b8f66', dash: '', marker: 'arrow-prerequisite' };
+  if (type === 'part_of') return { label: '组成', stroke: '#7b6fd1', dash: '5 4', marker: 'arrow-part' };
+  if (type === 'assesses') return { label: '测评', stroke: '#c17b32', dash: '2 4', marker: 'arrow-assesses' };
+  if (type === 'remediates') return { label: '补救', stroke: '#c75c5c', dash: '7 4', marker: 'arrow-remediates' };
+  if (type === 'supports') return { label: '支持', stroke: '#4386b5', dash: '4 4', marker: 'arrow-supports' };
+  return { label: '相关', stroke: '#8b98a8', dash: '', marker: 'arrow-related' };
 };
-
 const conceptGroup = (node: ConceptNode) => {
   const learner = node.learnerState;
   if ((learner?.weaknessEstimate ?? 0) >= 0.62) return 'weak';
@@ -406,25 +738,21 @@ const conceptGroup = (node: ConceptNode) => {
   if ((learner?.readinessEstimate ?? 0) >= 0.62) return 'ready';
   return 'neutral';
 };
-
 const groupTone = (group: string) => {
-  if (group === 'weak') return { fill: '#3d2518', stroke: '#ffb86c', text: '#ffd2a3', label: '薄弱' };
-  if (group === 'mastered') return { fill: '#1f3327', stroke: '#7ee787', text: '#b8f2bf', label: '已掌握' };
-  if (group === 'ready') return { fill: '#17343b', stroke: '#7dd3fc', text: '#b8ecff', label: '准备好' };
-  return { fill: '#22262d', stroke: '#8b949e', text: '#c9d1d9', label: '普通' };
+  if (group === 'weak') return { fill: '#fff0e3', stroke: '#d98a3d', text: '#8a4a0d', label: '薄弱' };
+  if (group === 'mastered') return { fill: '#e7f6ed', stroke: '#4f9f66', text: '#23633b', label: '已掌握' };
+  if (group === 'ready') return { fill: '#e7f2ff', stroke: '#4c8fd0', text: '#255d96', label: '准备好' };
+  return { fill: '#f4f5f6', stroke: '#87919d', text: '#3d4650', label: '普通' };
 };
-
 const truncateLabel = (value: string, max = 14) => {
   const text = String(value || '').trim();
   return text.length > max ? `${text.slice(0, max)}...` : text;
 };
-
 const matchesGraphQuery = (node: ConceptNode, query: string) => {
   const q = query.trim().toLowerCase();
   if (!q) return false;
   return [node.title, node.category, node.id].some((value) => String(value || '').toLowerCase().includes(q));
 };
-
 const localNodeIdsFor = (rootId: string, edges: ConceptEdge[], depth: number) => {
   const selected = new Set<string>([rootId]);
   let frontier = new Set<string>([rootId]);
@@ -440,7 +768,57 @@ const localNodeIdsFor = (rootId: string, edges: ConceptEdge[], depth: number) =>
   }
   return selected;
 };
-
+const spreadVisibleGraphComponents = (cy: Core) => {
+  const components = cy.elements(':visible').components()
+    .map((component: any) => component.nodes())
+    .filter((nodes: any) => nodes.length > 0)
+    .sort((a: any, b: any) => b.length - a.length);
+  if (components.length <= 1) return;
+  const columns = Math.ceil(Math.sqrt(components.length));
+  const gap = 360;
+  const componentMeta = components.map((nodes: any) => {
+    const box = nodes.boundingBox({ includeLabels: true, includeOverlays: false });
+    return {
+      nodes,
+      box,
+      width: Math.max(260, box.w),
+      height: Math.max(180, box.h)
+    };
+  });
+  const columnWidths = Array.from({ length: columns }, (_, column) =>
+    Math.max(...componentMeta.filter((_, index) => index % columns === column).map((meta) => meta.width), 260)
+  );
+  const rowCount = Math.ceil(componentMeta.length / columns);
+  const rowHeights = Array.from({ length: rowCount }, (_, row) =>
+    Math.max(...componentMeta.filter((_, index) => Math.floor(index / columns) === row).map((meta) => meta.height), 180)
+  );
+  const xOffsets = columnWidths.map((_, column) =>
+    columnWidths.slice(0, column).reduce((sum, width) => sum + width + gap, 0)
+  );
+  const yOffsets = rowHeights.map((_, row) =>
+    rowHeights.slice(0, row).reduce((sum, height) => sum + height + gap, 0)
+  );
+  const totalWidth = columnWidths.reduce((sum, width) => sum + width, 0) + gap * (columns - 1);
+  const totalHeight = rowHeights.reduce((sum, height) => sum + height, 0) + gap * (rowCount - 1);
+  componentMeta.forEach((meta, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const targetCenter = {
+      x: xOffsets[column] + columnWidths[column] / 2 - totalWidth / 2,
+      y: yOffsets[row] + rowHeights[row] / 2 - totalHeight / 2
+    };
+    const currentCenter = {
+      x: meta.box.x1 + meta.box.w / 2,
+      y: meta.box.y1 + meta.box.h / 2
+    };
+    const dx = targetCenter.x - currentCenter.x;
+    const dy = targetCenter.y - currentCenter.y;
+    meta.nodes.positions((node: any) => ({
+      x: node.position('x') + dx,
+      y: node.position('y') + dy
+    }));
+  });
+};
 const graphElementsFor = (
   concepts: ConceptNode[],
   edges: ConceptEdge[],
@@ -451,7 +829,7 @@ const graphElementsFor = (
   searchTerm = '',
   layoutPositions: Record<string, { x: number; y: number }> = {}
 ): ElementDefinition[] => {
-  const candidate = concepts.slice(0, 120);
+  const candidate = concepts.slice(0, 140);
   const candidateIds = new Set(candidate.map((node) => node.id));
   const candidateEdges = edges.filter((edge) => candidateIds.has(edge.from) && candidateIds.has(edge.to)).slice(0, 260);
   const degree = new Map<string, number>();
@@ -477,7 +855,7 @@ const graphElementsFor = (
   if (!selectedIds.size) {
     candidate.slice(0, 36).forEach((node) => selectedIds.add(node.id));
   }
-  const selected = candidate.filter((node) => selectedIds.has(node.id)).slice(0, scope === 'all' ? 100 : 64);
+  const selected = candidate.filter((node) => selectedIds.has(node.id)).slice(0, scope === 'all' ? 132 : 96);
   const selectedSet = new Set(selected.map((node) => node.id));
   const visibleEdges = candidateEdges.filter((edge) => selectedSet.has(edge.from) && selectedSet.has(edge.to));
   return [
@@ -489,7 +867,7 @@ const graphElementsFor = (
         fullLabel: node.title,
         group: conceptGroup(node),
         degree: degree.get(node.id) || 0,
-        size: Math.min(48, 24 + (degree.get(node.id) || 0) * 3 + (pathSet.has(node.id) ? 8 : 0)),
+        size: Math.min(17, 5.5 + Math.sqrt(degree.get(node.id) || 0) * 2.2 + (pathSet.has(node.id) ? 2.5 : 0)),
         mastery: node.learnerState?.masteryEstimate ?? 0,
         weakness: node.learnerState?.weaknessEstimate ?? 0,
         readiness: node.learnerState?.readinessEstimate ?? 0,
@@ -514,7 +892,6 @@ const graphElementsFor = (
     }))
   ];
 };
-
 function RowButton({
   children,
   selected,
@@ -537,7 +914,6 @@ function RowButton({
     </div>
   );
 }
-
 function EmptyState({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="border-y border-[#eeeeeb] py-10 text-center">
@@ -546,7 +922,6 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
     </div>
   );
 }
-
 export function KnowledgeGraphWorkbench({
   workspaceId,
   workbenchId,
@@ -569,25 +944,22 @@ export function KnowledgeGraphWorkbench({
   onSelect: (concept: ConceptNode) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const energyCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const rippleCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const cyRef = useRef<Core | null>(null);
   const selectedNodeIdRef = useRef<string | null>(selectedId || null);
-  const energyStateRef = useRef<GraphEnergyState>({
-    focusId: selectedId || null,
-    hoverId: null,
-    burstStartedAt: performance.now(),
-    pulseStartedAt: performance.now(),
-    particles: []
-  });
+  const wavePointRef = useRef<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
+  const waveFrameRef = useRef<number | null>(null);
   const conceptById = useMemo(() => new Map(concepts.map((concept) => [concept.id, concept])), [concepts]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(selectedId || null);
   const [prefs, setPrefs] = useState<GraphPrefs>(() => loadGraphPrefs(workspaceId, workbenchId));
   const [layoutCache, setLayoutCache] = useState<GraphLayoutCache>(() => loadGraphLayout(workspaceId, workbenchId));
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
-  const [showControls, setShowControls] = useState(true);
+  const [hoverInfo, setHoverInfo] = useState<{ x: number; y: number; concept: ConceptNode } | null>(null);
+  const [showControls, setShowControls] = useState(false);
   const elements = useMemo(
-    () => graphElementsFor(concepts, edges, pathIds, prefs.scope, prefs.localDepth, prefs.localRootId || selectedNodeId, searchTerm, layoutCache.positions),
-    [concepts, edges, pathIds, prefs.scope, prefs.localDepth, prefs.localRootId, selectedNodeId, searchTerm, layoutCache.positions]
+    () => graphElementsFor(concepts, edges, pathIds, prefs.scope, prefs.localDepth, prefs.localRootId || selectedNodeId, searchTerm),
+    [concepts, edges, pathIds, prefs.scope, prefs.localDepth, prefs.localRootId, selectedNodeId, searchTerm]
   );
   const graphSignature = elements.map((element) => `${element.group}:${element.data.id}`).join('|');
   const [stats, setStats] = useState({ nodes: 0, edges: 0 });
@@ -596,7 +968,6 @@ export function KnowledgeGraphWorkbench({
   const visibleGroups = useMemo(() => new Set(prefs.visibleGroups), [prefs.visibleGroups]);
   const layoutStorageKey = graphLayoutKey(workspaceId, workbenchId);
   const prefsStorageKey = graphPrefsKey(workspaceId, workbenchId);
-
   const patchPrefs = (patch: Partial<GraphPrefs>) => {
     setPrefs((current) => {
       const next = { ...current, ...patch };
@@ -604,7 +975,6 @@ export function KnowledgeGraphWorkbench({
       return next;
     });
   };
-
   const persistLayout = (cy = cyRef.current) => {
     if (!cy) return;
     const positions: Record<string, { x: number; y: number }> = {};
@@ -616,58 +986,21 @@ export function KnowledgeGraphWorkbench({
     setLayoutCache(next);
     saveJson(layoutStorageKey, next);
   };
-
-  const triggerEnergyFocus = (nodeId: string | null, mode: 'hover' | 'select' | 'clear' = 'select') => {
-    const now = performance.now();
-    energyStateRef.current.focusId = nodeId;
-    energyStateRef.current.hoverId = mode === 'hover' ? nodeId : null;
-    energyStateRef.current.burstStartedAt = now;
-    energyStateRef.current.pulseStartedAt = now;
-  };
-
-  const spawnEnergyBurst = (nodeId: string, count = 34) => {
-    const cy = cyRef.current;
-    if (!cy) return;
-    const node = cy.getElementById(nodeId);
-    if (node.empty()) return;
-    const position = node.renderedPosition();
-    const particles = energyStateRef.current.particles;
-    for (let index = 0; index < count; index += 1) {
-      const angle = (Math.PI * 2 * index) / count + Math.random() * 0.4;
-      const speed = 0.28 + Math.random() * 1.15;
-      particles.push({
-        x: position.x,
-        y: position.y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        size: 1.1 + Math.random() * 2.2,
-        alpha: 0.85,
-        hue: 188 + Math.random() * 70,
-        phase: Math.random() * Math.PI * 2
-      });
-    }
-    if (particles.length > 260) particles.splice(0, particles.length - 260);
-  };
-
   useEffect(() => {
     setSelectedNodeId(selectedId || null);
   }, [selectedId]);
-
   useEffect(() => {
     selectedNodeIdRef.current = selectedNodeId;
-    if (selectedNodeId) triggerEnergyFocus(selectedNodeId, 'select');
   }, [selectedNodeId]);
-
   useEffect(() => {
-    const canvas = energyCanvasRef.current;
-    if (!canvas || !hasGraph) return;
+    const canvas = rippleCanvasRef.current;
+    const stage = stageRef.current;
+    if (!canvas || !stage || !hasGraph) return;
     const context = canvas.getContext('2d');
     if (!context) return;
     let frame = 0;
-    let lastTime = performance.now();
-
     const resize = () => {
-      const rect = canvas.getBoundingClientRect();
+      const rect = stage.getBoundingClientRect();
       const scale = window.devicePixelRatio || 1;
       const width = Math.max(1, Math.floor(rect.width * scale));
       const height = Math.max(1, Math.floor(rect.height * scale));
@@ -675,142 +1008,34 @@ export function KnowledgeGraphWorkbench({
         canvas.width = width;
         canvas.height = height;
       }
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
       context.setTransform(scale, 0, 0, scale, 0, 0);
     };
-
-    const drawGlowLine = (
-      source: { x: number; y: number },
-      target: { x: number; y: number },
-      alpha: number,
-      color: string,
-      width: number,
-      dashOffset = 0
-    ) => {
-      context.save();
-      context.globalAlpha = alpha;
-      context.strokeStyle = color;
-      context.lineWidth = width;
-      context.lineCap = 'round';
-      context.setLineDash([2, 10]);
-      context.lineDashOffset = -dashOffset;
-      context.shadowColor = color;
-      context.shadowBlur = 16;
-      context.beginPath();
-      context.moveTo(source.x, source.y);
-      context.lineTo(target.x, target.y);
-      context.stroke();
-      context.restore();
-    };
-
     const draw = (now: number) => {
       resize();
-      const rect = canvas.getBoundingClientRect();
-      const elapsed = Math.min(48, now - lastTime);
-      lastTime = now;
+      const rect = stage.getBoundingClientRect();
       context.clearRect(0, 0, rect.width, rect.height);
-
-      const cy = cyRef.current;
-      const energy = energyStateRef.current;
-      const t = now * 0.001;
-
-      context.save();
-      for (let index = 0; index < 84; index += 1) {
-        const x = ((index * 137.7 + Math.sin(t * 0.33 + index) * 18) % Math.max(1, rect.width));
-        const y = ((index * 83.3 + Math.cos(t * 0.27 + index * 0.7) * 14) % Math.max(1, rect.height));
-        const alpha = 0.08 + Math.sin(t * 0.9 + index) * 0.035;
-        context.fillStyle = `rgba(125, 211, 252, ${alpha})`;
-        context.beginPath();
-        context.arc(x, y, index % 7 === 0 ? 1.5 : 0.9, 0, Math.PI * 2);
-        context.fill();
-      }
-      context.restore();
-
-      if (cy && energy.focusId) {
-        const focus = cy.getElementById(energy.focusId);
-        if (focus.nonempty() && focus.visible()) {
-          const focusPosition = focus.renderedPosition();
-          const burstAge = Math.max(0, now - energy.burstStartedAt);
-          const reveal = Math.min(1, burstAge / 460);
-          const breathing = 1 + Math.sin(t * 3.2) * 0.045;
-          const radius = (42 + reveal * 82) * breathing;
-
-          const gradient = context.createRadialGradient(focusPosition.x, focusPosition.y, 4, focusPosition.x, focusPosition.y, radius);
-          gradient.addColorStop(0, `rgba(240, 246, 252, ${0.34 * (1 - reveal * 0.25)})`);
-          gradient.addColorStop(0.24, 'rgba(125, 211, 252, 0.2)');
-          gradient.addColorStop(0.72, 'rgba(185, 167, 255, 0.07)');
-          gradient.addColorStop(1, 'rgba(125, 211, 252, 0)');
-          context.fillStyle = gradient;
+      const point = wavePointRef.current;
+      if (point.active) {
+        const pulse = (Math.sin(now * 0.004) + 1) / 2;
+        for (let index = 0; index < 4; index += 1) {
+          const radius = 48 + index * 58 + pulse * 26;
           context.beginPath();
-          context.arc(focusPosition.x, focusPosition.y, radius, 0, Math.PI * 2);
-          context.fill();
-
-          const firstHop = focus.neighborhood('node:visible');
-          const connectedEdges = focus.connectedEdges(':visible');
-          connectedEdges.forEach((edge: any, edgeIndex: number) => {
-            const source = edge.source().renderedPosition();
-            const target = edge.target().renderedPosition();
-            const phase = (now - energy.pulseStartedAt) * 0.11 + edgeIndex * 21;
-            drawGlowLine(source, target, 0.15 + reveal * 0.45, 'rgba(240, 246, 252, 0.92)', 1.2 + reveal * 2.1, phase);
-
-            const p = ((phase % 100) / 100);
-            const px = source.x + (target.x - source.x) * p;
-            const py = source.y + (target.y - source.y) * p;
-            context.save();
-            context.shadowColor = '#f0f6fc';
-            context.shadowBlur = 18;
-            context.fillStyle = 'rgba(240, 246, 252, 0.9)';
-            context.beginPath();
-            context.arc(px, py, 2.2 + reveal * 1.4, 0, Math.PI * 2);
-            context.fill();
-            context.restore();
-          });
-
-          firstHop.forEach((node: any, index: number) => {
-            const position = node.renderedPosition();
-            const delay = Math.min(1, Math.max(0, (burstAge - index * 22) / 360));
-            if (delay <= 0) return;
-            const orbitRadius = 15 + Math.sin(t * 2 + index) * 2.6;
-            context.save();
-            context.globalAlpha = delay * 0.75;
-            context.strokeStyle = 'rgba(247, 215, 116, 0.5)';
-            context.lineWidth = 1;
-            context.shadowColor = '#f7d774';
-            context.shadowBlur = 10;
-            context.beginPath();
-            context.arc(position.x, position.y, orbitRadius, 0, Math.PI * 2);
-            context.stroke();
-            context.restore();
-          });
+          context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+          context.strokeStyle = `rgba(75, 86, 99, ${0.055 - index * 0.009})`;
+          context.lineWidth = 1;
+          context.stroke();
         }
+        const gradient = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, 180);
+        gradient.addColorStop(0, 'rgba(35, 39, 47, 0.035)');
+        gradient.addColorStop(0.42, 'rgba(35, 39, 47, 0.015)');
+        gradient.addColorStop(1, 'rgba(35, 39, 47, 0)');
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, rect.width, rect.height);
       }
-
-      const particles = energy.particles;
-      for (let index = particles.length - 1; index >= 0; index -= 1) {
-        const particle = particles[index];
-        particle.x += particle.vx * elapsed;
-        particle.y += particle.vy * elapsed;
-        particle.vx *= 0.986;
-        particle.vy *= 0.986;
-        particle.alpha -= elapsed * 0.0017;
-        particle.phase += elapsed * 0.008;
-        if (particle.alpha <= 0) {
-          particles.splice(index, 1);
-          continue;
-        }
-        context.save();
-        context.globalAlpha = particle.alpha;
-        context.fillStyle = `hsla(${particle.hue}, 90%, 72%, 0.9)`;
-        context.shadowColor = `hsla(${particle.hue}, 90%, 72%, 0.8)`;
-        context.shadowBlur = 11;
-        context.beginPath();
-        context.arc(particle.x + Math.sin(particle.phase) * 3, particle.y + Math.cos(particle.phase) * 3, particle.size, 0, Math.PI * 2);
-        context.fill();
-        context.restore();
-      }
-
       frame = window.requestAnimationFrame(draw);
     };
-
     frame = window.requestAnimationFrame(draw);
     window.addEventListener('resize', resize);
     return () => {
@@ -818,7 +1043,6 @@ export function KnowledgeGraphWorkbench({
       window.removeEventListener('resize', resize);
     };
   }, [hasGraph, graphSignature]);
-
   useEffect(() => {
     const nextPrefs = loadGraphPrefs(workspaceId, workbenchId);
     const nextLayout = loadGraphLayout(workspaceId, workbenchId);
@@ -826,10 +1050,9 @@ export function KnowledgeGraphWorkbench({
     setLayoutCache(nextLayout);
     setSelectedNodeId(selectedId || nextPrefs.localRootId || null);
   }, [workspaceId, workbenchId]);
-
   useEffect(() => {
     if (!containerRef.current || !hasGraph) return;
-    const usePreset = elements.some((element) => element.group === 'nodes' && element.position);
+    const usePreset = false;
     const cy = cytoscape({
       container: containerRef.current,
       elements,
@@ -848,56 +1071,52 @@ export function KnowledgeGraphWorkbench({
           style: {
             width: (ele: any) => Number(ele.data('size') || 28) * prefs.nodeScale,
             height: (ele: any) => Number(ele.data('size') || 28) * prefs.nodeScale,
-            label: (ele: any) => prefs.showNodeLabels && (ele.data('degree') >= 3 || ele.data('path') || ele.data('matched')) ? ele.data('label') : '',
-            'font-size': 10.5,
-            'font-weight': 600,
-            'text-margin-y': 11,
+            label: (ele: any) => prefs.showNodeLabels && (ele.data('degree') >= 4 || ele.data('path') || ele.data('matched')) ? ele.data('label') : '',
+            'font-size': 8.5,
+            'font-weight': 500,
+            'text-margin-y': 8,
             'text-wrap': 'wrap',
-            'text-max-width': 132,
-            'text-background-color': '#101820',
-            'text-background-opacity': 0.72,
-            'text-background-padding': 5,
-            'text-border-color': '#30363d',
-            'text-border-width': 1,
-            'text-border-opacity': 0.75,
-            color: '#d6deeb',
-            'background-color': '#22262d',
-            'border-color': '#8b949e',
-            'border-width': 2.2,
-            'shadow-blur': 14,
-            'shadow-opacity': 0.22,
-            'shadow-color': '#8b949e',
+            'text-max-width': 112,
+            'text-background-opacity': 0,
+            'text-border-opacity': 0,
+            'text-opacity': 0.58,
+            color: '#73777d',
+            'background-color': '#5f6368',
+            'border-color': '#ffffff',
+            'border-width': 0.8,
+            'shadow-blur': 0,
+            'shadow-opacity': 0,
             'overlay-opacity': 0,
             'transition-property': 'opacity, background-color, border-color, width, height, line-color, target-arrow-color',
-            'transition-duration': 120
+            'transition-duration': 160
           }
         },
         {
           selector: 'node[group = "weak"]',
-          style: { 'background-color': '#3d2518', 'border-color': '#ffb86c', 'shadow-color': '#ffb86c' }
+          style: { 'background-color': '#6a6a6a', 'border-color': '#ffffff' }
         },
         {
           selector: 'node[group = "ready"]',
-          style: { 'background-color': '#17343b', 'border-color': '#7dd3fc', 'shadow-color': '#7dd3fc' }
+          style: { 'background-color': '#4f5358', 'border-color': '#ffffff' }
         },
         {
           selector: 'node[group = "mastered"]',
-          style: { 'background-color': '#1f3327', 'border-color': '#7ee787', 'shadow-color': '#7ee787' }
+          style: { 'background-color': '#8b8f94', 'border-color': '#ffffff' }
         },
         {
           selector: 'node[path]',
-          style: { 'border-color': '#f0f6fc', 'border-width': 3.5, 'shadow-opacity': 0.5 }
+          style: { 'background-color': '#303236', 'border-width': 1.2 }
         },
         {
           selector: 'node[matched]',
           style: {
-            'background-color': '#2a3340',
-            'border-color': '#f7d774',
-            'border-width': 4.2,
-            'shadow-color': '#f7d774',
-            'shadow-opacity': 0.72,
-            'shadow-blur': 30,
+            'background-color': '#202124',
+            'border-color': '#ffffff',
+            'border-width': 1.4,
+            'shadow-opacity': 0,
             label: 'data(label)',
+            'text-opacity': 0.86,
+            color: '#202124',
             'z-index': 16
           }
         },
@@ -911,95 +1130,89 @@ export function KnowledgeGraphWorkbench({
         {
           selector: 'edge',
           style: {
-            width: (ele: any) => Math.max(2.4, Math.min(8, Number(ele.data('weight') || 0.6) * 5.8 * prefs.edgeScale)),
-            'curve-style': 'bezier',
-            'control-point-step-size': 38,
-            'line-color': '#4f5b69',
-            'target-arrow-color': '#4f5b69',
-            'target-arrow-shape': 'triangle',
-            'arrow-scale': 1.05,
-            opacity: 0.34,
+            width: (ele: any) => Math.max(0.45, Math.min(1.15, Number(ele.data('weight') || 0.6) * 0.9 * prefs.edgeScale)),
+            'curve-style': 'haystack',
+            'haystack-radius': 0,
+            'line-color': '#b7bcc2',
+            'target-arrow-shape': 'none',
+            opacity: 0.32,
             label: (ele: any) => prefs.showEdgeLabels && ele.data('path') ? ele.data('label') : '',
-            'font-size': 9,
-            'font-weight': 600,
-            color: '#c9d1d9',
-            'text-background-color': '#0f141b',
-            'text-background-opacity': 0.82,
-            'text-background-padding': 3,
+            'font-size': 8,
+            'font-weight': 500,
+            color: '#8a8e94',
+            'text-background-opacity': 0,
             'text-rotation': 'autorotate',
             'line-style': 'solid'
           }
         },
-        { selector: 'edge[relationType = "prerequisite"]', style: { 'line-color': '#6fae78', 'target-arrow-color': '#6fae78', width: 3.6 } },
-        { selector: 'edge[relationType = "part_of"]', style: { 'line-color': '#8f7fe0', 'target-arrow-color': '#8f7fe0', 'line-style': 'dashed' } },
-        { selector: 'edge[relationType = "assesses"]', style: { 'line-color': '#c98642', 'target-arrow-color': '#c98642', 'line-style': 'dotted' } },
-        { selector: 'edge[relationType = "remediates"]', style: { 'line-color': '#d15f5f', 'target-arrow-color': '#d15f5f', 'line-style': 'dashed' } },
-        { selector: 'edge[relationType = "supports"]', style: { 'line-color': '#579ed1', 'target-arrow-color': '#579ed1' } },
-        { selector: 'edge[path]', style: { 'line-color': '#f0f6fc', 'target-arrow-color': '#f0f6fc', width: 6.5, opacity: 1, 'z-index': 5 } },
-        { selector: '.faded', style: { opacity: 0.035, label: '' } },
-        { selector: '.neighbor', style: { opacity: 0.55 } },
-        { selector: '.neighbor-1', style: { opacity: 1, label: 'data(label)', 'border-width': 3.2, 'shadow-opacity': 0.42, 'shadow-blur': 22 } },
-        { selector: '.neighbor-2', style: { opacity: 0.42, 'border-width': 2.4, 'shadow-opacity': 0.16 } },
+        { selector: 'edge[relationType = "prerequisite"]', style: { 'line-color': '#aab0b6' } },
+        { selector: 'edge[relationType = "part_of"]', style: { 'line-color': '#b6b3c8' } },
+        { selector: 'edge[relationType = "assesses"]', style: { 'line-color': '#c3b4a3' } },
+        { selector: 'edge[relationType = "remediates"]', style: { 'line-color': '#c6abaa' } },
+        { selector: 'edge[relationType = "supports"]', style: { 'line-color': '#a8bac8' } },
+        { selector: 'edge[path]', style: { 'line-color': '#9ca3aa', width: 1.35, opacity: 0.55, 'z-index': 5 } },
+        { selector: '.faded', style: { opacity: 0.18, label: '' } },
+        { selector: '.neighbor', style: { opacity: 0.68 } },
+        { selector: '.neighbor-1', style: { opacity: 1, label: 'data(label)', 'text-opacity': 0.86, 'border-width': 1.2 } },
+        { selector: '.wave-near', style: { opacity: 1, 'background-color': '#202124', 'text-opacity': 0.72, width: (ele: any) => Number(ele.data('size') || 8) * prefs.nodeScale * 1.35, height: (ele: any) => Number(ele.data('size') || 8) * prefs.nodeScale * 1.35 } },
+        { selector: '.wave-mid', style: { opacity: 0.78, 'background-color': '#3f4247' } },
+        { selector: 'edge.wave-near', style: { opacity: 0.68, width: 1.25, 'line-color': '#6f7680' } },
+        { selector: 'edge.wave-mid', style: { opacity: 0.45, 'line-color': '#969da5' } },
         { selector: '.hidden-filter', style: { display: 'none' } },
         {
           selector: '.focused',
           style: {
-            'border-color': '#f0f6fc',
-            'border-width': 4.6,
+            'background-color': '#111214',
+            'border-color': '#ffffff',
+            'border-width': 1.4,
             label: 'data(label)',
-            'text-background-opacity': 0.96,
-            'shadow-blur': 28,
-            'shadow-opacity': 0.72,
-            'shadow-color': '#f0f6fc',
+            color: '#202124',
+            'text-opacity': 1,
             'z-index': 20
           }
         },
         {
           selector: 'edge.focused',
           style: {
-            opacity: 1,
-            width: 8.5,
+            opacity: 0.78,
+            width: 1.65,
             label: 'data(label)',
+            'line-color': '#555d66',
             'z-index': 18
           }
         },
         {
           selector: 'edge.neighbor-1',
           style: {
-            opacity: 0.92,
-            width: 5.8,
+            opacity: 0.6,
+            width: 1.2,
             label: 'data(label)'
           }
         },
-        {
-          selector: 'edge.neighbor-2',
-          style: {
-            opacity: 0.28,
-            width: 2.8
-          }
-        },
-        { selector: 'edge.search-path', style: { opacity: 1, width: 7, 'line-color': '#f7d774', 'target-arrow-color': '#f7d774', 'z-index': 17 } }
+        { selector: 'edge.search-path', style: { opacity: 0.85, width: 1.7, 'line-color': '#555d66', 'z-index': 17 } }
       ] as any),
       layout: {
         name: usePreset ? 'preset' : 'fcose',
-        quality: 'proof',
+        quality: 'default',
         randomize: !usePreset,
         animate: !usePreset,
-        animationDuration: 420,
+        animationDuration: 760,
         fit: !usePreset,
         padding: 70,
-        nodeRepulsion: 12000 * prefs.repelForce,
-        idealEdgeLength: (edge: any) => (edge.data('relationType') === 'prerequisite' ? 190 : 142) * prefs.linkDistance,
-        edgeElasticity: 0.24,
+        nodeSeparation: 280 * prefs.linkDistance,
+        nodeRepulsion: 24000 * prefs.repelForce,
+        idealEdgeLength: (edge: any) => (edge.data('relationType') === 'prerequisite' ? 330 : 260) * prefs.linkDistance,
+        edgeElasticity: 0.12,
         nestingFactor: 0.1,
-        gravity: 0.07 * prefs.centerForce,
+        gravity: 0.018 * prefs.centerForce,
         gravityRangeCompound: 1.5,
         gravityCompound: 0.6,
-        numIter: 3200,
-        tile: prefs.scope === 'all'
+        numIter: 2200,
+        tile: true,
+        tilingPaddingVertical: 180,
+        tilingPaddingHorizontal: 220
       } as any
     });
-
     cyRef.current = cy;
     const updateStats = () => setStats({
       nodes: cy.nodes(':visible').length,
@@ -1010,69 +1223,74 @@ export function KnowledgeGraphWorkbench({
       cy.zoom(layoutCache.zoom);
       cy.pan(layoutCache.pan);
     }
-
     const clearFocus = () => {
-      cy.elements().removeClass('faded neighbor neighbor-1 neighbor-2 focused search-path');
+      cy.elements().removeClass('faded neighbor neighbor-1 focused search-path');
       setSelectedNodeId(null);
       setContextMenu(null);
-      triggerEnergyFocus(null, 'clear');
+      setHoverInfo(null);
     };
-    const focusNode = (node: any, persist = false, zoom = false, mode: 'hover' | 'select' = 'hover') => {
+    const focusNode = (node: any, persist = false, zoom = false) => {
       const oneHop = node.closedNeighborhood();
-      const twoHop = oneHop.neighborhood('node').closedNeighborhood();
-      cy.elements().addClass('faded').removeClass('neighbor neighbor-1 neighbor-2 focused search-path');
+      cy.elements().addClass('faded').removeClass('neighbor neighbor-1 focused search-path');
       oneHop.removeClass('faded').addClass('neighbor neighbor-1');
-      twoHop.removeClass('faded').addClass('neighbor neighbor-2');
-      node.removeClass('neighbor neighbor-1 neighbor-2').addClass('focused');
+      node.removeClass('neighbor neighbor-1').addClass('focused');
       node.connectedEdges().addClass('focused');
       oneHop.connectedEdges().difference(node.connectedEdges()).addClass('neighbor-1');
-      twoHop.connectedEdges().difference(node.connectedEdges()).addClass('neighbor-2');
       if (persist) {
         setSelectedNodeId(node.id());
         const concept = conceptById.get(node.id());
         if (concept) onSelect(concept);
       }
-      triggerEnergyFocus(node.id(), mode);
-      if (mode === 'select') spawnEnergyBurst(node.id(), 42);
       if (zoom) {
         cy.animate({ fit: { eles: oneHop, padding: 90 } }, { duration: 280 });
       }
     };
-
-    cy.on('mouseover', 'node', (event) => focusNode(event.target, false, false, 'hover'));
+    cy.on('mouseover', 'node', (event) => {
+      focusNode(event.target);
+      const concept = conceptById.get(event.target.id());
+      if (concept) setHoverInfo({ x: event.renderedPosition.x, y: event.renderedPosition.y, concept });
+    });
+    cy.on('mousemove', 'node', (event) => {
+      const concept = conceptById.get(event.target.id());
+      if (concept) setHoverInfo({ x: event.renderedPosition.x, y: event.renderedPosition.y, concept });
+    });
     cy.on('mouseout', 'node', () => {
+      setHoverInfo(null);
       if (selectedNodeIdRef.current) {
         const node = cy.getElementById(selectedNodeIdRef.current);
-        if (node.nonempty()) focusNode(node, true, false, 'select');
+        if (node.nonempty()) focusNode(node, true, false);
       } else {
-        cy.elements().removeClass('faded neighbor neighbor-1 neighbor-2 focused search-path');
-        triggerEnergyFocus(null, 'clear');
+        cy.elements().removeClass('faded neighbor neighbor-1 focused search-path');
       }
     });
     cy.on('tap', 'node', (event) => {
       setContextMenu(null);
-      focusNode(event.target, true, true, 'select');
+      focusNode(event.target, true, true);
     });
     cy.on('cxttap', 'node', (event) => {
       const node = event.target;
       setSelectedNodeId(node.id());
-      focusNode(node, true, true, 'select');
+      focusNode(node, true, true);
       setContextMenu({ x: event.renderedPosition.x, y: event.renderedPosition.y, nodeId: node.id() });
     });
     cy.on('tap', (event) => {
       if (event.target === cy) clearFocus();
     });
-    cy.on('grab', 'node', (event) => {
-      triggerEnergyFocus(event.target.id(), 'select');
-      spawnEnergyBurst(event.target.id(), 18);
-    });
-    cy.on('free', 'node', (event) => {
-      triggerEnergyFocus(event.target.id(), 'select');
-    });
-    cy.on('position', 'node', (event) => {
-      if (selectedNodeIdRef.current === event.target.id()) {
-        triggerEnergyFocus(event.target.id(), 'select');
-      }
+    cy.on('free', 'node', () => {
+      cy.layout({
+        name: 'fcose',
+        quality: 'default',
+        randomize: false,
+        animate: true,
+        animationDuration: 520,
+        fit: false,
+        nodeSeparation: 240 * prefs.linkDistance,
+        nodeRepulsion: 16000 * prefs.repelForce,
+        idealEdgeLength: (edge: any) => (edge.data('relationType') === 'prerequisite' ? 300 : 230) * prefs.linkDistance,
+        edgeElasticity: 0.14,
+        gravity: 0.02 * prefs.centerForce,
+        numIter: 620
+      } as any).run();
     });
     cy.on('dragfree', 'node', () => persistLayout(cy));
     cy.on('zoom pan', () => {
@@ -1080,18 +1298,18 @@ export function KnowledgeGraphWorkbench({
       (persistLayout as any).timer = window.setTimeout(() => persistLayout(cy), 240);
     });
     cy.on('layoutstop', () => {
+      spreadVisibleGraphComponents(cy);
+      cy.fit(cy.elements(':visible'), 110);
       updateStats();
       persistLayout(cy);
     });
     cy.on('remove add style', updateStats);
-
     return () => {
       persistLayout(cy);
       cy.destroy();
       cyRef.current = null;
     };
   }, [graphSignature, prefs.nodeScale, prefs.edgeScale, prefs.repelForce, prefs.linkDistance, prefs.centerForce]);
-
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -1107,19 +1325,17 @@ export function KnowledgeGraphWorkbench({
     });
     setStats({ nodes: cy.nodes(':visible').length, edges: cy.edges(':visible').length });
   }, [visibleRelations, visibleGroups, graphSignature]);
-
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
     cy.nodes().forEach((node) => {
-      const show = prefs.showNodeLabels && (node.data('degree') >= 3 || node.data('path') || node.data('matched') || node.id() === selectedNodeId);
+      const show = prefs.showNodeLabels && (node.data('degree') >= 4 || node.data('path') || node.data('matched') || node.id() === selectedNodeId);
       node.style('label', show ? node.data('label') : '');
     });
     cy.edges().forEach((edge) => {
       edge.style('label', prefs.showEdgeLabels && (edge.data('path') || edge.hasClass('focused')) ? edge.data('label') : '');
     });
   }, [prefs.showNodeLabels, prefs.showEdgeLabels, selectedNodeId, graphSignature]);
-
   const fitGraph = () => cyRef.current?.fit(undefined, 70);
   const runLayout = () => {
     const cy = cyRef.current;
@@ -1129,17 +1345,20 @@ export function KnowledgeGraphWorkbench({
     cy.nodes().unlock();
     cy.layout({
       name: 'fcose',
-      quality: 'proof',
+      quality: 'default',
       animate: true,
-      animationDuration: 420,
+      animationDuration: 640,
       fit: true,
       padding: 70,
-      nodeRepulsion: 12000 * prefs.repelForce,
-      idealEdgeLength: (edge: any) => (edge.data('relationType') === 'prerequisite' ? 190 : 142) * prefs.linkDistance,
-      edgeElasticity: 0.24,
-      gravity: 0.07 * prefs.centerForce,
-      numIter: 2600,
-      tile: prefs.scope === 'all'
+      nodeSeparation: 280 * prefs.linkDistance,
+      nodeRepulsion: 24000 * prefs.repelForce,
+      idealEdgeLength: (edge: any) => (edge.data('relationType') === 'prerequisite' ? 330 : 260) * prefs.linkDistance,
+      edgeElasticity: 0.12,
+      gravity: 0.018 * prefs.centerForce,
+      numIter: 2000,
+      tile: true,
+      tilingPaddingVertical: 180,
+      tilingPaddingHorizontal: 220
     } as any).run();
   };
   const zoomBy = (factor: number) => {
@@ -1167,67 +1386,71 @@ export function KnowledgeGraphWorkbench({
     if (!cy) return;
     const node = cy.getElementById(nodeId);
     if (node.empty()) return;
-    cy.elements().addClass('faded').removeClass('neighbor neighbor-1 neighbor-2 focused search-path');
+    cy.elements().addClass('faded').removeClass('neighbor neighbor-1 focused search-path');
     const oneHop = node.closedNeighborhood();
-    const twoHop = oneHop.neighborhood('node').closedNeighborhood();
     oneHop.removeClass('faded').addClass('neighbor neighbor-1');
-    twoHop.removeClass('faded').addClass('neighbor neighbor-2');
-    node.removeClass('neighbor neighbor-1 neighbor-2').addClass('focused');
+    node.removeClass('neighbor neighbor-1').addClass('focused');
     node.connectedEdges().addClass('focused');
     oneHop.connectedEdges().difference(node.connectedEdges()).addClass('neighbor-1');
-    twoHop.connectedEdges().difference(node.connectedEdges()).addClass('neighbor-2');
     setSelectedNodeId(nodeId);
     const concept = conceptById.get(nodeId);
     if (concept) onSelect(concept);
-    triggerEnergyFocus(nodeId, 'select');
-    spawnEnergyBurst(nodeId, 42);
     if (zoom) cy.animate({ fit: { eles: oneHop, padding: 90 } }, { duration: 280 });
-  };
-  const pinNode = (nodeId: string) => {
-    const cy = cyRef.current;
-    if (!cy) return;
-    const node = cy.getElementById(nodeId);
-    if (node.empty()) return;
-    node.lock();
-    node.data('pinned', 'yes');
-    persistLayout(cy);
-  };
-  const unpinNode = (nodeId: string) => {
-    const next = { ...layoutCache.positions };
-    delete next[nodeId];
-    const cache = { ...layoutCache, positions: next };
-    setLayoutCache(cache);
-    saveJson(layoutStorageKey, cache);
-    const node = cyRef.current?.getElementById(nodeId);
-    node?.unlock();
-    node?.data('pinned', 'no');
   };
   const openLocalGraph = (nodeId: string) => {
     patchPrefs({ scope: 'local', localRootId: nodeId });
     setSelectedNodeId(nodeId);
     setContextMenu(null);
-    triggerEnergyFocus(nodeId, 'select');
-    spawnEnergyBurst(nodeId, 58);
   };
   const resetDisplay = () => {
     patchPrefs({ ...DEFAULT_GRAPH_PREFS, localRootId: selectedNodeId });
+  };
+  const updateGraphWave = (x: number, y: number) => {
+    wavePointRef.current = { x, y, active: true };
+    if (waveFrameRef.current !== null) return;
+    waveFrameRef.current = window.requestAnimationFrame(() => {
+      waveFrameRef.current = null;
+      const cy = cyRef.current;
+      if (!cy) return;
+      cy.elements().removeClass('wave-near wave-mid');
+      cy.nodes(':visible').forEach((node) => {
+        const position = node.renderedPosition();
+        const distance = Math.hypot(position.x - x, position.y - y);
+        if (distance < 118) node.addClass('wave-near');
+        else if (distance < 245) node.addClass('wave-mid');
+      });
+      cy.edges(':visible').forEach((edge) => {
+        const source = edge.source().renderedPosition();
+        const target = edge.target().renderedPosition();
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
+        const lengthSquared = dx * dx + dy * dy || 1;
+        const t = Math.max(0, Math.min(1, ((x - source.x) * dx + (y - source.y) * dy) / lengthSquared));
+        const px = source.x + t * dx;
+        const py = source.y + t * dy;
+        const distance = Math.hypot(px - x, py - y);
+        if (distance < 92) edge.addClass('wave-near');
+        else if (distance < 180) edge.addClass('wave-mid');
+      });
+    });
+  };
+  const clearGraphWave = () => {
+    wavePointRef.current.active = false;
+    cyRef.current?.elements().removeClass('wave-near wave-mid');
   };
   const matchedConcepts = useMemo(
     () => searchTerm.trim() ? concepts.filter((concept) => matchesGraphQuery(concept, searchTerm)).slice(0, 8) : [],
     [concepts, searchTerm]
   );
   const selectedConcept = selectedNodeId ? conceptById.get(selectedNodeId) : null;
-
   if (!hasGraph) {
     return <EmptyState title="还没有知识结构" detail="上传并索引课程资料，或通过学习现场生成测验和计划后，知识对象会出现在这里。" />;
   }
-
   const isFullscreen = variant === 'fullscreen';
-
   return (
-    <div className={`overflow-hidden bg-[#0f141b] ${isFullscreen ? 'h-full rounded-none' : 'border-y border-[#202832]'}`}>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#202832] bg-[#0f141b] px-3 py-2">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-[#b7c0cc]">
+    <div className={`overflow-hidden bg-[#fbfbfa] text-[#202124] ${isFullscreen ? 'h-full rounded-none' : 'border-y border-[#e5e7eb]'}`}>
+      <div className="hidden flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] bg-white px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-[#55585d]">
           {DEFAULT_VISIBLE_RELATIONS.map((type) => {
             const meta = relationMeta(type);
             const enabled = visibleRelations.has(type);
@@ -1236,7 +1459,7 @@ export function KnowledgeGraphWorkbench({
                 key={type}
                 type="button"
                 onClick={() => toggleRelation(type)}
-                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 transition ${enabled ? 'bg-[#161b22] text-[#e6edf3] shadow-sm ring-1 ring-[#30363d]' : 'text-[#768390] opacity-60'}`}
+                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 transition ${enabled ? 'bg-[#f4f5f6] text-[#202124] shadow-sm ring-1 ring-[#d8dde4]' : 'text-[#8a8e94] opacity-60'}`}
                 title={`${enabled ? '隐藏' : '显示'}${meta.label}关系`}
               >
                 <span className="h-0.5 w-7 rounded-full" style={{ backgroundColor: meta.stroke }} />
@@ -1245,7 +1468,7 @@ export function KnowledgeGraphWorkbench({
             );
           })}
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-[#b7c0cc]">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-[#55585d]">
           {DEFAULT_VISIBLE_GROUPS.map((group) => {
             const tone = groupTone(group);
             const enabled = visibleGroups.has(group);
@@ -1254,7 +1477,7 @@ export function KnowledgeGraphWorkbench({
                 key={group}
                 type="button"
                 onClick={() => toggleGroup(group)}
-                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 transition ${enabled ? 'text-[#d6deeb]' : 'text-[#768390] opacity-55'}`}
+                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 transition ${enabled ? 'text-[#34373c]' : 'text-[#8a8e94] opacity-55'}`}
                 title={`${enabled ? '隐藏' : '显示'}${tone.label}节点`}
               >
                 <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: tone.fill, boxShadow: `0 0 0 1.5px ${tone.stroke}` }} />
@@ -1264,32 +1487,39 @@ export function KnowledgeGraphWorkbench({
           })}
         </div>
       </div>
-      <div className={`relative ${isFullscreen ? 'h-full' : 'h-[720px]'} bg-[#0f141b] bg-[radial-gradient(circle_at_1px_1px,#26303a_1.1px,transparent_0)] [background-size:28px_28px]`}>
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_32%_24%,rgba(125,211,252,0.14),transparent_30%),radial-gradient(circle_at_72%_70%,rgba(185,167,255,0.11),transparent_30%)]" />
-        <canvas ref={energyCanvasRef} className="pointer-events-none absolute inset-0 z-[1] h-full w-full" />
-        <div className="absolute left-3 top-3 z-10 flex flex-wrap items-center gap-1 rounded-lg border border-[#30363d] bg-[#161b22]/92 p-1 shadow-[0_18px_50px_rgba(0,0,0,0.34)] backdrop-blur">
-          <button type="button" onClick={() => zoomBy(1.16)} className="rounded-md p-1.5 text-[#c9d1d9] hover:bg-[#30363d]" title="Zoom in">
+      <div
+        ref={stageRef}
+        onMouseMove={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          updateGraphWave(event.clientX - rect.left, event.clientY - rect.top);
+        }}
+        onMouseLeave={clearGraphWave}
+        className={`relative ${isFullscreen ? 'h-full' : 'h-[720px]'} bg-white`}
+      >
+        <canvas ref={rippleCanvasRef} className="pointer-events-none absolute inset-0 z-[1]" />
+        <div className="absolute left-3 top-3 z-10 flex flex-wrap items-center gap-0.5 rounded-md border border-[#dfe3e8] bg-white/82 p-1 shadow-sm backdrop-blur">
+          <button type="button" onClick={() => zoomBy(1.16)} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="Zoom in">
             <ZoomIn className="h-4 w-4" />
           </button>
-          <button type="button" onClick={() => zoomBy(0.86)} className="rounded-md p-1.5 text-[#c9d1d9] hover:bg-[#30363d]" title="Zoom out">
+          <button type="button" onClick={() => zoomBy(0.86)} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="Zoom out">
             <ZoomOut className="h-4 w-4" />
           </button>
-          <button type="button" onClick={fitGraph} className="rounded-md p-1.5 text-[#c9d1d9] hover:bg-[#30363d]" title="Fit graph">
+          <button type="button" onClick={fitGraph} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="Fit graph">
             <Maximize2 className="h-4 w-4" />
           </button>
-          <button type="button" onClick={runLayout} className="rounded-md p-1.5 text-[#c9d1d9] hover:bg-[#30363d]" title="Run force layout">
+          <button type="button" onClick={runLayout} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="Run force layout">
             <RefreshCw className="h-4 w-4" />
           </button>
-          <button type="button" onClick={() => setShowControls((current) => !current)} className="rounded-md p-1.5 text-[#c9d1d9] hover:bg-[#30363d]" title="Display controls">
+          <button type="button" onClick={() => setShowControls((current) => !current)} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="Display controls">
             <SlidersHorizontal className="h-4 w-4" />
           </button>
-          <span className="mx-1 h-5 w-px bg-[#30363d]" />
+          <span className="mx-1 h-5 w-px bg-[#e5e7eb]" />
           {(['connected', 'local', 'all'] as GraphScope[]).map((item) => (
             <button
               key={item}
               type="button"
               onClick={() => patchPrefs({ scope: item, localRootId: item === 'local' ? (selectedNodeId || prefs.localRootId) : prefs.localRootId })}
-              className={`h-7 rounded-md px-2 text-xs font-medium ${prefs.scope === item ? 'bg-[#e6edf3] text-[#0f141b]' : 'text-[#c9d1d9] hover:bg-[#30363d]'}`}
+              className={`h-7 rounded px-2 text-xs font-medium ${prefs.scope === item ? 'bg-[#202124] text-white' : 'text-[#6b7077] hover:bg-[#f4f5f6]'}`}
             >
               {item === 'connected' ? 'Connected' : item === 'local' ? 'Local' : 'All'}
             </button>
@@ -1297,7 +1527,7 @@ export function KnowledgeGraphWorkbench({
           <button
             type="button"
             onClick={() => patchPrefs({ showNodeLabels: !prefs.showNodeLabels })}
-            className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium ${prefs.showNodeLabels ? 'bg-[#e6edf3] text-[#0f141b]' : 'text-[#c9d1d9] hover:bg-[#30363d]'}`}
+            className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs font-medium ${prefs.showNodeLabels ? 'bg-[#202124] text-white' : 'text-[#6b7077] hover:bg-[#f4f5f6]'}`}
           >
             {prefs.showNodeLabels ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
             Nodes
@@ -1305,106 +1535,104 @@ export function KnowledgeGraphWorkbench({
           <button
             type="button"
             onClick={() => patchPrefs({ showEdgeLabels: !prefs.showEdgeLabels })}
-            className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium ${prefs.showEdgeLabels ? 'bg-[#e6edf3] text-[#0f141b]' : 'text-[#c9d1d9] hover:bg-[#30363d]'}`}
+            className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs font-medium ${prefs.showEdgeLabels ? 'bg-[#202124] text-white' : 'text-[#6b7077] hover:bg-[#f4f5f6]'}`}
           >
             <Filter className="h-3.5 w-3.5" />
             Edges
           </button>
         </div>
-
         {showControls ? (
-          <div className="absolute right-3 top-3 z-10 w-[286px] rounded-lg border border-[#30363d] bg-[#161b22]/94 p-3 text-xs text-[#c9d1d9] shadow-[0_18px_50px_rgba(0,0,0,0.34)] backdrop-blur">
+          <div className="absolute right-3 top-3 z-10 w-[286px] rounded-lg border border-[#d8dde4] bg-white/94 p-3 text-xs text-[#4d5864] shadow-sm backdrop-blur">
             <div className="mb-3 flex items-center justify-between">
-              <p className="font-semibold text-[#e6edf3]">Graph controls</p>
-              <button type="button" onClick={resetDisplay} className="rounded-md px-2 py-1 text-[#9da7b3] hover:bg-[#30363d]">Reset</button>
+              <p className="font-semibold text-[#202124]">Graph controls</p>
+              <button type="button" onClick={resetDisplay} className="rounded-md px-2 py-1 text-[#666a70] hover:bg-[#f1f3f5]">Reset</button>
             </div>
             <div className="space-y-3">
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#9da7b3]"><span>Local depth</span><span>{prefs.localDepth}</span></span>
-                <input type="range" min={1} max={4} value={prefs.localDepth} onChange={(event) => patchPrefs({ localDepth: Number(event.target.value) })} className="w-full accent-[#7dd3fc]" />
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>Local depth</span><span>{prefs.localDepth}</span></span>
+                <input type="range" min={1} max={4} value={prefs.localDepth} onChange={(event) => patchPrefs({ localDepth: Number(event.target.value) })} className="w-full accent-[#4386b5]" />
               </label>
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#9da7b3]"><span>Node size</span><span>{prefs.nodeScale.toFixed(1)}x</span></span>
-                <input type="range" min={0.7} max={1.6} step={0.1} value={prefs.nodeScale} onChange={(event) => patchPrefs({ nodeScale: Number(event.target.value) })} className="w-full accent-[#7dd3fc]" />
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>Node size</span><span>{prefs.nodeScale.toFixed(1)}x</span></span>
+                <input type="range" min={0.7} max={1.6} step={0.1} value={prefs.nodeScale} onChange={(event) => patchPrefs({ nodeScale: Number(event.target.value) })} className="w-full accent-[#4386b5]" />
               </label>
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#9da7b3]"><span>Link thickness</span><span>{prefs.edgeScale.toFixed(1)}x</span></span>
-                <input type="range" min={0.7} max={1.8} step={0.1} value={prefs.edgeScale} onChange={(event) => patchPrefs({ edgeScale: Number(event.target.value) })} className="w-full accent-[#9bd889]" />
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>Link thickness</span><span>{prefs.edgeScale.toFixed(1)}x</span></span>
+                <input type="range" min={0.7} max={1.8} step={0.1} value={prefs.edgeScale} onChange={(event) => patchPrefs({ edgeScale: Number(event.target.value) })} className="w-full accent-[#5b8f66]" />
               </label>
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#9da7b3]"><span>Repel force</span><span>{prefs.repelForce.toFixed(1)}x</span></span>
-                <input type="range" min={0.6} max={2.2} step={0.1} value={prefs.repelForce} onChange={(event) => patchPrefs({ repelForce: Number(event.target.value) })} className="w-full accent-[#b9a7ff]" />
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>Repel force</span><span>{prefs.repelForce.toFixed(1)}x</span></span>
+                <input type="range" min={0.6} max={2.2} step={0.1} value={prefs.repelForce} onChange={(event) => patchPrefs({ repelForce: Number(event.target.value) })} className="w-full accent-[#7b6fd1]" />
               </label>
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#9da7b3]"><span>Link distance</span><span>{prefs.linkDistance.toFixed(1)}x</span></span>
-                <input type="range" min={0.7} max={1.8} step={0.1} value={prefs.linkDistance} onChange={(event) => patchPrefs({ linkDistance: Number(event.target.value) })} className="w-full accent-[#ffb86c]" />
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>Link distance</span><span>{prefs.linkDistance.toFixed(1)}x</span></span>
+                <input type="range" min={0.7} max={1.8} step={0.1} value={prefs.linkDistance} onChange={(event) => patchPrefs({ linkDistance: Number(event.target.value) })} className="w-full accent-[#c17b32]" />
               </label>
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#9da7b3]"><span>Center force</span><span>{prefs.centerForce.toFixed(1)}x</span></span>
-                <input type="range" min={0.4} max={1.8} step={0.1} value={prefs.centerForce} onChange={(event) => patchPrefs({ centerForce: Number(event.target.value) })} className="w-full accent-[#ff7b72]" />
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>Center force</span><span>{prefs.centerForce.toFixed(1)}x</span></span>
+                <input type="range" min={0.4} max={1.8} step={0.1} value={prefs.centerForce} onChange={(event) => patchPrefs({ centerForce: Number(event.target.value) })} className="w-full accent-[#c75c5c]" />
               </label>
             </div>
           </div>
         ) : null}
-
         {matchedConcepts.length ? (
-          <div className="absolute left-3 top-16 z-10 w-[280px] rounded-lg border border-[#30363d] bg-[#161b22]/92 p-2 text-xs text-[#c9d1d9] shadow-[0_18px_50px_rgba(0,0,0,0.34)] backdrop-blur">
-            <p className="px-2 pb-1 text-[#9da7b3]">Search results</p>
+          <div className="absolute left-3 top-16 z-10 w-[280px] rounded-lg border border-[#d8dde4] bg-white/94 p-2 text-xs text-[#34373c] shadow-sm backdrop-blur">
+            <p className="px-2 pb-1 text-[#666a70]">Search results</p>
             {matchedConcepts.map((concept) => (
-              <button key={concept.id} type="button" onClick={() => focusById(concept.id)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-[#30363d]">
-                <Search className="h-3.5 w-3.5 text-[#f7d774]" />
+              <button key={concept.id} type="button" onClick={() => focusById(concept.id)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-[#f1f3f5]">
+                <Search className="h-3.5 w-3.5 text-[#c9a227]" />
                 <span className="min-w-0 flex-1 truncate">{concept.title}</span>
               </button>
             ))}
           </div>
         ) : null}
-
         {selectedConcept ? (
-          <div className="absolute bottom-3 right-3 z-10 w-[318px] rounded-lg border border-[#30363d] bg-[#161b22]/94 p-3 text-xs text-[#c9d1d9] shadow-[0_18px_50px_rgba(0,0,0,0.34)] backdrop-blur">
+          <div className="absolute bottom-3 right-3 z-10 w-[318px] rounded-lg border border-[#d8dde4] bg-white/94 p-3 text-xs text-[#4d5864] shadow-sm backdrop-blur">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-[#9da7b3]">Selected concept</p>
-                <h3 className="mt-1 truncate text-sm font-semibold text-[#e6edf3]">{selectedConcept.title}</h3>
+                <p className="text-[#666a70]">Selected concept</p>
+                <h3 className="mt-1 truncate text-sm font-semibold text-[#202124]">{selectedConcept.title}</h3>
               </div>
-              <button type="button" onClick={() => setSelectedNodeId(null)} className="rounded-md p-1 text-[#9da7b3] hover:bg-[#30363d]">
+              <button type="button" onClick={() => setSelectedNodeId(null)} className="rounded-md p-1 text-[#666a70] hover:bg-[#f1f3f5]">
                 <X className="h-4 w-4" />
               </button>
             </div>
             <div className="mt-3 grid grid-cols-3 gap-2">
-              <div className="rounded-md bg-[#0f141b] p-2"><p className="text-[#768390]">Mastery</p><p className="mt-1 text-[#e6edf3]">{pct(selectedConcept.learnerState?.masteryEstimate)}</p></div>
-              <div className="rounded-md bg-[#0f141b] p-2"><p className="text-[#768390]">Weak</p><p className="mt-1 text-[#e6edf3]">{pct(selectedConcept.learnerState?.weaknessEstimate)}</p></div>
-              <div className="rounded-md bg-[#0f141b] p-2"><p className="text-[#768390]">Ready</p><p className="mt-1 text-[#e6edf3]">{pct(selectedConcept.learnerState?.readinessEstimate)}</p></div>
+              <div className="rounded-md bg-[#f4f5f6] p-2"><p className="text-[#666a70]">Mastery</p><p className="mt-1 text-[#202124]">{pct(selectedConcept.learnerState?.masteryEstimate)}</p></div>
+              <div className="rounded-md bg-[#f4f5f6] p-2"><p className="text-[#666a70]">Weak</p><p className="mt-1 text-[#202124]">{pct(selectedConcept.learnerState?.weaknessEstimate)}</p></div>
+              <div className="rounded-md bg-[#f4f5f6] p-2"><p className="text-[#666a70]">Ready</p><p className="mt-1 text-[#202124]">{pct(selectedConcept.learnerState?.readinessEstimate)}</p></div>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
-              <button type="button" onClick={() => openLocalGraph(selectedConcept.id)} className="inline-flex h-8 items-center gap-1 rounded-md bg-[#e6edf3] px-2 text-xs font-medium text-[#0f141b]">
+              <button type="button" onClick={() => openLocalGraph(selectedConcept.id)} className="inline-flex h-8 items-center gap-1 rounded-md bg-[#202124] px-2 text-xs font-medium text-white">
                 <LocateFixed className="h-3.5 w-3.5" />
                 Local graph
               </button>
-              <button type="button" onClick={() => focusById(selectedConcept.id)} className="inline-flex h-8 items-center gap-1 rounded-md bg-[#30363d] px-2 text-xs font-medium text-[#e6edf3]">
+              <button type="button" onClick={() => focusById(selectedConcept.id)} className="inline-flex h-8 items-center gap-1 rounded-md bg-[#f1f3f5] px-2 text-xs font-medium text-[#34373c]">
                 <Network className="h-3.5 w-3.5" />
                 Focus
-              </button>
-              <button type="button" onClick={() => layoutCache.positions[selectedConcept.id] ? unpinNode(selectedConcept.id) : pinNode(selectedConcept.id)} className="inline-flex h-8 items-center gap-1 rounded-md bg-[#30363d] px-2 text-xs font-medium text-[#e6edf3]">
-                {layoutCache.positions[selectedConcept.id] ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-                {layoutCache.positions[selectedConcept.id] ? 'Unpin' : 'Pin'}
               </button>
             </div>
           </div>
         ) : null}
-
-        {contextMenu ? (
+        {hoverInfo ? (
           <div
-            className="absolute z-20 w-44 rounded-lg border border-[#30363d] bg-[#161b22] p-1 text-xs text-[#d6deeb] shadow-[0_18px_50px_rgba(0,0,0,0.45)]"
-            style={{ left: Math.min(contextMenu.x, 720), top: Math.min(contextMenu.y, 620) }}
+            className="pointer-events-none absolute z-20 max-w-[260px] rounded-lg border border-[#d8dde4] bg-white px-3 py-2 text-xs text-[#4d5864] shadow-sm"
+            style={{ left: Math.min(hoverInfo.x + 14, 760), top: Math.max(12, hoverInfo.y - 18) }}
           >
-            <button type="button" onClick={() => focusById(contextMenu.nodeId)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-[#30363d]"><Network className="h-3.5 w-3.5" />邻域聚焦</button>
-            <button type="button" onClick={() => openLocalGraph(contextMenu.nodeId)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-[#30363d]"><LocateFixed className="h-3.5 w-3.5" />打开局部图</button>
-            <button type="button" onClick={() => pinNode(contextMenu.nodeId)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-[#30363d]"><Pin className="h-3.5 w-3.5" />固定当前位置</button>
-            <button type="button" onClick={() => unpinNode(contextMenu.nodeId)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-[#30363d]"><PinOff className="h-3.5 w-3.5" />取消固定</button>
+            <p className="truncate font-semibold text-[#202124]">{hoverInfo.concept.title}</p>
+            {hoverInfo.concept.category ? <p className="mt-1 truncate text-[#666a70]">{hoverInfo.concept.category}</p> : null}
           </div>
         ) : null}
-
-        <div className="absolute bottom-3 left-3 z-10 rounded-lg border border-[#30363d] bg-[#161b22]/90 px-3 py-2 text-xs text-[#c9d1d9] shadow-[0_18px_50px_rgba(0,0,0,0.32)] backdrop-blur">
+        {contextMenu ? (
+          <div
+            className="absolute z-20 w-44 rounded-lg border border-[#d8dde4] bg-white p-1 text-xs text-[#34373c] shadow-lg"
+            style={{ left: Math.min(contextMenu.x, 720), top: Math.min(contextMenu.y, 620) }}
+          >
+            <button type="button" onClick={() => focusById(contextMenu.nodeId)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-[#f1f3f5]"><Network className="h-3.5 w-3.5" />邻域聚焦</button>
+            <button type="button" onClick={() => openLocalGraph(contextMenu.nodeId)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-[#f1f3f5]"><LocateFixed className="h-3.5 w-3.5" />打开局部图</button>
+          </div>
+        ) : null}
+        <div className="absolute bottom-3 left-3 z-10 rounded-lg border border-[#d8dde4] bg-white/90 px-3 py-2 text-xs text-[#4d5864] shadow-sm backdrop-blur">
           {stats.nodes} nodes · {stats.edges} visible edges · {prefs.scope === 'connected' ? 'isolated hidden' : prefs.scope === 'local' ? `${prefs.localDepth}-hop local graph` : 'all nodes'} · 拖拽、右键动作、滚轮缩放、布局会自动记住。
         </div>
         <div ref={containerRef} className="relative z-[2] h-full w-full" />
@@ -1412,19 +1640,28 @@ export function KnowledgeGraphWorkbench({
     </div>
   );
 }
-
 export default function LearningIntelligenceDashboard({
   workspaceId,
   workbenchId,
   workbenches = [],
+  activeSection,
+  hideSectionNav = false,
+  headerTitle = 'Learning Intelligence Dashboard',
+  headerDescription = '学习状态、知识结构、诊断、计划与画像。',
+  onSectionChange,
   onOpenWorkbench,
   onPlanApplied,
   onOpenTerminal
 }: LearningIntelligenceDashboardProps) {
-  const [section, setSection] = useState<IntelligenceSection>('overview');
+  const [internalSection, setInternalSection] = useState<IntelligenceSection>('overview');
+  const section = activeSection || internalSection;
+  const setSection = (nextSection: IntelligenceSection) => {
+    setInternalSection(nextSection);
+    onSectionChange?.(nextSection);
+  };
   const [knowledgeView, setKnowledgeView] = useState<KnowledgeView>('graph');
   const [planningView, setPlanningView] = useState<PlanningView>('plans');
-  const [memoryView, setMemoryView] = useState<MemoryView>('events');
+  const [profileEntryKind, setProfileEntryKind] = useState<LearnerProfileEntryKind | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -1439,9 +1676,8 @@ export default function LearningIntelligenceDashboard({
   const [planningObjective, setPlanningObjective] = useState('');
   const [planningRunStatus, setPlanningRunStatus] = useState<string | null>(null);
   const planningPollTimerRef = useRef<number | null>(null);
-
   const [integration, setIntegration] = useState<any>(null);
-  const [graph, setGraph] = useState<{ nodes: ConceptNode[]; edges: ConceptEdge[] }>({ nodes: [], edges: [] });
+  const [graph, setGraph] = useState<{ nodes: ConceptNode[]; edges: ConceptEdge[]; sources: GraphSource[] }>({ nodes: [], edges: [], sources: [] });
   const [diagnosis, setDiagnosis] = useState<any>(null);
   const [kgPlan, setKgPlan] = useState<any>(null);
   const [targetStructure, setTargetStructure] = useState<any>(null);
@@ -1452,10 +1688,56 @@ export default function LearningIntelligenceDashboard({
   const [sequences, setSequences] = useState<any[]>([]);
   const [learnerState, setLearnerState] = useState<any>(null);
   const [memories, setMemories] = useState<any[]>([]);
+  const [learnerProfileView, setLearnerProfileView] = useState<LearnerProfileView | null>(null);
+  const [profileHistoryOpen, setProfileHistoryOpen] = useState(false);
+  const [selectedProfileDimension, setSelectedProfileDimension] = useState<string | null>(null);
   const [planActionBusyId, setPlanActionBusyId] = useState<string | null>(null);
-
-  const load = async () => {
+  const [loadedFromCache, setLoadedFromCache] = useState(false);
+  const portraitPolishBadgeState = portraitPolishBadge(learnerProfileView?.portraitPolish);
+  const portraitResolutionBadgeState = portraitResolutionBadge(learnerProfileView?.portraitResolution);
+  const applySnapshot = (snapshot: LearningIntelligenceSnapshot) => {
+    setIntegration(snapshot.integration || null);
+    setGraph({
+      nodes: safeArray<ConceptNode>(snapshot.graph?.nodes),
+      edges: safeArray<ConceptEdge>(snapshot.graph?.edges),
+      sources: safeArray<GraphSource>(snapshot.graph?.sources)
+    });
+    setDiagnosis(snapshot.diagnosis || null);
+    setKgPlan(snapshot.kgPlan || null);
+    setTargetStructure(snapshot.targetStructure || null);
+    setGapAnalysis(snapshot.gapAnalysis || null);
+    setMclPlan(snapshot.mclPlan || null);
+    setMclPlans(safeArray(snapshot.mclPlans));
+    setEvents(safeArray(snapshot.events));
+    setSequences(safeArray(snapshot.sequences));
+    setLearnerState(snapshot.learnerState || null);
+    setMemories(safeArray(snapshot.memories));
+    setLearnerProfileView(snapshot.learnerProfileView || null);
+    setPlanningObjective((current) => current || snapshot.planningObjective || '');
+  };
+  const persistSnapshot = (snapshot: Omit<LearningIntelligenceSnapshot, 'version' | 'savedAt' | 'workspaceId' | 'workbenchId'>) => {
+    saveJson(intelligenceSnapshotKey(workspaceId, workbenchId), {
+      ...snapshot,
+      version: INTELLIGENCE_SNAPSHOT_VERSION,
+      savedAt: Date.now(),
+      workspaceId,
+      workbenchId: workbenchId || null
+    });
+  };
+  const load = async (options?: { force?: boolean }) => {
     if (!workspaceId) return;
+    const cached = options?.force ? null : loadIntelligenceSnapshot(workspaceId, workbenchId);
+    if (cached) {
+      applySnapshot(cached);
+      setLoadedFromCache(true);
+      setLoading(false);
+      setError(null);
+      if (profileViewNeedsRefresh(cached.learnerProfileView)) {
+        void refreshProfileViewOnly(cached);
+      }
+      return;
+    }
+    setLoadedFromCache(false);
     setLoading(true);
     setError(null);
     try {
@@ -1468,7 +1750,8 @@ export default function LearningIntelligenceDashboard({
         eventsResult,
         sequenceResult,
         learnerStateResult,
-        memoryResult
+        memoryResult,
+        profileViewResult
       ] = await Promise.all([
         learningApi.getWorkspaceIntegration(workspaceId, { workbenchId }).catch(() => ({ integration: null })),
         learningApi.getKnowledgeGraph(workspaceId, { limit: 120 }).catch(() => ({ graph: { nodes: [], edges: [] } })),
@@ -1478,12 +1761,14 @@ export default function LearningIntelligenceDashboard({
         learningApi.listLearningEvents(workspaceId, { workbenchId, limit: 80 }).catch(() => ({ events: [] })),
         learningApi.getLearningEventSequences(workspaceId, { workbenchId, limit: 24 }).catch(() => ({ patterns: [] })),
         learningApi.getLearnerState(workspaceId, { workbenchId }).catch(() => ({ state: null })),
-        learningApi.listLearnerMemories(workspaceId, { workbenchId, limit: 40 }).catch(() => ({ memories: [] }))
+        learningApi.listLearnerMemories(workspaceId, { workbenchId, limit: 40 }).catch(() => ({ memories: [] })),
+        learningApi.getLearnerProfileView(workspaceId, { workbenchId, limit: 30, forcePortrait: Boolean(options?.force) }).catch(() => ({ profileView: null }))
       ]);
       setIntegration(integrationResult.integration || null);
       setGraph({
         nodes: safeArray<ConceptNode>(graphResult.graph?.nodes),
-        edges: safeArray<ConceptEdge>(graphResult.graph?.edges)
+        edges: safeArray<ConceptEdge>(graphResult.graph?.edges),
+        sources: safeArray<GraphSource>(graphResult.graph?.sources)
       });
       setDiagnosis(diagnosisResult.diagnosis || null);
       setKgPlan(planResult.plan || null);
@@ -1492,6 +1777,7 @@ export default function LearningIntelligenceDashboard({
       setSequences(safeArray(sequenceResult.patterns));
       setLearnerState(learnerStateResult.state || null);
       setMemories(safeArray(memoryResult.memories));
+      setLearnerProfileView(profileViewResult.profileView || null);
       const persistedMclPlan =
         safeArray<any>(plansResult.plans)[0] ||
         integrationResult.integration?.activePlan ||
@@ -1514,13 +1800,76 @@ export default function LearningIntelligenceDashboard({
         planResult.plan?.objective ||
         '根据当前学习画像、知识图谱和资料生成下一步学习计划'
       );
+      persistSnapshot({
+        integration: integrationResult.integration || null,
+        graph: {
+          nodes: safeArray<ConceptNode>(graphResult.graph?.nodes),
+          edges: safeArray<ConceptEdge>(graphResult.graph?.edges),
+          sources: safeArray<GraphSource>(graphResult.graph?.sources)
+        },
+        diagnosis: diagnosisResult.diagnosis || null,
+        kgPlan: planResult.plan || null,
+        targetStructure: targetStructure || null,
+        gapAnalysis: gapAnalysis || null,
+        mclPlan: persistedMclPlan,
+        mclPlans: safeArray(plansResult.plans),
+        events: safeArray(eventsResult.events),
+        sequences: safeArray(sequenceResult.patterns),
+        learnerState: learnerStateResult.state || null,
+        memories: safeArray(memoryResult.memories),
+        learnerProfileView: profileViewResult.profileView || null,
+        planningObjective:
+          planDisplayTitle(persistedMclPlan) ||
+          integrationResult.integration?.continueLearning?.prompt ||
+          planResult.plan?.objective ||
+          '根据当前学习画像、知识图谱和资料生成下一步学习计划'
+      });
     } catch (err: any) {
       setError(err?.response?.data?.error || err?.message || 'Learning Intelligence 加载失败');
     } finally {
       setLoading(false);
     }
   };
-
+  const refreshProfileViewOnly = async (baseSnapshot?: LearningIntelligenceSnapshot, options?: { force?: boolean; surfaceError?: boolean }) => {
+    if (!workspaceId) return;
+    try {
+      const result = await learningApi.getLearnerProfileView(workspaceId, {
+        workbenchId,
+        limit: 30,
+        forcePortrait: Boolean(options?.force)
+      });
+      if (result.profileView) {
+        setLearnerProfileView(result.profileView);
+        if (baseSnapshot) {
+          saveJson(intelligenceSnapshotKey(workspaceId, workbenchId), {
+            ...baseSnapshot,
+            version: INTELLIGENCE_SNAPSHOT_VERSION,
+            savedAt: Date.now(),
+            workspaceId,
+            workbenchId: workbenchId || null,
+            learnerProfileView: result.profileView
+          });
+        }
+      }
+    } catch (error) {
+      if (options?.surfaceError) throw error;
+      // Keep the current portrait visible if background polish is not ready yet.
+    }
+  };
+  const refreshPortrait = async () => {
+    if (!workspaceId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const baseSnapshot = loadIntelligenceSnapshot(workspaceId, workbenchId) || undefined;
+      await refreshProfileViewOnly(baseSnapshot, { force: true, surfaceError: true });
+      setLoadedFromCache(false);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || '学习画像刷新失败');
+    } finally {
+      setLoading(false);
+    }
+  };
   const runBuildGraph = async () => {
     setGraphActionRunning('build');
     setError(null);
@@ -1543,7 +1892,6 @@ export default function LearningIntelligenceDashboard({
       setGraphActionRunning(null);
     }
   };
-
   const runTargetStructure = async () => {
     const objective = planningObjective.trim() || integration?.continueLearning?.prompt || kgPlan?.objective || '根据当前学习画像、知识图谱和资料生成目标知识结构';
     setGraphActionRunning('target');
@@ -1562,7 +1910,6 @@ export default function LearningIntelligenceDashboard({
       setGraphActionRunning(null);
     }
   };
-
   const runGapAnalysis = async () => {
     const objective = targetStructure?.objective || planningObjective.trim() || integration?.continueLearning?.prompt || kgPlan?.objective || '根据当前学习画像、知识图谱和资料运行差距分析';
     setGraphActionRunning('gap');
@@ -1583,17 +1930,22 @@ export default function LearningIntelligenceDashboard({
       setGraphActionRunning(null);
     }
   };
-
   useEffect(() => {
     void load();
   }, [workspaceId, workbenchId]);
-
   useEffect(() => {
     if (!workspaceId || graphBuildJob?.id) return;
     let cancelled = false;
     const storedJobId = typeof window !== 'undefined' ? window.localStorage.getItem(courseGraphBuildJobStorageKey(workspaceId, workbenchId)) : null;
     const restoreFromStored = storedJobId
-      ? learningApi.getCourseGraphBuildJob(storedJobId).then((result) => result.job).catch(() => null)
+      ? learningApi.getCourseGraphBuildJob(storedJobId)
+          .then((result) => result.job)
+          .catch((err) => {
+            if (err?.response?.status === 404 && typeof window !== 'undefined') {
+              window.localStorage.removeItem(courseGraphBuildJobStorageKey(workspaceId, workbenchId));
+            }
+            return null;
+          })
       : Promise.resolve(null);
     restoreFromStored
       .then((storedJob) => storedJob || learningApi.listCourseGraphBuildJobs(workspaceId, 8).then((result) => {
@@ -1617,7 +1969,22 @@ export default function LearningIntelligenceDashboard({
       cancelled = true;
     };
   }, [workspaceId, workbenchId, graphBuildJob?.id]);
-
+  useEffect(() => {
+    if (section !== 'memory') return;
+    if (learnerProfileView?.portraitPolish?.status !== 'pending' && learnerProfileView?.portraitResolution?.status !== 'pending') return;
+    const timer = window.setTimeout(() => {
+      void refreshProfileViewOnly();
+    }, 3500);
+    return () => window.clearTimeout(timer);
+  }, [
+    section,
+    learnerProfileView?.portraitPolish?.status,
+    learnerProfileView?.portraitPolish?.entityHash,
+    learnerProfileView?.portraitResolution?.status,
+    learnerProfileView?.portraitResolution?.entityHash,
+    workspaceId,
+    workbenchId
+  ]);
   useEffect(() => {
     if (!graphBuildJob?.id || graphBuildJob?.status === 'completed' || graphBuildJob?.status === 'failed') return;
     const timer = window.setInterval(async () => {
@@ -1628,13 +1995,18 @@ export default function LearningIntelligenceDashboard({
           window.clearInterval(timer);
           await load();
         }
-      } catch {
-        // keep current progress visible while the next poll retries
+      } catch (err: any) {
+        if (err?.response?.status === 404) {
+          setGraphBuildJob(null);
+          if (typeof window !== 'undefined') {
+            window.localStorage.removeItem(courseGraphBuildJobStorageKey(workspaceId, workbenchId));
+          }
+          window.clearInterval(timer);
+        }
       }
     }, 2000);
     return () => window.clearInterval(timer);
   }, [graphBuildJob?.id, graphBuildJob?.status, workspaceId, workbenchId]);
-
   useEffect(() => {
     return () => {
       if (planningPollTimerRef.current != null) {
@@ -1643,7 +2015,6 @@ export default function LearningIntelligenceDashboard({
       }
     };
   }, []);
-
   const runMclPlanning = async () => {
     if (planningRunning || planningRunStatus === 'running' || planningRunStatus === 'starting') return;
     if (planningPollTimerRef.current != null) {
@@ -1715,7 +2086,6 @@ export default function LearningIntelligenceDashboard({
       setPlanningRunning(false);
     }
   };
-
   const applyPlanToWorkbench = async (plan: any, targetWorkbenchId?: string | null, createWorkbench = false) => {
     if (!plan?.id) return;
     setPlanActionBusyId(plan.id);
@@ -1740,14 +2110,12 @@ export default function LearningIntelligenceDashboard({
       setPlanActionBusyId(null);
     }
   };
-
   const filteredConcepts = useMemo(() => {
     const q = query.trim().toLowerCase();
     const nodes = graph.nodes;
     if (!q) return nodes;
     return nodes.filter((node) => node.title.toLowerCase().includes(q));
   }, [graph.nodes, query]);
-
   const conceptById = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node])), [graph.nodes]);
   const drawerIncomingEdges = drawerConcept ? graph.edges.filter((edge) => edge.to === drawerConcept.id) : [];
   const drawerOutgoingEdges = drawerConcept ? graph.edges.filter((edge) => edge.from === drawerConcept.id) : [];
@@ -1760,134 +2128,322 @@ export default function LearningIntelligenceDashboard({
   const planSteps = safeArray<any>(mclPlan?.steps);
   const selectedStep = planSteps.find((step) => step.id === selectedStepId) || planSteps[0] || null;
   const pathIds = safeArray<any>(kgPlan?.knowledgeGraphSnapshot?.nodes).map((node) => String(node.id)).filter(Boolean);
-  const stableSignals = safeArray<any>(learnerState?.coreState?.stableProfile?.learningGoals)
-    .concat(safeArray(learnerState?.coreState?.stableProfile?.masteredKnowledge))
-    .concat(safeArray(learnerState?.coreState?.stableProfile?.weakKnowledge))
-    .concat(safeArray(learnerState?.coreState?.stableProfile?.learningPreferences));
-  const observations = safeArray<any>(learnerState?.coreState?.observationMemory?.observations);
-  const versions = safeArray<any>(learnerState?.versions);
-
+  const stableProfileSignals: ProfileDisplaySignal[] = [
+    ...safeArray<any>(learnerState?.coreState?.stableProfile?.learningGoals).map((signal) => toProfileSignal(signal, 'profileBase', 'Learning goal')),
+    ...safeArray<any>(learnerState?.coreState?.stableProfile?.masteredKnowledge).map((signal) => toProfileSignal(signal, 'knowledgeState', 'Mastered knowledge')),
+    ...safeArray<any>(learnerState?.coreState?.stableProfile?.weakKnowledge).map((signal) => toProfileSignal(signal, 'knowledgeState', 'Weak knowledge')),
+    ...safeArray<any>(learnerState?.coreState?.stableProfile?.learningPreferences).map((signal) => toProfileSignal(signal, 'preferenceStyle', 'Learning preference')),
+    ...safeArray<any>(learnerState?.coreState?.stableProfile?.commonErrors).map((signal) => toProfileSignal(signal, 'misconceptionState', 'Common error')),
+    ...safeArray<any>(learnerState?.coreState?.stableProfile?.learnerTraits).map((signal) => toProfileSignal(signal, 'cognitiveState', 'Learner trait'))
+  ];
+  const workingStateSignals: ProfileDisplaySignal[] = [
+    ...safeArray<any>(learnerState?.coreState?.workingState?.currentCourseState?.activeGoals).map((signal) => toProfileSignal(signal, 'profileBase', 'Active goal', 'working_state')),
+    ...safeArray<any>(learnerState?.coreState?.workingState?.currentCourseState?.focusKnowledge).map((signal) => toProfileSignal(signal, 'knowledgeState', 'Focus knowledge', 'working_state')),
+    ...safeArray<any>(learnerState?.coreState?.workingState?.currentCourseState?.pendingQuestions).map((signal) => toProfileSignal(signal, 'cognitiveState', 'Pending question', 'working_state')),
+    ...safeArray<any>(learnerState?.coreState?.workingState?.currentCourseState?.nextActions).map((signal) => toProfileSignal(signal, 'reviewPlanning', 'Next action', 'working_state')),
+    ...safeArray<any>(learnerState?.coreState?.workingState?.recentBehaviorSummary?.recentTopics).map((signal) => toProfileSignal(signal, 'profileBase', 'Recent topic', 'working_state')),
+    ...safeArray<any>(learnerState?.coreState?.workingState?.recentBehaviorSummary?.engagementSignals).map((signal) => toProfileSignal(signal, 'behaviorEngagement', 'Engagement signal', 'working_state')),
+    ...safeArray<any>(learnerState?.coreState?.workingState?.recentBehaviorSummary?.reviewPressure).map((signal) => toProfileSignal(signal, 'reviewPlanning', 'Review pressure', 'working_state')),
+    ...safeArray<any>(learnerState?.coreState?.observationMemory?.observations).map((signal) => toProfileSignal(signal, signal?.dimension || 'profileBase', signal?.label || 'Observation', 'observation_memory'))
+  ];
+  const savedMemories = safeArray<any>(memories)
+    .filter((memory) => memory?.status !== 'deleted' && memory?.status !== 'suppressed')
+    .map((memory) => ({
+      ...toProfileSignal(memory, 'savedMemory', 'Saved memory', 'saved_memory'),
+      label: String(memory?.dimension || memory?.category || 'Saved memory')
+    }));
+  const stableGroups = groupProfileSignals(stableProfileSignals, 6);
+  const workingGroups = groupProfileSignals(workingStateSignals, 5);
+  const savedMemoryGroups = groupProfileSignals(savedMemories, 8, { keepPromptLike: true });
+  const displayStableGroups = safeArray<any>(learnerProfileView?.stableProfile).length
+    ? safeArray<any>(learnerProfileView?.stableProfile).map((group) => ({
+        dimension: String(group.key || group.dimension || 'profileBase'),
+        meta: {
+          title: String(group.title || profileDimensionMeta[group.key]?.title || group.key || 'Profile Dimension'),
+          detail: String(group.summary || profileDimensionMeta[group.key]?.detail || '学习画像维度。')
+        },
+        items: safeArray<any>(group.items).map((item) => toProfileSignal(item, String(item.dimension || group.key || 'profileBase'), String(item.label || 'Profile signal'), 'llm_profile_view'))
+      })).filter((group) => group.items.length)
+    : stableGroups;
+  const displayWorkingGroups = safeArray<any>(learnerProfileView?.workingState).length
+    ? safeArray<any>(learnerProfileView?.workingState).map((group) => ({
+        dimension: String(group.key || group.dimension || 'profileBase'),
+        meta: {
+          title: String(group.title || profileDimensionMeta[group.key]?.title || group.key || 'Working State'),
+          detail: String(group.summary || profileDimensionMeta[group.key]?.detail || '近期证据与工作状态。')
+        },
+        items: safeArray<any>(group.items).map((item) => toProfileSignal(item, String(item.dimension || group.key || 'profileBase'), String(item.label || 'Working state'), 'llm_profile_view'))
+      })).filter((group) => group.items.length)
+    : workingGroups;
+  const displaySavedMemories = safeArray<any>(learnerProfileView?.savedMemory).length
+    ? safeArray<any>(learnerProfileView?.savedMemory).map((item) => toProfileSignal(item, 'savedMemory', String(item.label || 'Saved Memory'), 'llm_profile_view'))
+    : savedMemoryGroups.flatMap((group) => group.items);
+  const displayRecentEvents = safeArray<any>(learnerProfileView?.recentEvents).length
+    ? safeArray<any>(learnerProfileView?.recentEvents)
+    : events.slice(0, 20).map((event) => ({
+        id: event.id,
+        eventType: event.eventType,
+        summary: event.payload?.interaction?.userText || event.objectType || event.eventFamily || event.eventType,
+        confidence: event.confidence,
+        observedAt: event.observedAt
+      }));
+  const stableCount = stableProfileSignals.length;
+  const workingCount = workingStateSignals.length;
+  const observationCount = safeArray<any>(learnerState?.coreState?.observationMemory?.observations).length;
+  const versionItems = safeArray<any>(learnerState?.versions);
+  const activeVersion = learnerProfileView?.overview?.activeVersion || learnerState?.version || versionItems[0]?.version || 1;
+  const profileVisualNodes: ProfileVisualNode[] = useMemo(() => {
+    const polishedEntities = safeArray<LearnerPortraitEntity>(learnerProfileView?.portraitPolish?.entities);
+    const resolvedEntities = safeArray<LearnerPortraitEntity>(learnerProfileView?.portraitResolution?.entities);
+    const explicitEntities = polishedEntities.length ? polishedEntities : resolvedEntities.length ? resolvedEntities : safeArray<LearnerPortraitEntity>(learnerProfileView?.portraitEntities);
+    const legacySignals = [
+      ...displayStableGroups.flatMap((group) => group.items).map((item) => ({ item, layer: 'stable' as ProfileLayer })),
+      ...displayWorkingGroups.flatMap((group) => group.items).map((item) => ({ item, layer: 'working' as ProfileLayer })),
+      ...displaySavedMemories.map((item) => ({ item, layer: 'memory' as ProfileLayer }))
+    ];
+    const legacyDimensionFor = (signal: ProfileDisplaySignal): PortraitDimension => {
+      const text = `${signal.label} ${signal.value} ${signal.rationale || ''}`;
+      if (signal.dimension === 'knowledgeState') return 'knowledgeFoundation';
+      if (signal.dimension === 'misconceptionState') return 'errorPattern';
+      if (signal.dimension === 'preferenceStyle') return /例子|案例|图解|可视化|步骤|一步一步|代码|demo|example|visual|step/i.test(text) ? 'cognitiveStyle' : 'learningPreference';
+      if (signal.dimension === 'cognitiveState') return /反思|计划|监控|策略|求助|reflect|plan|monitor/i.test(text) ? 'metacognitiveStrategy' : 'cognitiveStyle';
+      if (signal.dimension === 'behaviorEngagement') return 'metacognitiveStrategy';
+      if (signal.dimension === 'reviewPlanning') return /压力|遗忘|复习|risk|pressure|review/i.test(text) ? 'learningRisk' : 'supportNeed';
+      if (signal.dimension === 'savedMemory') return 'learningPreference';
+      if (/目标|计划|考试|完成|掌握|goal|objective/i.test(text)) return 'learningGoal';
+      if (/专业|课程|年级|背景|项目|实验|作业|course|major|project|lab/i.test(text)) return 'learningBackground';
+      return 'learningBackground';
+    };
+    const legacyEntities: LearnerPortraitEntity[] = explicitEntities.length
+      ? []
+      : legacySignals.map(({ item, layer }) => {
+          const dimension = legacyDimensionFor(item);
+          const status = layer === 'stable' || layer === 'memory' ? 'stable' : item.status === 'active' ? 'active' : 'candidate';
+          const polarity: LearnerPortraitEntity['polarity'] =
+            dimension === 'learningRisk' ? 'risk' :
+              dimension === 'learningPreference' || dimension === 'cognitiveStyle' ? 'preference' :
+                dimension === 'errorPattern' || dimension === 'supportNeed' ? 'need' :
+                  /mastered|已掌握|strength/i.test(`${item.label} ${item.value}`) ? 'strength' : 'neutral';
+          return {
+            id: `legacy:${dimension}:${item.id}`,
+            dimension,
+            type: `legacy_${item.dimension}`,
+            title: item.label || portraitDimensionMeta[dimension].title,
+            description: item.value,
+            displayTitle: item.label || portraitDimensionMeta[dimension].title,
+            displayDescription: item.value,
+            status,
+            polarity,
+            confidence: Number(item.confidence || 0.45),
+            evidenceCount: Math.max(1, safeArray(item.evidenceIds).length),
+            evidence: [{
+              id: item.id,
+              sourceType: layer === 'memory' ? 'saved_memory' : layer === 'stable' ? 'stable_profile' : 'working_state',
+              summary: item.value,
+              confidence: Number(item.confidence || 0.45),
+              observedAt: item.lastObservedAt || item.firstObservedAt || undefined
+            }],
+            affectedConcepts: item.dimension === 'knowledgeState' || item.dimension === 'misconceptionState' ? [item.value] : [],
+            recommendation: dimension === 'learningRisk' ? '优先安排短诊断和复习检查。' : dimension === 'supportNeed' ? '把下一步拆成可执行的小任务。' : undefined,
+            displayRecommendation: dimension === 'learningRisk' ? '优先安排短诊断和复习检查。' : dimension === 'supportNeed' ? '把下一步拆成可执行的小任务。' : undefined,
+            updatedAt: item.lastObservedAt || item.firstObservedAt || null
+          };
+        });
+    const portraitEntities = explicitEntities.length ? explicitEntities : legacyEntities;
+    return portraitDimensionOrder.map((dimension) => {
+      const entities = portraitEntities.filter((entity) => entity.dimension === dimension);
+      const meta = portraitDimensionMeta[dimension];
+      const statusCounts = {
+        stable: entities.filter((entity) => entity.status === 'stable').length,
+        active: entities.filter((entity) => entity.status === 'active').length,
+        candidate: entities.filter((entity) => entity.status === 'candidate').length,
+        needs_review: entities.filter((entity) => entity.status === 'needs_review').length
+      };
+      const polarityCounts = {
+        strength: entities.filter((entity) => entity.polarity === 'strength').length,
+        need: entities.filter((entity) => entity.polarity === 'need').length,
+        risk: entities.filter((entity) => entity.polarity === 'risk').length,
+        preference: entities.filter((entity) => entity.polarity === 'preference').length,
+        neutral: entities.filter((entity) => entity.polarity === 'neutral').length
+      };
+      return {
+        dimension,
+        title: meta.title,
+        detail: meta.detail,
+        count: entities.length,
+        layerCounts: {
+          stable: statusCounts.stable,
+          working: statusCounts.active + statusCounts.candidate,
+          memory: entities.filter((entity) => safeArray<NonNullable<LearnerPortraitEntity['evidence']>[number]>(entity.evidence).some((evidence) => evidence.sourceType === 'saved_memory')).length
+        },
+        confidence: entities.length ? entities.reduce((sum, entity) => sum + Number(entity.confidence || 0), 0) / entities.length : 0,
+        samples: entities.map((entity) => entity.displayTitle || entity.title).slice(0, 3),
+        entities,
+        polarityCounts,
+        statusCounts
+      };
+    });
+  }, [displaySavedMemories, displayStableGroups, displayWorkingGroups, learnerProfileView?.portraitEntities, learnerProfileView?.portraitPolish, learnerProfileView?.portraitResolution]);
+  const profileOverviewScore = profileVisualNodes.length
+    ? profileVisualNodes.reduce((sum, node) => sum + node.count, 0) / profileVisualNodes.length
+    : 0;
+  const selectedProfileNode =
+    profileVisualNodes.find((node) => node.dimension === selectedProfileDimension) ||
+    profileVisualNodes.find((node) => node.count > 0) ||
+    profileVisualNodes[0] ||
+    null;
+  useEffect(() => {
+    if (!selectedProfileDimension && profileVisualNodes[0]?.dimension) {
+      setSelectedProfileDimension(
+        profileVisualNodes.find((node) => node.count > 0)?.dimension || profileVisualNodes[0].dimension
+      );
+    }
+  }, [profileVisualNodes, selectedProfileDimension]);
   useEffect(() => {
     if (structuredStages.length && !selectedStepId) {
       setSelectedStepId(structuredStageId(structuredStages[0], 0));
     }
   }, [structuredStages, selectedStepId]);
-
-  const contextPanel = (
-    <aside className="hidden min-h-[620px] border-l border-[#e8e8e4] pl-5 xl:block">
-      <div className="sticky top-5 space-y-5">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Context</p>
-          <p className="mt-2 text-sm leading-6 text-[#55585d]">
-            {section === 'overview' ? integration?.learnerState?.summary || '等待学习状态生成。' : null}
-            {section === 'knowledge' ? `${filteredConcepts.length} 个知识对象，${graph.edges.length} 条关系。` : null}
-            {section === 'diagnosis' ? `${diagnosisItems.length} 条诊断对象，${weakConcepts.length} 条需要优先关注。` : null}
-            {section === 'planning' ? mclPlan?.objective || '还没有学习计划。' : null}
-            {section === 'memory' ? `${events.length} 条事件，${observations.length} 条短期观察，${stableSignals.length} 条稳定画像。` : null}
-          </p>
-        </div>
-
-        {section === 'knowledge' ? (
-          <label className="block">
-            <span className="mb-2 block text-xs font-medium text-[#777b80]">过滤知识点</span>
-            <span className="relative block">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#96999d]" />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索概念"
-                className="h-9 w-full rounded-lg border border-[#deded9] bg-white pl-9 pr-3 text-sm outline-none focus:border-[#b9bab2]"
-              />
-            </span>
-          </label>
-        ) : null}
-
-        {section === 'knowledge' ? (
-          <div className="space-y-2">
-            {graphBuildJob ? (
-              <div className="rounded-lg border border-[#e6e6e1] bg-white px-3 py-3">
-                <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Build Job</p>
-                <p className="mt-2 text-sm font-medium text-[#202124]">{graphBuildJob.status === 'completed' ? '课程图谱已完成' : graphBuildJob.status === 'failed' ? '课程图谱构建失败' : '课程图谱构建中'}</p>
-                <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#eeeeeb]">
-                  <div className="h-full rounded-full bg-[#202124] transition-all" style={{ width: `${Math.max(4, Math.min(100, Number(graphBuildJob.progress?.percent || 0)))}%` }} />
-                </div>
-                <p className="mt-2 truncate text-xs text-[#777b80]">{graphBuildJob.progress?.message || '正在处理...'}</p>
+  const contextSummary =
+    section === 'overview' ? integration?.learnerState?.summary || '等待学习状态生成。'
+      : section === 'knowledge' ? `${filteredConcepts.length} 个知识对象，${graph.edges.length} 条关系。`
+        : section === 'diagnosis' ? `${diagnosisItems.length} 条诊断对象，${weakConcepts.length} 条需要优先关注。`
+          : section === 'planning' ? mclPlan?.objective || '还没有学习计划。'
+            : `${activeVersion ? `v${activeVersion} · ` : ''}${learnerProfileView?.overview?.summary || learnerState?.summary || '学习画像已加载。'}`;
+  const renderDashboardActions = () => (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => void (section === 'memory' ? refreshPortrait() : load({ force: true }))}
+        disabled={loading || Boolean(graphActionRunning)}
+        className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[#e6e6e1] bg-white px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#f6f6f4] disabled:opacity-60"
+      >
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+        {section === 'memory' ? '刷新画像' : loadedFromCache ? '刷新最新' : '刷新'}
+      </button>
+      {onOpenTerminal ? (
+        <button
+          type="button"
+          onClick={() => onOpenTerminal(integration?.continueLearning?.prompt || '根据我的学习状态推荐下一步')}
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#202124] px-3 text-sm font-medium text-white transition hover:bg-black"
+        >
+          <Sparkles className="h-4 w-4" />
+          发给 AI Terminal
+        </button>
+      ) : null}
+    </div>
+  );
+  const renderKnowledgeTools = () => (
+    <div className="space-y-3 border-y border-[#eeeeeb] py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="relative block min-w-[220px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#96999d]" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索概念"
+            className="h-9 w-full rounded-lg border border-[#deded9] bg-white pl-9 pr-3 text-sm outline-none focus:border-[#b9bab2]"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => void runBuildGraph()}
+          disabled={loading || Boolean(graphActionRunning)}
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#202124] px-3 text-sm font-medium text-white transition hover:bg-black disabled:opacity-60"
+        >
+          {graphActionRunning === 'build' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
+          重建课程图谱
+        </button>
+        <button
+          type="button"
+          onClick={() => void runTargetStructure()}
+          disabled={loading || Boolean(graphActionRunning)}
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[#e6e6e1] bg-white px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#f6f6f4] disabled:opacity-60"
+        >
+          {graphActionRunning === 'target' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Target className="h-4 w-4" />}
+          生成目标结构
+        </button>
+        <button
+          type="button"
+          onClick={() => void runGapAnalysis()}
+          disabled={loading || Boolean(graphActionRunning)}
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[#e6e6e1] bg-white px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#f6f6f4] disabled:opacity-60"
+        >
+          {graphActionRunning === 'gap' ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart3 className="h-4 w-4" />}
+          运行差距分析
+        </button>
+      </div>
+      {graphBuildJob || targetStructure || gapAnalysis ? (
+        <div className="grid gap-3 lg:grid-cols-3">
+          {graphBuildJob ? (
+            <div className="rounded-lg border border-[#e6e6e1] bg-white px-3 py-3">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Build Job</p>
+              <p className="mt-2 text-sm font-medium text-[#202124]">{graphBuildJob.status === 'completed' ? '课程图谱已完成' : graphBuildJob.status === 'failed' ? '课程图谱构建失败' : '课程图谱构建中'}</p>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#eeeeeb]">
+                <div className="h-full rounded-full bg-[#202124] transition-all" style={{ width: `${Math.max(4, Math.min(100, Number(graphBuildJob.progress?.percent || 0)))}%` }} />
               </div>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => void runBuildGraph()}
-              disabled={loading || Boolean(graphActionRunning)}
-              className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-[#202124] px-3 text-sm font-medium text-white transition hover:bg-black disabled:opacity-60"
-            >
-              {graphActionRunning === 'build' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
-              重建课程图谱
-            </button>
-            <button
-              type="button"
-              onClick={() => void runTargetStructure()}
-              disabled={loading || Boolean(graphActionRunning)}
-              className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-[#e6e6e1] bg-white px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#f6f6f4] disabled:opacity-60"
-            >
-              {graphActionRunning === 'target' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Target className="h-4 w-4" />}
-              生成目标结构
-            </button>
-            <button
-              type="button"
-              onClick={() => void runGapAnalysis()}
-              disabled={loading || Boolean(graphActionRunning)}
-              className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-[#e6e6e1] bg-white px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#f6f6f4] disabled:opacity-60"
-            >
-              {graphActionRunning === 'gap' ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart3 className="h-4 w-4" />}
-              运行差距分析
-            </button>
-          </div>
-        ) : null}
-
-        {section === 'knowledge' && (targetStructure || gapAnalysis) ? (
-          <div className="space-y-3 border-t border-[#e8e8e4] pt-4">
-            {targetStructure ? (
-              <div className="rounded-lg border border-[#eeeeeb] bg-white px-3 py-3">
-                <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Target Structure</p>
-                <p className="mt-2 line-clamp-2 text-sm font-medium text-[#202124]">{targetStructure.objective || '目标结构'}</p>
-                <p className="mt-1 text-xs text-[#777b80]">{targetStructure.nodes?.length || 0} nodes · {targetStructure.edges?.length || 0} edges</p>
-              </div>
-            ) : null}
-            {gapAnalysis ? (
-              <div className="rounded-lg border border-[#eeeeeb] bg-white px-3 py-3">
-                <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Gap Analysis</p>
-                <p className="mt-2 text-sm font-medium text-[#202124]">readiness {pct(gapAnalysis.summary?.overallReadiness)}</p>
-                <p className="mt-1 text-xs text-[#777b80]">covered {gapAnalysis.summary?.coveredCount ?? 0} · gaps {gapAnalysis.summary?.gapCount ?? 0} · blocked {gapAnalysis.summary?.blockedCount ?? 0}</p>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        <div className="space-y-2">
-          <button
-            type="button"
-            onClick={() => void load()}
-            disabled={loading || Boolean(graphActionRunning)}
-            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-[#e6e6e1] bg-white px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#f6f6f4] disabled:opacity-60"
-          >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            刷新
-          </button>
-          {onOpenTerminal ? (
-            <button
-              type="button"
-              onClick={() => onOpenTerminal(integration?.continueLearning?.prompt || '根据我的学习状态推荐下一步')}
-              className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-[#202124] px-3 text-sm font-medium text-white transition hover:bg-black"
-            >
-              <Sparkles className="h-4 w-4" />
-              发给 AI Terminal
-            </button>
+              <p className="mt-2 truncate text-xs text-[#777b80]">{graphBuildJob.progress?.message || '正在处理...'}</p>
+            </div>
+          ) : null}
+          {targetStructure ? (
+            <div className="rounded-lg border border-[#eeeeeb] bg-white px-3 py-3">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Target Structure</p>
+              <p className="mt-2 line-clamp-2 text-sm font-medium text-[#202124]">{targetStructure.objective || '目标结构'}</p>
+              <p className="mt-1 text-xs text-[#777b80]">{targetStructure.nodes?.length || 0} nodes · {targetStructure.edges?.length || 0} edges</p>
+            </div>
+          ) : null}
+          {gapAnalysis ? (
+            <div className="rounded-lg border border-[#eeeeeb] bg-white px-3 py-3">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Gap Analysis</p>
+              <p className="mt-2 text-sm font-medium text-[#202124]">readiness {pct(gapAnalysis.summary?.overallReadiness)}</p>
+              <p className="mt-1 text-xs text-[#777b80]">covered {gapAnalysis.summary?.coveredCount ?? 0} · gaps {gapAnalysis.summary?.gapCount ?? 0} · blocked {gapAnalysis.summary?.blockedCount ?? 0}</p>
+            </div>
           ) : null}
         </div>
-      </div>
-    </aside>
+      ) : null}
+    </div>
   );
-
+  const isKnowledgeOnly = hideSectionNav && section === 'knowledge';
+  const renderKnowledgeViewSwitch = () => (
+    <div className="grid grid-cols-3 rounded-lg bg-[#f1f1ef] p-1">
+      {[
+        { id: 'graph', label: 'Graph View', icon: Network },
+        { id: 'list', label: 'List View', icon: ListTree },
+        { id: 'path', label: 'Path View', icon: MapIcon }
+      ].map((item) => {
+        const Icon = item.icon;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setKnowledgeView(item.id as KnowledgeView)}
+            className={`inline-flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition ${
+              knowledgeView === item.id ? 'bg-white text-[#202124] shadow-sm' : 'text-[#666a70] hover:text-[#202124]'
+            }`}
+            title={item.label}
+          >
+            <Icon className="h-4 w-4 shrink-0" />
+            <span className="truncate">{item.label.replace(' View', '')}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+  const renderKnowledgeSidebarControls = () => (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-[#202124]">Knowledge</h2>
+        <p className="mt-1 text-sm leading-5 text-[#777b80]">概念对象、知识关系与学习路径。</p>
+        <p className="mt-2 text-sm leading-5 text-[#55585d]">{contextSummary}</p>
+      </div>
+      {renderDashboardActions()}
+      <div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#96999d]">View</p>
+        {renderKnowledgeViewSwitch()}
+      </div>
+      {renderKnowledgeTools()}
+    </div>
+  );
   const renderOverview = () => (
     <section className="space-y-8">
       <div className="border-b border-[#e8e8e4] pb-6">
@@ -1909,7 +2465,6 @@ export default function LearningIntelligenceDashboard({
           </button>
         </div>
       </div>
-
       <div className="grid gap-8 lg:grid-cols-2">
         <div>
           <h3 className="text-sm font-semibold text-[#202124]">最近变化</h3>
@@ -1926,14 +2481,13 @@ export default function LearningIntelligenceDashboard({
             {!events.length ? <EmptyState title="暂无近期变化" detail="学习事件会在打开资源、完成测验、对话和计划更新时产生。" /> : null}
           </div>
         </div>
-
         <div>
           <h3 className="text-sm font-semibold text-[#202124]">推荐入口</h3>
           <div className="mt-3 border-y border-[#eeeeeb]">
             {[
               { label: '薄弱知识', value: integration?.learnerState?.weakSkills?.slice(0, 3).join('、') || weakConcepts.slice(0, 3).map((item) => item.concept.title).join('、'), target: 'diagnosis' as IntelligenceSection },
               { label: '当前计划', value: mclPlan?.objective || integration?.continueLearning?.nextStepTitle, target: 'planning' as IntelligenceSection },
-              { label: '记忆与画像', value: `${stableSignals.length} 条稳定画像，${observations.length} 条短期观察`, target: 'memory' as IntelligenceSection }
+              { label: '学习画像', value: `${learnerProfileView?.overview?.stableCount ?? stableCount} 条画像，${learnerProfileView?.overview?.eventCount ?? displayRecentEvents.length} 条近期事件，${learnerProfileView?.overview?.memoryCount ?? displaySavedMemories.length} 条记忆`, target: 'memory' as IntelligenceSection }
             ].map((item) => (
               <RowButton key={item.label} onClick={() => setSection(item.target)}>
                 <div className="min-w-0 flex-1">
@@ -1948,64 +2502,38 @@ export default function LearningIntelligenceDashboard({
       </div>
     </section>
   );
-
   const renderKnowledge = () => (
-    <section>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold text-[#202124]">Knowledge</h2>
-          <p className="mt-1 text-sm text-[#777b80]">知识点是稳定对象；图谱、列表和路径只是不同视图。</p>
-        </div>
-        <div className="inline-flex rounded-lg bg-[#f1f1ef] p-1">
-          {[
-            { id: 'graph', label: 'Graph View', icon: Network },
-            { id: 'list', label: 'List View', icon: ListTree },
-            { id: 'path', label: 'Path View', icon: MapIcon }
-          ].map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setKnowledgeView(item.id as KnowledgeView)}
-                className={`inline-flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
-                  knowledgeView === item.id ? 'bg-white text-[#202124] shadow-sm' : 'text-[#666a70] hover:text-[#202124]'
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {knowledgeView === 'graph' ? (
-        <div>
-          <div className="mb-3 flex justify-end">
-            <Link
-              to={`/workspaces/${workspaceId}/knowledge-graph${workbenchId ? `?workbenchId=${encodeURIComponent(workbenchId)}` : ''}`}
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#202124] px-3 text-sm font-medium text-white transition hover:bg-black"
-            >
-              <Maximize2 className="h-4 w-4" />
-              全屏打开图谱
-            </Link>
+    <section className={isKnowledgeOnly ? 'h-full min-h-0' : undefined}>
+      {!isKnowledgeOnly ? (
+        <>
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold text-[#202124]">Knowledge</h2>
+              <p className="mt-1 text-sm text-[#777b80]">知识点是稳定对象；图谱、列表和路径只是不同视图。</p>
+            </div>
+            <div className="w-full max-w-md sm:w-auto">{renderKnowledgeViewSwitch()}</div>
           </div>
-          <KnowledgeGraphWorkbench
-          workspaceId={workspaceId}
-          workbenchId={workbenchId}
-          concepts={graph.nodes}
-          edges={graph.edges}
-          selectedId={drawerConcept?.id}
-          pathIds={pathIds}
-          searchTerm={query}
-          onSelect={setDrawerConcept}
+          <div className="mb-5">{renderKnowledgeTools()}</div>
+        </>
+      ) : null}
+      {knowledgeView === 'graph' ? (
+        <div className={`${isKnowledgeOnly ? 'h-full min-h-0' : 'h-[720px]'} overflow-hidden border-y border-[#e5e7eb]`}>
+          <CosmosKnowledgeGraphWorkbench
+            workspaceId={workspaceId}
+            workbenchId={workbenchId}
+            concepts={graph.nodes}
+            edges={graph.edges}
+            sources={graph.sources}
+            pathIds={pathIds}
+            searchTerm={query}
+            variant="embedded"
+            sidebarControls={isKnowledgeOnly ? renderKnowledgeSidebarControls() : undefined}
           />
         </div>
       ) : null}
-
       {knowledgeView === 'list' ? (
-        <div className="border-y border-[#eeeeeb]">
+        <div className={isKnowledgeOnly ? 'grid h-full min-h-0 grid-cols-[minmax(0,1fr)_340px] overflow-hidden bg-white' : undefined}>
+        <div className={`${isKnowledgeOnly ? 'min-h-0 overflow-y-auto' : ''} border-y border-[#eeeeeb]`}>
           {filteredConcepts.map((concept) => {
             const expanded = expandedConceptIds.has(concept.id);
             const prereqs = graph.edges.filter((edge) => edge.to === concept.id && edge.relationType === 'prerequisite').map((edge) => conceptById.get(edge.from)?.title).filter(Boolean);
@@ -2043,10 +2571,16 @@ export default function LearningIntelligenceDashboard({
           })}
           {!filteredConcepts.length ? <EmptyState title="没有匹配的知识点" detail="清空搜索，或先重建 workspace 知识图谱。" /> : null}
         </div>
+        {isKnowledgeOnly ? (
+          <aside className="min-h-0 overflow-y-auto border-l border-[#e5e7eb] bg-[#fbfbfa] px-4 py-4">
+            {renderKnowledgeSidebarControls()}
+          </aside>
+        ) : null}
+        </div>
       ) : null}
-
       {knowledgeView === 'path' ? (
-        <div className="border-y border-[#eeeeeb]">
+        <div className={isKnowledgeOnly ? 'grid h-full min-h-0 grid-cols-[minmax(0,1fr)_340px] overflow-hidden bg-white' : undefined}>
+        <div className={`${isKnowledgeOnly ? 'min-h-0 overflow-y-auto' : ''} border-y border-[#eeeeeb]`}>
           {(pathIds.length ? pathIds.map((id) => conceptById.get(id)).filter(Boolean) as ConceptNode[] : filteredConcepts.slice(0, 8)).map((concept, index, arr) => (
             <button key={concept.id} type="button" onClick={() => setDrawerConcept(concept)} className="flex w-full items-start gap-4 border-b border-[#eeeeeb] px-3 py-4 text-left last:border-b-0 hover:bg-[#f7f7f5]">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#f1f1ef] text-xs font-medium text-[#55585d]">{index + 1}</span>
@@ -2058,10 +2592,15 @@ export default function LearningIntelligenceDashboard({
             </button>
           ))}
         </div>
+        {isKnowledgeOnly ? (
+          <aside className="min-h-0 overflow-y-auto border-l border-[#e5e7eb] bg-[#fbfbfa] px-4 py-4">
+            {renderKnowledgeSidebarControls()}
+          </aside>
+        ) : null}
+        </div>
       ) : null}
     </section>
   );
-
   const renderDiagnosis = () => (
     <section>
       <div className="mb-5">
@@ -2084,7 +2623,6 @@ export default function LearningIntelligenceDashboard({
         })}
         {!diagnosisItems.length ? <EmptyState title="暂无诊断报告" detail="完成学习事件或测验后，系统会生成概念级诊断对象。" /> : null}
       </div>
-
       {selectedDiagnosis ? (
         <div className="mt-6 border-y border-[#eeeeeb] py-5">
           <div className="flex items-start justify-between gap-3">
@@ -2120,11 +2658,9 @@ export default function LearningIntelligenceDashboard({
       ) : null}
     </section>
   );
-
   const planningFeedbackItems = safeArray<any>(events)
     .filter((event) => /plan|trace|quiz|practice|reflection/i.test(String(event.eventType || event.type || '')))
     .slice(0, 8);
-
   const renderPlanning = () => (
     <section>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -2153,7 +2689,6 @@ export default function LearningIntelligenceDashboard({
           </div>
         </div>
       </div>
-
       <div className="mb-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
         <label className="block">
           <span className="mb-2 block text-xs font-medium text-[#777b80]">计划目标</span>
@@ -2172,7 +2707,6 @@ export default function LearningIntelligenceDashboard({
           </p>
         </div>
       </div>
-
       {planningView === 'plans' ? (
         <div className="border-y border-[#eeeeeb]">
           {(mclPlans.length ? mclPlans : mclPlan ? [mclPlan] : []).map((plan) => {
@@ -2231,7 +2765,6 @@ export default function LearningIntelligenceDashboard({
           {!mclPlans.length && !mclPlan ? <EmptyState title="还没有学习计划" detail="输入目标并生成新计划后，这里会保留每一次生成结果。" /> : null}
         </div>
       ) : null}
-
       {planningView === 'steps' ? (
         structuredPlan && structuredStages.length ? (
           <div className="space-y-5">
@@ -2251,7 +2784,6 @@ export default function LearningIntelligenceDashboard({
                 {structuredPlan.overview?.overallPath ? <p><span className="font-medium text-[#34373c]">路径：</span>{structuredPlan.overview.overallPath}</p> : null}
               </div>
             </section>
-
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
               <section className="border-y border-[#eeeeeb] bg-white">
                 <div className="border-b border-[#eeeeeb] px-4 py-3">
@@ -2291,7 +2823,6 @@ export default function LearningIntelligenceDashboard({
                   })}
                 </div>
               </section>
-
               <section className="border-y border-[#eeeeeb] bg-white px-4 py-4">
                 {selectedStructuredStage ? (
                   <div className="space-y-5">
@@ -2320,7 +2851,6 @@ export default function LearningIntelligenceDashboard({
                 ) : <EmptyState title="还没有阶段详情" detail="选择一个阶段后查看详细安排。" />}
               </section>
             </div>
-
             <section className="grid gap-5 lg:grid-cols-3">
               <div className="border-y border-[#eeeeeb] bg-white px-4 py-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-[#96999d]">近期行动安排</p>
@@ -2388,7 +2918,6 @@ export default function LearningIntelligenceDashboard({
                   ''
                 );
                 const claimMatrix = safeArray<any>(selectedStep.resourceGrounding?.claimEvidenceMatrix);
-
                 return (
                   <div className="space-y-5 px-3">
                     <div className="border-b border-[#eeeeeb] pb-4">
@@ -2405,19 +2934,16 @@ export default function LearningIntelligenceDashboard({
                       </div>
                       <p className="mt-3 text-sm leading-6 text-[#55585d]">{stepPlanNarrative(selectedStep)}</p>
                     </div>
-
                     <div>
                       <p className="text-xs font-medium uppercase tracking-wide text-[#96999d]">计划解释</p>
                       <p className="mt-1 text-sm leading-6 text-[#34373c]">{stepPlanNarrative(selectedStep)}</p>
                       {groundingSummary ? <p className="mt-2 text-sm leading-6 text-[#777b80]">{groundingSummary}</p> : null}
                     </div>
-
                     <div className="border-t border-[#eeeeeb] pt-4">
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-xs font-medium uppercase tracking-wide text-[#96999d]">资料支撑</p>
                         <p className="text-xs text-[#96999d]">{groundingMatches.length ? `${groundingMatches.length} 条支撑` : '未找到明确支撑'}</p>
                       </div>
-
                       {claimMatrix.length ? (
                         <div className="mt-3 rounded-xl border border-[#eeeeeb] bg-white px-3 py-3">
                           <p className="text-xs font-medium text-[#96999d]">学习点覆盖</p>
@@ -2444,7 +2970,6 @@ export default function LearningIntelligenceDashboard({
                           </div>
                         </div>
                       ) : null}
-
                       {groundingMatches.length ? (
                         <div className="mt-3 space-y-3">
                           {groundingMatches.slice(0, 4).map((item) => (
@@ -2500,7 +3025,6 @@ export default function LearningIntelligenceDashboard({
                         </div>
                       )}
                     </div>
-
                     <div className="border-t border-[#eeeeeb] pt-4">
                       <p className="text-xs font-medium uppercase tracking-wide text-[#96999d]">下一步</p>
                       <p className="mt-1 text-sm leading-6 text-[#34373c]">{stepNextAction(selectedStep)}</p>
@@ -2513,7 +3037,6 @@ export default function LearningIntelligenceDashboard({
         </div>
         )
       ) : null}
-
       {planningView === 'feedback' ? (
         <div className="border-y border-[#eeeeeb]">
           {planningFeedbackItems.map((event, index) => (
@@ -2532,120 +3055,477 @@ export default function LearningIntelligenceDashboard({
       ) : null}
     </section>
   );
-
-  const renderMemory = () => (
-    <section>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold text-[#202124]">Memory</h2>
-          <p className="mt-1 text-sm text-[#777b80]">查看系统记住了什么、为什么记住，以及画像如何变化。</p>
+  const renderProfileSignalRows = (items: ProfileDisplaySignal[]) => (
+    <div className="border-y border-[#eeeeeb]">
+      {items.map((item) => (
+        <RowButton key={item.id}>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium leading-6 text-[#202124]">{item.value}</p>
+            <p className="mt-1 text-xs text-[#96999d]">
+              {item.label}
+              {typeof item.confidence === 'number' ? ` · confidence ${score(item.confidence)}` : ''}
+              {safeArray(item.evidenceIds).length ? ` · evidence ${safeArray(item.evidenceIds).length}` : ''}
+              {item.status ? ` · ${item.status}` : ''}
+            </p>
+          </div>
+        </RowButton>
+      ))}
+    </div>
+  );
+  const renderProfileGroups = (groups: ReturnType<typeof groupProfileSignals>, empty: { title: string; detail: string }) => (
+    groups.length ? (
+      <div className="space-y-5">
+        {groups.map((group) => {
+          const Icon = profileDimensionIcon(group.dimension);
+          return (
+            <div key={group.dimension}>
+              <div className="mb-2 flex items-start gap-2">
+                <Icon className="mt-0.5 h-4 w-4 text-[#8a8e94]" />
+                <div>
+                  <h4 className="text-sm font-semibold text-[#202124]">{group.meta.title}</h4>
+                  <p className="mt-0.5 text-xs leading-5 text-[#777b80]">{group.meta.detail}</p>
+                </div>
+              </div>
+              {renderProfileSignalRows(group.items)}
+            </div>
+          );
+        })}
+      </div>
+    ) : <EmptyState title={empty.title} detail={empty.detail} />
+  );
+  const renderProfileVisualMap = () => {
+    if (!profileVisualNodes.length) {
+      return <EmptyState title="暂无可视化画像" detail="稳定画像、近期状态或记忆出现后，这里会自动生成一张总览图。" />;
+    }
+    const nodes = profileVisualNodes.slice(0, 9);
+    const maxCount = Math.max(1, ...nodes.map((node) => node.count));
+    const center = { x: 320, y: 220 };
+    const radius = 146;
+    const totalSignals = nodes.reduce((sum, node) => sum + node.count, 0);
+    const strongest = selectedProfileNode || nodes[0];
+    const stableCount = strongest ? strongest.layerCounts.stable : 0;
+    const workingCount = strongest ? strongest.layerCounts.working : 0;
+    const memoryCount = strongest ? strongest.layerCounts.memory : 0;
+    const ratioBase = Math.max(1, strongest?.count || 0);
+    const stableRatio = stableCount / ratioBase;
+    const workingRatio = workingCount / ratioBase;
+    const memoryRatio = memoryCount / ratioBase;
+    const activeDetailSignals = strongest
+      ? [
+          ...displayStableGroups.flatMap((group) => group.items).filter((item) => item.dimension === strongest.dimension),
+          ...displayWorkingGroups.flatMap((group) => group.items).filter((item) => item.dimension === strongest.dimension),
+          ...displaySavedMemories.filter((item) => item.dimension === strongest.dimension)
+        ]
+      : [];
+    const activeEntities = strongest?.entities || [];
+    const stableEntityCount = strongest?.statusCounts?.stable ?? stableCount;
+    const activeEntityCount = strongest ? (strongest.statusCounts?.active || 0) + (strongest.statusCounts?.candidate || 0) : workingCount;
+    const reviewEntityCount = strongest?.statusCounts?.needs_review ?? 0;
+    const riskEntityCount = strongest?.polarityCounts?.risk || 0;
+    const needEntityCount = strongest?.polarityCounts?.need || 0;
+    const strengthEntityCount = strongest?.polarityCounts?.strength || 0;
+    const preferenceEntityCount = strongest?.polarityCounts?.preference || 0;
+    const detailItems = activeEntities.length ? activeEntities : activeDetailSignals;
+    return (
+      <div className="grid gap-5 border-y border-[#eeeeeb] py-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0">
+          <div className="relative h-[380px] overflow-hidden rounded-lg bg-[#fbfbfa] ring-1 ring-[#eeeeeb]">
+            <svg viewBox="0 0 640 440" className="h-full w-full" role="img" aria-label="学习画像可视化总览">
+              <defs>
+                <filter id="profile-node-shadow" x="-30%" y="-30%" width="160%" height="160%">
+                  <feDropShadow dx="0" dy="8" stdDeviation="8" floodColor="#202124" floodOpacity="0.12" />
+                </filter>
+              </defs>
+              {nodes.map((node, index) => {
+                const angle = -Math.PI / 2 + (index / nodes.length) * Math.PI * 2;
+                const start = angle - Math.PI / nodes.length;
+                const end = angle + Math.PI / nodes.length;
+                const largeArc = end - start > Math.PI ? 1 : 0;
+                const outerR = 170;
+                const innerR = 88;
+                const x1 = center.x + Math.cos(start) * innerR;
+                const y1 = center.y + Math.sin(start) * innerR;
+                const x2 = center.x + Math.cos(start) * outerR;
+                const y2 = center.y + Math.sin(start) * outerR;
+                const x3 = center.x + Math.cos(end) * outerR;
+                const y3 = center.y + Math.sin(end) * outerR;
+                const x4 = center.x + Math.cos(end) * innerR;
+                const y4 = center.y + Math.sin(end) * innerR;
+                const color = profileDimensionColor(node.dimension);
+                const isSelected = selectedProfileDimension === node.dimension;
+                const statusLabel = isSelected ? 'selected' : `${node.count} entities`;
+                return (
+                  <path
+                    key={`${node.dimension}-slice`}
+                    d={`M ${x1} ${y1} L ${x2} ${y2} A ${outerR} ${outerR} 0 ${largeArc} 1 ${x3} ${y3} L ${x4} ${y4} A ${innerR} ${innerR} 0 ${largeArc} 0 ${x1} ${y1} Z`}
+                    fill={isSelected ? '#e6edf3' : color.fill}
+                    stroke={isSelected ? '#202124' : color.stroke}
+                    strokeWidth={isSelected ? '2' : '1'}
+                    opacity={selectedProfileDimension && !isSelected ? 0.78 : 1}
+                    onClick={() => setSelectedProfileDimension(node.dimension)}
+                    style={{ cursor: 'pointer' }}
+                    aria-label={`${node.title} ${statusLabel}`}
+                  />
+                );
+              })}
+              <circle cx={center.x} cy={center.y} r="64" fill="#202124" />
+              <circle cx={center.x} cy={center.y} r="88" fill="none" stroke="#deded9" strokeDasharray="4 8" />
+              <text x={center.x} y={center.y - 7} textAnchor="middle" className="fill-white text-[15px] font-semibold">Learner</text>
+              <text x={center.x} y={center.y + 15} textAnchor="middle" className="fill-[#cfd1d3] text-[11px]">{totalSignals} signals</text>
+              {nodes.map((node, index) => {
+                const angle = -Math.PI / 2 + (index / nodes.length) * Math.PI * 2;
+                const x = center.x + Math.cos(angle) * radius;
+                const y = center.y + Math.sin(angle) * radius;
+                const count = Math.max(0, Number(node.count) || 0);
+                const layerCounts = {
+                  stable: Math.max(0, Number(node.layerCounts.stable) || 0),
+                  working: Math.max(0, Number(node.layerCounts.working) || 0),
+                  memory: Math.max(0, Number(node.layerCounts.memory) || 0)
+                };
+                const layerTotal = layerCounts.stable + layerCounts.working + layerCounts.memory;
+                const barBase = Math.max(1, layerTotal || count);
+                const size = 34 + (count / maxCount) * 26;
+                const color = profileDimensionColor(node.dimension);
+                const stableWidth = Math.max(0, Math.min(1, layerCounts.stable / barBase)) * 56;
+                const workingWidth = Math.max(0, Math.min(1, layerCounts.working / barBase)) * 56;
+                const memoryWidth = Math.max(0, Math.min(1, layerCounts.memory / barBase)) * 56;
+                const label = truncateLabel(node.title.replace(/\s*\/\s*/g, '/'), 18);
+                return (
+                  <g key={node.dimension} onClick={() => setSelectedProfileDimension(node.dimension)} style={{ cursor: 'pointer' }}>
+                    <line x1={center.x} y1={center.y} x2={x} y2={y} stroke="#deded9" strokeWidth="1.2" />
+                    <g filter="url(#profile-node-shadow)">
+                      <circle cx={x} cy={y} r={size} fill={color.fill} stroke={selectedProfileDimension === node.dimension ? '#202124' : color.stroke} strokeWidth="2.5" />
+                      <rect x={x - 28} y={y + size + 8} width={stableWidth} height="4" rx="2" fill="#202124" />
+                      <rect x={x - 28 + stableWidth} y={y + size + 8} width={workingWidth} height="4" rx="2" fill="#6aa6ff" />
+                      <rect x={x - 28 + stableWidth + workingWidth} y={y + size + 8} width={memoryWidth} height="4" rx="2" fill="#b08968" />
+                    </g>
+                    <text x={x} y={y - 3} textAnchor="middle" className="text-[12px] font-semibold" fill={color.text}>{label}</text>
+                    <text x={x} y={y + 17} textAnchor="middle" className="fill-[#666a70] text-[11px]">{node.count} 条</text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-3 text-xs text-[#777b80]">
+            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-5 rounded-full bg-[#202124]" />稳定画像</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-5 rounded-full bg-[#6aa6ff]" />近期状态</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-5 rounded-full bg-[#b08968]" />保存记忆</span>
+          </div>
         </div>
-        <div className="inline-flex rounded-lg bg-[#f1f1ef] p-1">
-          {[
-            ['events', 'Learning Events'],
-            ['observations', 'Observations'],
-            ['stable', 'Stable Profile'],
-            ['versions', 'Version History']
-          ].map(([id, label]) => (
-            <button key={id} type="button" onClick={() => setMemoryView(id as MemoryView)} className={`h-8 rounded-md px-3 text-sm font-medium ${memoryView === id ? 'bg-white text-[#202124] shadow-sm' : 'text-[#666a70]'}`}>{label}</button>
-          ))}
+        <div className="space-y-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">At A Glance</p>
+            <h3 className="mt-2 text-lg font-semibold text-[#202124]">{strongest.title}</h3>
+            <p className="mt-2 text-sm leading-6 text-[#55585d]">
+              当前画像最集中的维度是 {strongest.title}，共 {strongest.count} 个画像实体。画像密度约 {score(profileOverviewScore)}，每个实体都由证据、置信度和建议动作组成。
+            </p>
+          </div>
+          <div className="rounded-lg border border-[#eeeeeb] bg-white px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium text-[#202124]">{strongest.title}</p>
+                <p className="mt-1 text-xs text-[#96999d]">{strongest.detail}</p>
+              </div>
+              <span className="rounded-full px-2.5 py-1 text-xs font-medium" style={{ backgroundColor: profileDimensionColor(strongest.dimension).fill, color: profileDimensionColor(strongest.dimension).text }}>
+                {strongest.count}
+              </span>
+            </div>
+            <div className="mt-4 space-y-2">
+              <div className="grid grid-cols-3 gap-2 text-xs text-[#777b80]">
+                <div className="rounded-md bg-[#f5f5f3] px-2 py-2">
+                  <p className="text-[#96999d]">Stable</p>
+                  <p className="mt-1 font-semibold text-[#202124]">{stableEntityCount}</p>
+                </div>
+                <div className="rounded-md bg-[#f5f5f3] px-2 py-2">
+                  <p className="text-[#96999d]">Active</p>
+                  <p className="mt-1 font-semibold text-[#202124]">{activeEntityCount}</p>
+                </div>
+                <div className="rounded-md bg-[#f5f5f3] px-2 py-2">
+                  <p className="text-[#96999d]">Review</p>
+                  <p className="mt-1 font-semibold text-[#202124]">{reviewEntityCount}</p>
+                </div>
+              </div>
+              <div className="flex h-2 overflow-hidden rounded-full bg-[#f1f1ef]">
+                <div className="h-full bg-[#202124]" style={{ width: `${stableRatio * 100}%` }} />
+                <div className="h-full bg-[#6aa6ff]" style={{ width: `${workingRatio * 100}%` }} />
+                <div className="h-full bg-[#b08968]" style={{ width: `${memoryRatio * 100}%` }} />
+              </div>
+              {activeEntities.length ? (
+                <div className="grid grid-cols-4 gap-1.5 text-[11px] text-[#777b80]">
+                  <span className="rounded-md bg-[#ffe9e6] px-2 py-1 text-[#9d2c22]">风险 {riskEntityCount}</span>
+                  <span className="rounded-md bg-[#fff0e3] px-2 py-1 text-[#944d0b]">需求 {needEntityCount}</span>
+                  <span className="rounded-md bg-[#e8f6ef] px-2 py-1 text-[#24613d]">优势 {strengthEntityCount}</span>
+                  <span className="rounded-md bg-[#fff7d7] px-2 py-1 text-[#765d00]">偏好 {preferenceEntityCount}</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs font-medium uppercase tracking-[0.14em] text-[#96999d]">Selected slice detail</p>
+            {detailItems.slice(0, 4).map((item: any) => {
+              const entity = item as LearnerPortraitEntity;
+              const isEntity = Boolean(entity.description);
+              const dimension = isEntity ? entity.dimension : item.dimension;
+              const color = profileDimensionColor(dimension);
+              return (
+                <button key={item.id} type="button" onClick={() => setProfileEntryKind(isEntity ? (entity.dimension === 'learningRisk' || entity.dimension === 'supportNeed' ? 'events' : 'profile') : item.dimension === 'savedMemory' ? 'memory' : item.sourceType === 'working_state' ? 'events' : 'profile')} className="w-full rounded-lg border border-[#eeeeeb] bg-white px-3 py-2 text-left hover:bg-[#f7f7f5]">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 truncate text-sm font-medium text-[#202124]">{isEntity ? entity.displayTitle || entity.title : item.label}</span>
+                    <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: color.fill, color: color.text }}>{isEntity ? entity.polarity : item.status || 'signal'}</span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#96999d]">{isEntity ? entity.displayDescription || entity.description : item.value}</p>
+                  {isEntity && entity.mergedFrom?.length && entity.mergedFrom.length > 1 ? (
+                    <p className="mt-1 text-[11px] text-[#777b80]">合并自 {entity.mergedFrom.length} 条语义相近信号{entity.mergeReason ? `，${entity.mergeReason}` : ''}</p>
+                  ) : null}
+                  {isEntity && (entity.displayRecommendation || entity.recommendation) ? <p className="mt-1 line-clamp-1 text-xs text-[#55585d]">建议：{entity.displayRecommendation || entity.recommendation}</p> : null}
+                </button>
+              );
+            })}
+            {!detailItems.length ? <EmptyState title="暂无该维度详情" detail="该 slice 目前只有聚合信号，没有足够的条目。" /> : null}
+          </div>
         </div>
       </div>
-
-      <div className="border-y border-[#eeeeeb]">
-        {memoryView === 'events' ? events.map((event) => (
-          <RowButton key={event.id}>
-            <Activity className="h-4 w-4 text-[#8a8e94]" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-[#202124]">{event.eventType}</p>
-              <p className="mt-1 truncate text-xs text-[#96999d]">{event.eventFamily} · confidence {score(event.confidence)} · {new Date(event.observedAt).toLocaleString()}</p>
+    );
+  };
+  const renderMemoryHome = () => (
+    <section className="space-y-6">
+      <div className="border-b border-[#e8e8e4] pb-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold text-[#202124]">Learner Profile</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-[#777b80]">首页先给一张可视化总览，细节再进入画像、近期事件和记忆查看。</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setProfileHistoryOpen(true)}
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-[#e6e6e1] bg-white px-3 text-sm font-medium text-[#34373c] transition hover:bg-[#f6f6f4]"
+          >
+            <History className="h-4 w-4" />
+            Version History
+          </button>
+        </div>
+      </div>
+      {learnerProfileView?.portraitPolish ? (
+        <div className="border-y border-[#eeeeeb] bg-[#fbfbfa] px-4 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Portrait Summary</p>
+              <h3 className="mt-2 text-lg font-semibold text-[#202124]">{learnerProfileView.portraitPolish.globalSummary.headline}</h3>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-[#55585d]">{learnerProfileView.portraitPolish.globalSummary.summary}</p>
+              <p className="mt-1 text-xs text-[#96999d]">{portraitPolishBadgeState.detail}</p>
+              {learnerProfileView.portraitPolish.source === 'failed' && learnerProfileView.portraitPolish.message ? (
+                <p className="mt-1 max-w-3xl truncate text-xs text-[#b42318]">精修失败原因：{learnerProfileView.portraitPolish.message}</p>
+              ) : null}
             </div>
-          </RowButton>
-        )) : null}
-
-        {memoryView === 'observations' ? observations.map((item) => (
-          <RowButton key={item.id}>
-            <Clock3 className="h-4 w-4 text-[#8a8e94]" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-[#202124]">{item.value}</p>
-              <p className="mt-1 truncate text-xs text-[#96999d]">{item.label} · confidence {score(item.confidence)}</p>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${portraitPolishBadgeState.className}`} title={learnerProfileView.portraitPolish.message || portraitPolishBadgeState.detail}>
+              {portraitPolishBadgeState.label}
+            </span>
+          </div>
+          {learnerProfileView.portraitPolish.globalSummary.nextBestActions.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {learnerProfileView.portraitPolish.globalSummary.nextBestActions.slice(0, 3).map((item) => (
+                <span key={item} className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#55585d] ring-1 ring-[#e6e6e1]">{item}</span>
+              ))}
             </div>
-          </RowButton>
-        )) : null}
-
-        {memoryView === 'stable' ? stableSignals.map((item) => (
-          <RowButton key={item.id}>
-            <ShieldCheck className="h-4 w-4 text-[#8a8e94]" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-[#202124]">{item.value}</p>
-              <p className="mt-1 truncate text-xs text-[#96999d]">{item.label} · evidence {safeArray(item.evidenceIds).length} · {item.status}</p>
-            </div>
-            <button type="button" className="h-8 rounded-lg px-2 text-xs font-medium text-[#666a70] hover:bg-[#eeeeeb]">纠正</button>
-          </RowButton>
-        )) : null}
-
-        {memoryView === 'versions' ? (
-          versions.length ? versions.map((item) => (
-            <RowButton key={item.id || item.version}>
-              <CheckCircle2 className="h-4 w-4 text-[#8a8e94]" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-[#202124]">Version {item.version}</p>
-                <p className="mt-1 truncate text-xs text-[#96999d]">{item.summary || item.changeReason || 'Snapshot version'}</p>
-              </div>
-            </RowButton>
-          )) : (
-            <RowButton>
-              <CheckCircle2 className="h-4 w-4 text-[#8a8e94]" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-[#202124]">Version {learnerState?.version || 1}</p>
-                <p className="mt-1 truncate text-xs text-[#96999d]">{learnerState?.summary || 'Current learner state snapshot'}</p>
-              </div>
-            </RowButton>
-          )
+          ) : null}
+        </div>
+      ) : null}
+      {renderProfileVisualMap()}
+      <div className="grid gap-4 md:grid-cols-3">
+        {[
+          {
+            id: 'profile' as LearnerProfileEntryKind,
+            title: '画像',
+            detail: '长期稳定学习画像',
+            count: learnerProfileView?.overview?.stableCount ?? stableCount,
+            subtitle: learnerProfileView?.source === 'llm' ? 'LLM normalized' : 'Normalized fallback',
+            tone: 'bg-white'
+          },
+          {
+            id: 'events' as LearnerProfileEntryKind,
+            title: '近期事件',
+            detail: '近期状态、观察和证据流',
+            count: learnerProfileView?.overview?.workingCount ?? displayWorkingGroups.reduce((sum, group) => sum + group.items.length, 0),
+            subtitle: learnerProfileView?.source === 'llm' ? 'LLM normalized' : 'Normalized fallback',
+            tone: 'bg-white'
+          },
+          {
+            id: 'memory' as LearnerProfileEntryKind,
+            title: '记忆',
+            detail: 'Saved Memory 和可控长期偏好',
+            count: learnerProfileView?.overview?.memoryCount ?? displaySavedMemories.length,
+            subtitle: learnerProfileView?.source === 'llm' ? 'LLM normalized' : 'Normalized fallback',
+            tone: 'bg-white'
+          }
+        ].map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setProfileEntryKind(item.id)}
+            className={`rounded-lg border border-[#eeeeeb] px-4 py-4 text-left transition hover:bg-[#f6f6f4] ${item.tone}`}
+          >
+            <p className="text-xs font-medium uppercase tracking-[0.14em] text-[#96999d]">{item.title}</p>
+            <p className="mt-3 text-3xl font-semibold text-[#202124]">{item.count}</p>
+            <p className="mt-1 text-sm text-[#777b80]">{item.detail}</p>
+            <p className="mt-2 text-xs text-[#96999d]">{item.subtitle}</p>
+          </button>
+        ))}
+      </div>
+      <div className="border-y border-[#eeeeeb] bg-[#fcfcfb] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Semantic Resolution</p>
+            <p className="mt-1 text-sm text-[#55585d]">{portraitResolutionBadgeState.detail}</p>
+          </div>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${portraitResolutionBadgeState.className}`} title={learnerProfileView?.portraitResolution?.message || portraitResolutionBadgeState.detail}>
+            {portraitResolutionBadgeState.label}
+          </span>
+        </div>
+        {learnerProfileView?.portraitResolution?.clusters?.length ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {learnerProfileView.portraitResolution.clusters.slice(0, 4).map((cluster) => (
+              <span key={cluster.canonicalEntityId} className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#55585d] ring-1 ring-[#e6e6e1]">
+                {cluster.dimension} 合并 {cluster.mergedEntityIds.length} 条
+              </span>
+            ))}
+          </div>
         ) : null}
-
-        {memoryView === 'events' && !events.length ? <EmptyState title="暂无学习事件" detail="打开资源、对话、测验和计划操作会逐步形成事件流。" /> : null}
-        {memoryView === 'observations' && !observations.length ? <EmptyState title="暂无短期观察" detail="短期观察会先保留在 observation memory，不会马上变成稳定画像。" /> : null}
-        {memoryView === 'stable' && !stableSignals.length ? <EmptyState title="暂无稳定画像" detail="重复、可信的证据会被提升为稳定画像。" /> : null}
       </div>
-
-      {memories.length ? (
-        <div className="mt-6">
-          <h3 className="mb-3 text-sm font-semibold text-[#202124]">用户可控记忆</h3>
+      <div className="border-y border-[#eeeeeb]">
+        <div className="flex items-center justify-between gap-3 px-3 py-3">
+          <p className="text-sm font-medium text-[#34373c]">LLM view</p>
+          <p className="text-xs text-[#96999d]">{learnerProfileView?.source === 'llm' ? 'LLM parsed' : 'Fallback normalized'}</p>
+        </div>
+      </div>
+    </section>
+  );
+  const renderProfileDetail = () => {
+    if (!profileEntryKind) return renderMemoryHome();
+    if (profileEntryKind === 'events') {
+      return (
+        <section className="space-y-6">
+          <div className="flex items-start justify-between gap-3 border-b border-[#e8e8e4] pb-5">
+            <div>
+              <h2 className="text-xl font-semibold text-[#202124]">近期事件</h2>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-[#777b80]">展示近期状态、短期观察和事件证据，不把它们当成长期画像。</p>
+            </div>
+            <button type="button" onClick={() => setProfileEntryKind(null)} className="rounded-lg px-3 py-2 text-sm text-[#34373c] hover:bg-[#f1f1ef]">返回</button>
+          </div>
+          <section>
+            <div className="mb-3">
+              <h3 className="text-base font-semibold text-[#202124]">Observation / Working State</h3>
+              <p className="mt-1 text-sm leading-6 text-[#777b80]">经 LLM 归并后的近期状态，默认不作为长期事实。</p>
+            </div>
+            {renderProfileGroups(displayWorkingGroups, {
+              title: '暂无近期状态',
+              detail: '近期聊天、资源和行为会形成工作状态。'
+            })}
+          </section>
+          <section>
+            <div className="mb-3">
+              <h3 className="text-base font-semibold text-[#202124]">Recent Evidence Trail</h3>
+              <p className="mt-1 text-sm leading-6 text-[#777b80]">可审计的近期行为和对话证据。</p>
+            </div>
+            <div className="border-y border-[#eeeeeb]">
+              {displayRecentEvents.map((event: any) => (
+                <RowButton key={event.id}>
+                  <Activity className="h-4 w-4 text-[#8a8e94]" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-[#202124]">{event.eventType || event.label || 'Learning event'}</p>
+                    <p className="mt-1 truncate text-xs text-[#96999d]">
+                      {event.summary || 'Event evidence'}{event.confidence != null ? ` · confidence ${score(event.confidence)}` : ''}{event.observedAt ? ` · ${formatShortDate(event.observedAt)}` : ''}
+                    </p>
+                  </div>
+                </RowButton>
+              ))}
+              {!displayRecentEvents.length ? <EmptyState title="暂无近期事件" detail="这里会显示学习行为、对话和测验证据。" /> : null}
+            </div>
+          </section>
+        </section>
+      );
+    }
+    if (profileEntryKind === 'memory') {
+      return (
+        <section className="space-y-6">
+          <div className="flex items-start justify-between gap-3 border-b border-[#e8e8e4] pb-5">
+            <div>
+              <h2 className="text-xl font-semibold text-[#202124]">记忆</h2>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-[#777b80]">Saved Memory 和长期可控偏好。</p>
+            </div>
+            <button type="button" onClick={() => setProfileEntryKind(null)} className="rounded-lg px-3 py-2 text-sm text-[#34373c] hover:bg-[#f1f1ef]">返回</button>
+          </div>
           <div className="border-y border-[#eeeeeb]">
-            {memories.slice(0, 8).map((memory) => (
-              <RowButton key={memory.key || memory.memoryKey}>
+            {displaySavedMemories.map((item) => (
+              <RowButton key={item.id}>
                 <BookOpen className="h-4 w-4 text-[#8a8e94]" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-[#202124]">{memory.value || memory.text}</p>
-                  <p className="mt-1 truncate text-xs text-[#96999d]">{memory.dimension || memory.category} · {memory.status}</p>
+                  <p className="truncate text-sm font-medium text-[#202124]">{item.value}</p>
+                  <p className="mt-1 truncate text-xs text-[#96999d]">{item.label}{item.confidence != null ? ` · confidence ${score(item.confidence)}` : ''}</p>
                 </div>
               </RowButton>
             ))}
+            {!displaySavedMemories.length ? <EmptyState title="暂无记忆" detail="当用户明确保存偏好或背景时，这里会出现。" /> : null}
           </div>
+        </section>
+      );
+    }
+    return (
+      <section className="space-y-6">
+        <div className="flex items-start justify-between gap-3 border-b border-[#e8e8e4] pb-5">
+          <div>
+            <h2 className="text-xl font-semibold text-[#202124]">画像</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-[#777b80]">只展示长期稳定画像，内部维度在这里展开。</p>
+          </div>
+          <button type="button" onClick={() => setProfileEntryKind(null)} className="rounded-lg px-3 py-2 text-sm text-[#34373c] hover:bg-[#f1f1ef]">返回</button>
         </div>
-      ) : null}
-    </section>
+        <section>
+          <div className="mb-3">
+            <h3 className="text-base font-semibold text-[#202124]">Stable Profile</h3>
+            <p className="mt-1 text-sm leading-6 text-[#777b80]">经 LLM 归并后的长期画像。</p>
+          </div>
+          {renderProfileGroups(displayStableGroups, {
+            title: '暂无稳定画像',
+            detail: '稳定画像需要重复证据或较高置信度。'
+          })}
+        </section>
+      </section>
+    );
+  };
+  const renderMemory = () => renderProfileDetail();
+  const content = (
+    <>
+      {section === 'overview' ? renderOverview() : null}
+      {section === 'knowledge' ? renderKnowledge() : null}
+      {section === 'diagnosis' ? renderDiagnosis() : null}
+      {section === 'planning' ? renderPlanning() : null}
+      {section === 'memory' ? renderMemory() : null}
+    </>
   );
-
   return (
-    <section className="min-h-[680px]">
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold text-[#202124]">Learning Intelligence Dashboard</h2>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-[#777b80]">
-            面向对象地浏览学习画像、知识结构、诊断报告、计划和记忆记录。
+    <section className={isKnowledgeOnly ? 'h-full min-h-0' : 'min-h-[680px]'}>
+      {!isKnowledgeOnly ? (
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-4 border-b border-[#e8e8e4] pb-4">
+        <div className="min-w-0">
+          <h2 className="text-xl font-semibold text-[#202124]">{headerTitle}</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-5 text-[#777b80]">
+            {headerDescription}
           </p>
+          <p className="mt-2 max-w-5xl text-sm leading-5 text-[#55585d]">{contextSummary}</p>
         </div>
-        {loading ? <Loader2 className="mt-1 h-5 w-5 animate-spin text-[#96999d]" /> : null}
+        <div className="flex items-center gap-3">
+          {renderDashboardActions()}
+          {loading ? <Loader2 className="h-5 w-5 animate-spin text-[#96999d]" /> : null}
+        </div>
       </div>
-
+      ) : null}
       {error ? <div className="mb-5 border-y border-[#ffd6d6] bg-[#fff7f7] px-3 py-2 text-sm text-[#b42318]">{error}</div> : null}
-
-      <div className="grid gap-7 xl:grid-cols-[220px_minmax(0,1fr)_280px]">
-        <aside className="border-r border-[#e8e8e4] pr-4">
-          <nav className="sticky top-5 space-y-1">
-            {sectionItems.map((item) => {
+      {hideSectionNav ? (
+        <div className={isKnowledgeOnly ? 'h-full min-h-0' : 'min-w-0'}>{content}</div>
+      ) : (
+      <div className="grid gap-6 xl:grid-cols-[204px_minmax(0,1fr)]">
+        <aside className="border-r border-[#e8e8e4] pr-3">
+          <nav className="sticky top-4 space-y-1">
+            {learningIntelligenceSectionItems.map((item) => {
               const Icon = item.icon;
               const selected = section === item.id;
               return (
@@ -2667,18 +3547,64 @@ export default function LearningIntelligenceDashboard({
             })}
           </nav>
         </aside>
-
-        <div className="min-w-0">
-          {section === 'overview' ? renderOverview() : null}
-          {section === 'knowledge' ? renderKnowledge() : null}
-          {section === 'diagnosis' ? renderDiagnosis() : null}
-          {section === 'planning' ? renderPlanning() : null}
-          {section === 'memory' ? renderMemory() : null}
-        </div>
-
-        {contextPanel}
+        <div className="min-w-0">{content}</div>
       </div>
-
+      )}
+      {profileHistoryOpen ? (
+        <div className="fixed inset-0 z-[130] flex justify-end bg-black/10" onClick={() => setProfileHistoryOpen(false)}>
+          <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-[#e6e6e1] bg-white p-6 shadow-[0_20px_80px_rgba(32,33,36,0.18)]" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Learner Profile Audit</p>
+                <h3 className="mt-2 text-2xl font-semibold text-[#202124]">Version History</h3>
+                <p className="mt-2 text-sm leading-6 text-[#777b80]">当前版本 {activeVersion}。版本记录用于解释画像如何变化，事件流只作为证据链，不再作为主页面。</p>
+              </div>
+              <button type="button" onClick={() => setProfileHistoryOpen(false)} className="rounded-lg p-2 text-[#777b80] hover:bg-[#f1f1ef]" aria-label="Close learner profile history">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <section className="mt-6">
+              <h4 className="text-sm font-semibold text-[#202124]">Snapshot Versions</h4>
+              <div className="mt-3 border-y border-[#eeeeeb]">
+                {versionItems.length ? versionItems.map((item) => (
+                  <RowButton key={item.id || item.version}>
+                    <CheckCircle2 className="h-4 w-4 text-[#8a8e94]" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-[#202124]">Version {item.version}</p>
+                      <p className="mt-1 line-clamp-2 text-xs text-[#96999d]">{item.summary || item.changeReason || 'Snapshot version'}</p>
+                    </div>
+                  </RowButton>
+                )) : (
+                  <RowButton>
+                    <CheckCircle2 className="h-4 w-4 text-[#8a8e94]" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-[#202124]">Version {activeVersion}</p>
+                      <p className="mt-1 line-clamp-2 text-xs text-[#96999d]">{learnerState?.summary || 'Current learner state snapshot'}</p>
+                    </div>
+                  </RowButton>
+                )}
+              </div>
+            </section>
+            <section className="mt-7">
+              <h4 className="text-sm font-semibold text-[#202124]">Recent Evidence Trail</h4>
+              <div className="mt-3 border-y border-[#eeeeeb]">
+                {events.slice(0, 12).map((event) => (
+                  <RowButton key={event.id}>
+                    <Activity className="h-4 w-4 text-[#8a8e94]" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-[#202124]">{event.eventType}</p>
+                      <p className="mt-1 truncate text-xs text-[#96999d]">
+                        {event.eventFamily || event.objectType || 'learning event'} · confidence {score(event.confidence)} · {event.observedAt ? new Date(event.observedAt).toLocaleString() : 'time unknown'}
+                      </p>
+                    </div>
+                  </RowButton>
+                ))}
+                {!events.length ? <EmptyState title="暂无学习事件" detail="打开资源、对话、测验和计划操作会逐步形成事件流。" /> : null}
+              </div>
+            </section>
+          </aside>
+        </div>
+      ) : null}
       {drawerConcept ? (
         <div className="fixed inset-0 z-[130] flex justify-end bg-black/10" onClick={() => setDrawerConcept(null)}>
           <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-[#e6e6e1] bg-white p-6 shadow-[0_20px_80px_rgba(32,33,36,0.18)]" onClick={(event) => event.stopPropagation()}>
@@ -2691,13 +3617,11 @@ export default function LearningIntelligenceDashboard({
                 <X className="h-4 w-4" />
               </button>
             </div>
-
             <div className="mt-6 grid gap-4 border-y border-[#eeeeeb] py-5 sm:grid-cols-3">
               <div><p className="text-xs text-[#96999d]">Mastery</p><p className="mt-1 text-sm font-medium text-[#202124]">{pct(drawerConcept.learnerState?.masteryEstimate)}</p></div>
               <div><p className="text-xs text-[#96999d]">Weakness</p><p className="mt-1 text-sm font-medium text-[#202124]">{pct(drawerConcept.learnerState?.weaknessEstimate)}</p></div>
               <div><p className="text-xs text-[#96999d]">Readiness</p><p className="mt-1 text-sm font-medium text-[#202124]">{pct(drawerConcept.learnerState?.readinessEstimate)}</p></div>
             </div>
-
             <div className="mt-6 space-y-6">
               <section>
                 <h4 className="text-sm font-semibold text-[#202124]">前置知识</h4>
@@ -2734,10 +3658,36 @@ export default function LearningIntelligenceDashboard({
                 </div>
               </section>
               <section>
+                <h4 className="text-sm font-semibold text-[#202124]">来源证据</h4>
+                <div className="mt-2 space-y-3 text-sm text-[#55585d]">
+                  {drawerConcept.sources?.length ? drawerConcept.sources.map((source) => (
+                    <div key={source.id} className="rounded-lg border border-[#eeeeeb] p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate font-medium text-[#202124]">{source.name}</p>
+                          <p className="mt-1 truncate text-xs text-[#777b80]">{source.path || source.id}</p>
+                        </div>
+                        <span className="shrink-0 rounded bg-[#f1f3f5] px-2 py-1 text-xs text-[#5f6368]">{source.role || 'evidence'}</span>
+                      </div>
+                      {source.snippets?.length ? (
+                        <div className="mt-3 space-y-2">
+                          {source.snippets.slice(0, 3).map((snippet, index) => (
+                            <p key={`${source.id}-${index}`} className="rounded bg-[#fafafa] px-3 py-2 text-xs leading-5 text-[#4f5358]">
+                              {snippet.chunkIndex !== null && snippet.chunkIndex !== undefined ? `Chunk ${snippet.chunkIndex} · ` : ''}
+                              {snippet.quote}
+                            </p>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  )) : <p className="text-[#777b80]">暂无来源证据。</p>}
+                </div>
+              </section>
+              <section>
                 <h4 className="text-sm font-semibold text-[#202124]">相关资源与任务</h4>
                 <div className="mt-2 space-y-2 text-sm text-[#55585d]">
                   {drawerConcept.bindings?.length ? drawerConcept.bindings.map((item, index) => (
-                    <p key={`${item.targetType}-${item.targetId}-${index}`}>{item.role} · {item.targetType} · {item.targetId}</p>
+                    <p key={`${item.targetType}-${item.targetId}-${index}`}>{item.role} · {item.fileName || item.targetType} · {item.path || item.targetId}</p>
                   )) : <p className="text-[#777b80]">暂无绑定资源。</p>}
                 </div>
               </section>

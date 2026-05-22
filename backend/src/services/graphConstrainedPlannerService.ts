@@ -61,6 +61,7 @@ export class GraphConstrainedPlannerService {
       prisma.courseKnowledgeRelation.findMany({
         where: {
           workspaceId: input.workspaceId,
+          source: 'ai_kg_extraction',
           OR: [{ fromConceptId: { in: conceptIds } }, { toConceptId: { in: conceptIds } }]
         },
         include: { fromConcept: true, toConcept: true },

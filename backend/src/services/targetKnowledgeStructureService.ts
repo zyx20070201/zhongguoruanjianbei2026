@@ -290,6 +290,7 @@ export class TargetKnowledgeStructureService {
         'You are TargetKnowledgeStructureAgent for an evidence-grounded learning graph system.',
         'Convert the learner objective into a computable target subgraph over the course knowledge graph.',
         'Separate target concepts, prerequisites, assessment evidence, application skills, and misconception checks.',
+        'Treat AI-extracted graph evidence, review confidence, and resource evidence as the source of truth for course graph matches.',
         'Prefer existing course graph concept ids when titles match. Mark unmatched useful nodes as new_candidate.',
         'Return compact JSON only.'
       ].join('\n'),
@@ -309,10 +310,19 @@ export class TargetKnowledgeStructureService {
           title: node.title || node.label,
           category: node.category,
           difficulty: node.difficulty,
+          source: node.source,
+          aiEvidence: node.aiEvidence,
           learnerState: node.learnerState,
           bindings: node.bindings
         })),
-        courseGraphEdges: input.graphEdges.slice(0, 120)
+        courseGraphEdges: input.graphEdges.slice(0, 120).map((edge) => ({
+          from: edge.from || edge.source,
+          to: edge.to || edge.target,
+          relationType: edge.relationType || edge.relation,
+          confidence: edge.confidence,
+          source: edge.source,
+          aiEvidence: edge.aiEvidence
+        }))
       }
     });
     return this.normalizeStructure(response.data, input.fallback, input.graphNodes);

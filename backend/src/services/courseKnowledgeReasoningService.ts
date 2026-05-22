@@ -35,6 +35,7 @@ export class CourseKnowledgeReasoningService {
     const relations = await prisma.courseKnowledgeRelation.findMany({
       where: {
         workspaceId: input.workspaceId,
+        source: 'ai_kg_extraction',
         relationType: 'prerequisite',
         toConceptId: { in: targetIds }
       },
@@ -84,6 +85,7 @@ export class CourseKnowledgeReasoningService {
     const relations = await prisma.courseKnowledgeRelation.findMany({
       where: {
         workspaceId: input.workspaceId,
+        source: 'ai_kg_extraction',
         OR: [{ fromConceptId: { in: ids } }, { toConceptId: { in: ids } }]
       },
       include: {
@@ -124,7 +126,7 @@ export class CourseKnowledgeReasoningService {
       if (depth > maxDepth || visited.has(conceptId)) return;
       visited.add(conceptId);
       const prereqs = await prisma.courseKnowledgeRelation.findMany({
-        where: { workspaceId: input.workspaceId, toConceptId: conceptId, relationType: 'prerequisite' },
+        where: { workspaceId: input.workspaceId, toConceptId: conceptId, relationType: 'prerequisite', source: 'ai_kg_extraction' },
         include: {
           fromConcept: { include: { learnerStates: { where: { stateScope: 'workspace', status: 'active' }, take: 1 }, bindings: { take: 3 } } }
         },
@@ -167,7 +169,7 @@ export class CourseKnowledgeReasoningService {
       include: {
         learnerStates: { where: { stateScope: 'workspace', status: 'active' }, take: 1 },
         incomingRelations: {
-          where: { relationType: 'prerequisite' },
+          where: { relationType: 'prerequisite', source: 'ai_kg_extraction' },
           include: { fromConcept: { include: { learnerStates: { where: { stateScope: 'workspace', status: 'active' }, take: 1 } } } }
         },
         bindings: true,

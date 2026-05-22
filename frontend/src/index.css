@@ -2,6 +2,24 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'Inter';
+  src: url('./assets/fonts/Inter-Variable.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Archivo';
+  src: url('./assets/fonts/Archivo-Variable.ttf') format('truetype');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('./assets/fonts/Vazirmatn-Variable.ttf') format('truetype');
+  font-display: swap;
+}
+
 /* frontend/src/index.css */
 :root {
   font-family: 'Segoe UI', 'SF Pro Text', system-ui, sans-serif;
@@ -147,13 +165,24 @@ body {
 @keyframes workspace-modal-enter {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.985);
-    filter: blur(4px);
+    transform: perspective(1200px) translateY(12px) rotateX(6deg) scale(0.985);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(1200px) translateY(0) rotateX(0deg) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes workspace-menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.95);
   }
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
-    filter: blur(0);
   }
 }
 
@@ -388,6 +417,79 @@ body {
   animation: workspace-slide-right 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.openwebui-shell {
+  --app-text-scale: 1;
+  font-family: 'Inter', 'Vazirmatn', sans-serif;
+  word-break: break-word;
+}
+
+.openwebui-shell .font-primary {
+  font-family: 'Archivo', 'Vazirmatn', sans-serif;
+}
+
+.openwebui-shell .text-gray-850 {
+  color: #050505;
+}
+
+.openwebui-shell .sidebar {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.openwebui-shell #sidebar-chat-item {
+  min-height: calc(32px * var(--app-text-scale, 1));
+  padding-inline: calc(11px * var(--app-text-scale, 1));
+  padding-block: calc(6px * var(--app-text-scale, 1));
+}
+
+.openwebui-shell #sidebar-chat-item [dir='auto'] {
+  height: calc(20px * var(--app-text-scale, 1));
+  line-height: calc(20px * var(--app-text-scale, 1));
+}
+
+.openwebui-shell .scrollbar-hidden:active::-webkit-scrollbar-thumb,
+.openwebui-shell .scrollbar-hidden:focus::-webkit-scrollbar-thumb,
+.openwebui-shell .scrollbar-hidden:hover::-webkit-scrollbar-thumb {
+  visibility: visible;
+}
+
+.openwebui-shell .scrollbar-hidden::-webkit-scrollbar-thumb {
+  visibility: hidden;
+}
+
+.openwebui-shell .scrollbar-hidden::-webkit-scrollbar-corner {
+  display: none;
+}
+
+.openwebui-shell .scrollbar-hidden {
+  scrollbar-width: none;
+}
+
+.openwebui-shell .scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+
+.openwebui-sidebar .openwebui-sidebar-header {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  outline: 0 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.openwebui-sidebar .openwebui-sidebar-header::before,
+.openwebui-sidebar .openwebui-sidebar-header::after {
+  display: none !important;
+  content: none !important;
+}
+
+.openwebui-sidebar .openwebui-sidebar-header > * {
+  box-shadow: none !important;
+}
+
 .workspace-main,
 .workspace-terminal,
 .workspace-hero {
@@ -400,6 +502,115 @@ body {
 
 .workspace-modal-enter {
   animation: workspace-modal-enter 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: top center;
+}
+
+.workspace-minimal-overlay {
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(12px) saturate(1.05);
+  -webkit-backdrop-filter: blur(12px) saturate(1.05);
+}
+
+.workspace-minimal-modal {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08) 48%, rgba(255, 255, 255, 0.03)),
+    rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 24px;
+  box-shadow:
+    0 22px 68px rgba(32, 33, 36, 0.13),
+    inset 0 1px 0 rgba(255, 255, 255, 0.52),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+  padding: 26px;
+  backdrop-filter: blur(34px) saturate(1.55);
+  -webkit-backdrop-filter: blur(34px) saturate(1.55);
+}
+
+.workspace-minimal-title {
+  color: #111111;
+  font-size: clamp(22px, 2.8vw, 30px);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: 0;
+}
+
+.workspace-minimal-label {
+  display: block;
+  margin-bottom: 8px;
+  color: #111111;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workspace-minimal-input,
+.workspace-minimal-textarea {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.22);
+  color: #111111;
+  font-size: 14px;
+  font-weight: 400;
+  outline: none;
+  box-shadow: none;
+  transition: background 140ms ease, padding 140ms ease;
+}
+
+.workspace-minimal-input {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.workspace-minimal-textarea {
+  min-height: 86px;
+  resize: none;
+  padding: 8px 10px;
+  line-height: 1.7;
+}
+
+.workspace-minimal-input::placeholder,
+.workspace-minimal-textarea::placeholder {
+  color: #c9c9c9;
+  font-weight: 600;
+}
+
+.workspace-minimal-input:focus,
+.workspace-minimal-textarea:focus {
+  background: rgba(255, 255, 255, 0.34);
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.workspace-minimal-button {
+  height: 40px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease, opacity 120ms ease;
+}
+
+.workspace-minimal-button:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.workspace-card-menu {
+  animation: workspace-menu-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  border: 1px solid #f3f4f6;
+  background: #ffffff;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+}
+
+.workspace-card-menu-item {
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.workspace-card-menu-item:hover {
+  background: #f9fafb;
+}
+
+.workspace-card-menu-danger:hover {
+  background: #f9fafb;
+  color: inherit;
 }
 
 .workspace-search-open {
@@ -452,113 +663,125 @@ body {
 
 .notion-auth-page {
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
-  height: 100dvh;
+  min-height: 100dvh;
   overflow: hidden;
+  position: relative;
+  background: #ffffff;
 }
 
 .notion-auth-main {
-  justify-content: flex-start;
+  position: relative;
+  z-index: 1;
+  justify-content: center;
   min-height: 100dvh;
-  padding-top: clamp(12px, 2.4dvh, 24px);
-  padding-bottom: 8px;
+  padding-top: clamp(32px, 7dvh, 72px);
+  padding-bottom: clamp(32px, 7dvh, 72px);
 }
 
-.notion-auth-logo {
+.notion-auth-card {
+  position: relative;
   display: flex;
-  height: 32px;
-  width: 32px;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  border: 2.5px solid #0f0f0f;
-  border-radius: 6px;
-  color: #0f0f0f;
-  font-size: 13px;
-  font-weight: 900;
-  line-height: 1;
-  box-shadow: -3px -3px 0 #0f0f0f inset;
-  margin-bottom: 10px;
+  padding: 0;
+  background: transparent;
 }
 
 .notion-auth-title {
   color: #000;
-  font-size: clamp(20px, 2.8dvh, 25px);
-  font-weight: 800;
-  line-height: 1.08;
-  letter-spacing: 0;
-}
-
-.notion-auth-subtitle {
-  margin-top: 2px;
-  color: #a5a5a5;
-  font-size: clamp(17px, 2.25dvh, 21px);
-  font-weight: 800;
-  line-height: 1.08;
+  font-size: clamp(22px, 2.9dvh, 30px);
+  font-weight: 600;
+  line-height: 1.15;
   letter-spacing: 0;
 }
 
 .notion-auth-form {
-  margin-top: clamp(10px, 2dvh, 16px);
+  margin-top: clamp(28px, 4.2dvh, 42px);
 }
 
 .notion-auth-field-label {
   display: block;
-  margin-bottom: 5px;
-  color: #6f6f6f;
-  font-size: 12px;
+  margin-bottom: 8px;
+  color: #111111;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .notion-auth-input {
-  height: 36px;
+  height: 38px;
   width: 100%;
-  border-radius: 9px;
-  border: 1px solid #dedede;
-  background: #ffffff;
-  padding: 0 14px;
-  color: #2f2f2f;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  padding: 0;
+  color: #111111;
   font-size: 14px;
+  font-weight: 400;
   outline: none;
-  box-shadow: 0 1px 2px rgba(15, 15, 15, 0.03);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  box-shadow: none;
+  transition: background 140ms ease, padding 140ms ease, color 140ms ease;
 }
 
 .notion-auth-input::placeholder {
-  color: #aaa;
+  color: #c9c9c9;
+  font-weight: 600;
 }
 
 .notion-auth-input:focus {
-  border-color: #2383e2;
-  box-shadow: 0 0 0 2px #2383e2;
+  background: #fafafa;
+  padding: 0 12px;
 }
 
-.notion-auth-tip {
-  border-radius: 10px;
-  background: #f1f1ef;
-  padding: 9px 12px;
-  color: #333;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.6;
+.notion-auth-input-shell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 2px;
+}
+
+.notion-auth-input-shell .notion-auth-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.notion-auth-reveal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  color: #111111;
+  opacity: 0.72;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.notion-auth-reveal:hover {
+  opacity: 1;
+}
+
+.notion-auth-reveal:active {
+  transform: scale(0.96);
 }
 
 .notion-auth-primary {
-  height: 36px;
+  height: 46px;
   width: 100%;
-  border-radius: 10px;
-  background: #2383e2;
-  color: #fff;
+  border-radius: 999px;
+  background: #f4f4f4;
+  color: #111111;
   font-size: 14px;
-  font-weight: 700;
-  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.14);
-  transition: background 120ms ease, transform 120ms ease;
+  font-weight: 600;
+  box-shadow: none;
+  transition: background 120ms ease, transform 120ms ease, color 120ms ease;
 }
 
 .notion-auth-primary:hover:not(:disabled) {
-  background: #1f76cc;
+  background: #eeeeee;
 }
 
 .notion-auth-primary:active:not(:disabled) {
-  transform: translateY(1px);
+  transform: scale(0.99);
 }
 
 .notion-auth-primary:disabled {
@@ -566,136 +789,40 @@ body {
   opacity: 0.65;
 }
 
-.notion-auth-divider {
-  display: flex;
-  align-items: center;
-  color: #a0a0a0;
-  font-size: 12px;
-  margin-top: clamp(10px, 2dvh, 16px);
-}
-
-.notion-auth-divider::before,
-.notion-auth-divider::after {
-  content: '';
-  height: 1px;
-  flex: 1;
-  background: #e1e1df;
-}
-
-.notion-auth-divider span {
-  padding: 0 14px;
-}
-
-.notion-auth-provider {
-  display: flex;
-  min-height: 46px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  border: 1px solid #e4e4e2;
-  border-radius: 8px;
-  background: #fff;
-  color: #333;
-  font-size: 12px;
-  font-weight: 500;
-  box-shadow: 0 1px 3px rgba(15, 15, 15, 0.06);
-  transition: background 120ms ease, box-shadow 120ms ease, transform 120ms ease;
-}
-
-.notion-auth-provider:hover {
-  background: #f7f7f5;
-  box-shadow: 0 3px 10px rgba(15, 15, 15, 0.08);
-}
-
-.notion-auth-provider:active {
-  transform: translateY(1px);
-}
-
 .notion-auth-message {
-  border-radius: 9px;
-  padding: 9px 12px;
+  border-radius: 12px;
+  padding: 10px 12px;
   font-size: 12px;
   line-height: 1.5;
   text-align: left;
 }
 
-.notion-auth-provider-grid {
-  margin-top: 8px;
-}
-
-.notion-auth-provider-secondary {
-  margin-top: 8px;
-}
-
 .notion-auth-switch {
-  margin-top: 10px;
+  margin-top: 22px;
+  color: #8b8b8b;
   font-size: 12px;
-}
-
-.notion-auth-terms {
-  margin-top: 8px;
-  font-size: 10px;
-  line-height: 1.35;
-}
-
-.notion-auth-language {
-  margin-top: auto;
-  padding-top: 5px;
-  font-size: 11px;
-}
-
-.notion-auth-secondary-actions {
-  margin-top: 4px;
-  font-size: 10px;
 }
 
 @media (max-height: 760px) {
   .notion-auth-main {
-    padding-top: 10px;
-    padding-bottom: 5px;
-  }
-
-  .notion-auth-logo {
-    height: 28px;
-    width: 28px;
-    border-width: 2px;
-    font-size: 12px;
-    margin-bottom: 8px;
+    padding-top: 28px;
+    padding-bottom: 28px;
   }
 
   .notion-auth-title {
-    font-size: 20px;
-  }
-
-  .notion-auth-subtitle {
-    font-size: 17px;
+    font-size: 22px;
   }
 
   .notion-auth-form {
-    margin-top: 9px;
+    margin-top: 24px;
   }
 
-  .notion-auth-input,
   .notion-auth-primary {
-    height: 34px;
+    height: 42px;
   }
 
-  .notion-auth-provider {
-    min-height: 42px;
-  }
-
-  .notion-auth-divider {
-    margin-top: 9px;
-  }
-
-  .notion-auth-provider-grid {
-    margin-top: 7px;
-  }
-
-  .notion-auth-switch,
-  .notion-auth-terms {
-    margin-top: 7px;
+  .notion-auth-switch {
+    margin-top: 18px;
   }
 }
 
@@ -712,68 +839,47 @@ body {
 }
 
 @media (max-width: 640px) {
+  .notion-auth-main {
+    max-width: 100%;
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .notion-auth-card {
+    max-width: 100%;
+  }
+
   .notion-auth-input {
     height: 36px;
     font-size: 14px;
-  }
-
-  .notion-auth-provider {
-    min-height: 46px;
-    font-size: 12px;
   }
 }
 
 @media (max-height: 680px) {
   .notion-auth-main {
-    padding-top: 8px;
-  }
-
-  .notion-auth-logo {
-    height: 26px;
-    width: 26px;
-    margin-bottom: 6px;
+    padding-top: 24px;
+    padding-bottom: 24px;
   }
 
   .notion-auth-title {
-    font-size: 18px;
-  }
-
-  .notion-auth-subtitle {
-    font-size: 15px;
+    font-size: 20px;
   }
 
   .notion-auth-field-label {
-    margin-bottom: 3px;
-    font-size: 11px;
+    margin-bottom: 7px;
+    font-size: 12px;
   }
 
-  .notion-auth-input,
   .notion-auth-primary {
-    height: 32px;
+    height: 40px;
   }
 
-  .notion-auth-form,
-  .notion-auth-divider {
-    margin-top: 7px;
-  }
-
-  .notion-auth-provider {
-    min-height: 34px;
-    flex-direction: row;
-    gap: 6px;
-  }
-
-  .notion-auth-provider-secondary,
-  .notion-auth-terms {
-    display: none;
+  .notion-auth-form {
+    margin-top: 18px;
   }
 
   .notion-auth-switch {
-    margin-top: 6px;
-  }
-
-  .notion-auth-language {
-    padding-top: 4px;
+    margin-top: 12px;
   }
 }
 

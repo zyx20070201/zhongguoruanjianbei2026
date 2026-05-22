@@ -328,10 +328,10 @@ export const extractWebSourcePreview = async (req: Request, res: Response) => {
 
 export const discoverWebSources = async (req: Request, res: Response) => {
   try {
-    const workspaceId = getSingleParam(req.params.workspaceId);
+    const workspaceId = req.params.workspaceId ? getSingleParam(req.params.workspaceId) : undefined;
     const { query, maxResults, provider } = req.body;
 
-    validateWorkspaceId(workspaceId);
+    if (workspaceId) validateWorkspaceId(workspaceId);
     if (!query || typeof query !== 'string') throw new FileSystemError(400, 'Search query is required');
 
     const discovery = await resourceDiscoveryService.discover({

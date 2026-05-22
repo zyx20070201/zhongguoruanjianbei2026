@@ -38,6 +38,8 @@ const avg = (values: number[]) => values.length ? values.reduce((sum, value) => 
 type ConceptNode = {
   id: string;
   title: string;
+  source?: string;
+  aiEvidence?: Record<string, unknown>;
   difficulty: number;
   activationScore: number;
   learnerState: {
@@ -294,7 +296,7 @@ export class KnowledgeGraphPlanningAgentService {
       : [];
     const neighborRelations = seedIds.length
       ? await prisma.courseKnowledgeRelation.findMany({
-          where: { workspaceId, OR: [{ fromConceptId: { in: seedIds } }, { toConceptId: { in: seedIds } }] },
+          where: { workspaceId, source: 'ai_kg_extraction', OR: [{ fromConceptId: { in: seedIds } }, { toConceptId: { in: seedIds } }] },
           orderBy: [{ relationType: 'asc' }, { weight: 'desc' }],
           take: 400
         })
@@ -319,7 +321,7 @@ export class KnowledgeGraphPlanningAgentService {
     const byId = new Map([...seedConcepts, ...highPriority].filter((concept) => isProbablyKnowledgeConcept(concept.title)).map((concept) => [concept.id, concept]));
     const ids = Array.from(byId.keys());
     const edges = await prisma.courseKnowledgeRelation.findMany({
-      where: { workspaceId, fromConceptId: { in: ids }, toConceptId: { in: ids } },
+      where: { workspaceId, source: 'ai_kg_extraction', fromConceptId: { in: ids }, toConceptId: { in: ids } },
       orderBy: [{ relationType: 'asc' }, { weight: 'desc' }],
       take: 800
     });
@@ -328,6 +330,8 @@ export class KnowledgeGraphPlanningAgentService {
       return {
         id: concept.id,
         title: concept.title,
+        source: concept.source,
+        aiEvidence: parseJson<Record<string, unknown>>(concept.evidenceJson, {}),
         difficulty: concept.difficulty,
         activationScore: concept.activationScore,
         learnerState: {

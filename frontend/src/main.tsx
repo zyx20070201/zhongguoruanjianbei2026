@@ -5,8 +5,7 @@ import './index.css';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
-import WorkspaceListPage from './pages/WorkspaceListPage';
-import WorkspaceDetailPage from './pages/WorkspaceDetailPage';
+import WorkspaceShellPage from './pages/WorkspaceShellPage';
 import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
 import WorkbenchPage from './pages/WorkbenchPage';
 import { ThemeProvider } from './theme';
@@ -20,8 +19,8 @@ const router = createBrowserRouter([
       {
         element: <ProtectedRoute />,
         children: [
-          { path: '/workspaces', element: <WorkspaceListPage /> },
-          { path: '/workspaces/:id', element: <WorkspaceDetailPage /> },
+          { path: '/workspaces', element: <WorkspaceShellPage /> },
+          { path: '/workspaces/:id', element: <WorkspaceShellPage /> },
           { path: '/workspaces/:id/knowledge-graph', element: <KnowledgeGraphPage /> },
           { path: '/workbenches/:id', element: <WorkbenchPage /> }
         ]
