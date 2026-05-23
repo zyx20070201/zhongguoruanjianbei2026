@@ -13,6 +13,15 @@ const freePort = (port) =>
     finder.stdout.on('data', (chunk) => {
       output += chunk.toString();
     });
+    finder.on('error', (error) => {
+      if (error?.code === 'ENOENT') {
+        console.warn(`lsof is not available; skipped stale process cleanup for port ${port}.`);
+        resolve();
+        return;
+      }
+
+      throw error;
+    });
     finder.on('close', () => {
       const pids = output
         .split(/\s+/)
@@ -50,7 +59,11 @@ const stopChildren = () => {
     }
 
     try {
-      process.kill(-child.pid, 'SIGTERM');
+      if (process.platform === 'win32') {
+        child.kill('SIGTERM');
+      } else {
+        process.kill(-child.pid, 'SIGTERM');
+      }
     } catch {
       child.kill('SIGTERM');
     }
@@ -58,9 +71,11 @@ const stopChildren = () => {
 };
 
 const spawnDevProcess = (name, command, args) => {
-  const child = spawn(command, args, {
-    detached: true,
+  const resolvedCommand = process.platform === 'win32' && command === 'npm' ? 'npm.cmd' : command;
+  const child = spawn(resolvedCommand, args, {
+    detached: process.platform !== 'win32',
     stdio: 'inherit',
+    shell: process.platform === 'win32',
   });
 
   children.push(child);

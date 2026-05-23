@@ -75,6 +75,7 @@ model Workspace {
   courseKnowledgeActivations CourseKnowledgeActivation[]
   courseKnowledgeLearnerStates CourseKnowledgeLearnerState[]
   courseKnowledgeGovernanceLogs CourseKnowledgeGovernanceLog[]
+  courseKnowledgeConceptTags CourseKnowledgeConceptTag[]
   learningRuns       LearningRun[]
   studioArtifacts    StudioArtifact[]
   learnerStateCores LearnerStateCore[]
