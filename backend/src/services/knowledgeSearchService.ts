@@ -54,6 +54,7 @@ interface Bm25Stats {
 
 const CJK_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
 const DEFAULT_CANDIDATE_LIMIT = Number(process.env.CONTEXT_SEARCH_CANDIDATES || 250);
+const INVERTED_CANDIDATE_LIMIT = Number(process.env.CONTEXT_INVERTED_CANDIDATES || 160);
 const LEXICAL_TOP_K = Number(process.env.CONTEXT_LEXICAL_TOP_K || 40);
 const VECTOR_TOP_K = Number(process.env.CONTEXT_VECTOR_TOP_K || 40);
 const RERANK_TOP_K = Number(process.env.CONTEXT_RERANK_TOP_K || 24);
@@ -157,18 +158,25 @@ const overlap = (left: string, right: string) => {
 const scoreLexical = (query: string, terms: string[], chunk: DocumentChunkRecord, stats?: Bm25Stats) => {
   const text = chunk.text;
   const summary = chunk.summary || '';
+  const sourceText = `${chunk.fileName || ''}\n${chunk.filePath || ''}`;
   const lowerText = text.toLowerCase();
   const lowerSummary = summary.toLowerCase();
-  const documentTerms = tokenize(`${summary}\n${text}`).slice(0, 500);
+  const lowerSource = sourceText.toLowerCase();
+  const documentTerms = tokenize(`${sourceText}\n${summary}\n${text}`).slice(0, 500);
   const matchedTerms: string[] = [];
   let lexical = bm25(terms, documentTerms, stats) * 4;
   let phrase = 0;
 
   if (query && lowerText.includes(query.toLowerCase())) phrase += 12;
   if (query && lowerSummary.includes(query.toLowerCase())) phrase += 6;
+  if (query && lowerSource.includes(query.toLowerCase())) phrase += 8;
 
   for (const term of terms) {
     let matched = false;
+    if (lowerSource.includes(term)) {
+      lexical += 3.2;
+      matched = true;
+    }
     if (lowerText.includes(term)) {
       lexical += 2.4;
       matched = true;
@@ -259,6 +267,8 @@ export class KnowledgeSearchService {
     limit?: number;
     activeFileId?: string | null;
     requireDiversity?: boolean;
+    candidateLimit?: number;
+    includeChatScoped?: boolean;
   }): Promise<KnowledgeSearchResult[]> {
     const query = input.query.trim();
     const terms = tokenize(query);
@@ -266,11 +276,36 @@ export class KnowledgeSearchService {
 
     if (terms.length === 0 && !query) return [];
 
-    const lexicalChunks = await documentChunkStore.searchableChunks({
-      workspaceId: input.workspaceId,
-      fileIds: input.fileIds,
-      take: Math.max(DEFAULT_CANDIDATE_LIMIT, LEXICAL_TOP_K)
-    });
+    const lexicalCandidateTake =
+      input.candidateLimit != null
+        ? Math.max(LEXICAL_TOP_K, Math.min(input.candidateLimit, DEFAULT_CANDIDATE_LIMIT))
+        : DEFAULT_CANDIDATE_LIMIT;
+    const invertedCandidateTake = Math.max(
+      LEXICAL_TOP_K,
+      Math.min(input.candidateLimit || INVERTED_CANDIDATE_LIMIT, Number(process.env.KNOWLEDGE_INVERTED_MAX_RESULTS || 500))
+    );
+    let lexicalChunks = await documentChunkStore
+      .searchByTerms({
+        workspaceId: input.workspaceId,
+        terms,
+        fileIds: input.fileIds,
+        take: invertedCandidateTake,
+        includeChatScoped: input.includeChatScoped
+      })
+      .catch(() => [] as DocumentChunkRecord[]);
+    if (lexicalChunks.length < Math.min(LEXICAL_TOP_K, 12)) {
+      lexicalChunks = await documentChunkStore.searchableChunks({
+        workspaceId: input.workspaceId,
+        fileIds: input.fileIds,
+        includeChatScoped: input.includeChatScoped,
+        take: Math.max(
+          lexicalCandidateTake,
+          input.fileIds?.length
+            ? Math.min(Number(process.env.CONTEXT_EXPLICIT_FILE_CANDIDATES || 6000), input.fileIds.length * 240)
+            : 0
+        )
+      });
+    }
     const vectorWarnings: string[] = [];
     const vectorResults = await vectorStoreService
       .search({
@@ -482,7 +517,11 @@ export class KnowledgeSearchService {
     const key = `${candidate.chunk.fileObjectId}:${candidate.chunk.parentId || 'root'}`;
     if (!siblingCache.has(key)) {
       const chunks = await documentChunkStore
-        .listFileChunks({ workspaceId, fileObjectId: candidate.chunk.fileObjectId })
+        .listFileChunks({
+          workspaceId,
+          fileObjectId: candidate.chunk.fileObjectId,
+          take: Number(process.env.CONTEXT_CITATION_SIBLING_TAKE || 24)
+        })
         .catch(() => []);
       siblingCache.set(
         key,

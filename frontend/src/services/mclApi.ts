@@ -247,6 +247,7 @@ export interface MclLearningPlan {
     currentTaskIntent?: string;
     activeGoalTitle?: string | null;
   };
+  knowledgeGraphSnapshot?: Record<string, unknown>;
   diagnosticReport?: {
     learnerLevel?: string;
     currentStateSummary?: string;

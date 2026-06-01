@@ -39,6 +39,10 @@ import { learningSystemEvaluationService } from '../services/learningSystemEvalu
 import { personalizedWorkspaceIntegrationService } from '../services/personalizedWorkspaceIntegrationService';
 import { targetKnowledgeStructureService } from '../services/targetKnowledgeStructureService';
 import { knowledgeGapAnalysisService } from '../services/knowledgeGapAnalysisService';
+import { workspaceFileIndexService } from '../services/workspaceFileIndexService';
+import { workspaceAgentRuntime } from '../services/workspaceAgent/workspaceAgentRuntime';
+import { workspaceTerminalChatService } from '../services/workspaceTerminalChatService';
+import { planGovernanceService } from '../services/planning/planGovernanceService';
 import prisma from '../config/db';
 
 const router = Router();
@@ -46,8 +50,105 @@ registerLearningCapabilities();
 
 const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Learning request failed');
 
+const terminalMode = (value: unknown): 'chat' | 'agentic' =>
+  value === 'chat' ? 'chat' : 'agentic';
+
+const selectedSourceIds = (value: unknown) =>
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && Boolean(item)).slice(0, 12)
+    : [];
+
+const selectedSources = (value: unknown) =>
+  Array.isArray(value)
+    ? value
+        .map((item: any) => ({
+          fileId: typeof item?.fileId === 'string' ? item.fileId : typeof item?.id === 'string' ? item.id : '',
+          mode: item?.mode === 'full_context' ? 'full_context' as const : 'focused' as const
+        }))
+        .filter((item) => item.fileId)
+        .slice(0, 12)
+    : [];
+
+const chatFiles = (value: unknown) =>
+  Array.isArray(value)
+    ? value
+        .map((item: any) => ({
+          id: typeof item?.id === 'string' ? item.id : '',
+          name: typeof item?.name === 'string' ? item.name : undefined,
+          mimeType: typeof item?.mimeType === 'string' ? item.mimeType : undefined,
+          size: typeof item?.size === 'number' ? item.size : undefined
+        }))
+        .filter((item) => item.id)
+        .slice(0, 24)
+    : [];
+
+const latestTerminalUserText = (messages: any[]) =>
+  [...(messages || [])].reverse().find((message) => message?.role === 'user' && String(message?.content || '').trim())?.content || '';
+
+const terminalAssistantMessage = (result: any, mode: 'chat' | 'agentic') => ({
+  role: 'assistant' as const,
+  content: String(result?.reply || ''),
+  mode,
+  goalDraft: result?.goalDraft,
+  proposedActions: result?.proposedActions,
+  executedActions: result?.executedActions,
+  agentTrace: result?.agentTrace,
+  evidence: result?.evidence,
+  followUps: result?.followUps,
+  askUserToSave: result?.memoryContext?.askUserToSave || null
+});
+
+const replaceOrAppendAssistant = (messages: any[], assistant: ReturnType<typeof terminalAssistantMessage>) => {
+  const normalized = Array.isArray(messages) ? messages : [];
+  if (normalized[normalized.length - 1]?.role === 'assistant') {
+    return [...normalized.slice(0, -1), assistant];
+  }
+  return [...normalized, assistant];
+};
+
+const persistTerminalConversation = async (input: {
+  workspaceId: string;
+  workbenchId?: string | null;
+  sessionId?: string | null;
+  checkpointThreadId?: string | null;
+  mode: 'chat' | 'agentic';
+  messages: any[];
+  result: any;
+  selectedSources?: Array<{ fileId: string; mode: 'focused' | 'full_context' }>;
+  chatFiles?: ReturnType<typeof chatFiles>;
+}) => {
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: input.workspaceId },
+    select: { userId: true }
+  }).catch(() => null);
+  if (!workspace?.userId) return null;
+  const assistant = terminalAssistantMessage(input.result, input.mode);
+  const sessionId = input.result?.sessionId || input.sessionId || null;
+  const checkpointThreadId = input.result?.checkpointThreadId || input.checkpointThreadId || null;
+  return conversationHistoryService.saveTerminalConversation({
+    workspaceId: input.workspaceId,
+    workbenchId: input.workbenchId || null,
+    userId: workspace.userId,
+    sessionId,
+    title: String(latestTerminalUserText(input.messages)).slice(0, 80),
+    source: input.mode === 'chat' ? 'terminal_chat' : 'terminal',
+    messages: replaceOrAppendAssistant(input.messages, assistant),
+    sessionMetadata: {
+      mode: input.mode,
+      checkpointThreadId,
+      selectedSources: input.selectedSources || [],
+      chatFiles: input.chatFiles || [],
+      status: input.result?.status || 'completed'
+    }
+  }).catch((error) => {
+    console.warn('Terminal conversation persistence failed:', error);
+    return null;
+  });
+};
+
 router.post('/terminal/chat', async (req: Request, res: Response) => {
   const { workspaceId, workbenchId, sessionId, messages } = req.body ?? {};
+  const mode = terminalMode(req.body?.mode);
 
   if (!workspaceId || typeof workspaceId !== 'string') {
     return res.status(400).json({ error: 'workspaceId is required' });
@@ -58,11 +159,32 @@ router.post('/terminal/chat', async (req: Request, res: Response) => {
   }
 
   try {
-    const result = await learningOrchestrationService.chat({
+    const commonInput = {
       workspaceId,
       workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
       sessionId: typeof sessionId === 'string' ? sessionId : null,
       messages
+    };
+    const normalizedChatFiles = chatFiles(req.body?.chatFiles);
+    const normalizedSelectedSources = selectedSources(req.body?.selectedSources);
+    const result = mode === 'chat'
+      ? await workspaceTerminalChatService.chat({
+          ...commonInput,
+          selectedSources: normalizedSelectedSources,
+          selectedSourceIds: selectedSourceIds(req.body?.selectedSourceIds),
+          chatFiles: normalizedChatFiles
+        })
+      : await workspaceAgentRuntime.run({ ...commonInput, chatFiles: normalizedChatFiles });
+    await persistTerminalConversation({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      sessionId: typeof sessionId === 'string' ? sessionId : null,
+      checkpointThreadId: typeof req.body?.checkpointThreadId === 'string' ? req.body.checkpointThreadId : null,
+      mode,
+      messages,
+      result,
+      selectedSources: normalizedSelectedSources,
+      chatFiles: normalizedChatFiles
     });
     const latestUserMessage = [...messages].reverse().find((message: any) => message?.role === 'user' && message?.content)?.content || '';
     await learningEventCollectionService.collect({
@@ -76,16 +198,172 @@ router.post('/terminal/chat', async (req: Request, res: Response) => {
         assistantText: result.reply,
         repeatedQuestion: /还是|再说|没懂|不懂|换个说法|again|still/i.test(String(latestUserMessage))
       },
-      source: { component: 'learning_terminal' },
+      source: { component: mode === 'chat' ? 'learning_terminal_chat' : 'learning_terminal' },
       confidence: 0.62
     }).catch((error) => console.warn('Learning event collection chat_turn failed:', error));
     await learnerStateAnalyzer.analyzeChat({
       workspaceId,
       messages,
       answer: result.reply,
-      taskType: 'terminal_goal_draft',
-      sourceId: 'learning_terminal'
+      taskType: mode === 'chat' ? 'workspace_terminal_chat' : 'workspace_agent_terminal',
+      sourceId: mode === 'chat' ? 'learning_terminal_chat' : 'learning_terminal'
     }).catch((error) => console.warn('LearnerStateAnalyzer terminal chat failed:', error));
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/terminal/chat/stream', async (req: Request, res: Response) => {
+  const { workspaceId, workbenchId, sessionId, checkpointThreadId, messages } = req.body ?? {};
+  const mode = terminalMode(req.body?.mode);
+
+  if (!workspaceId || typeof workspaceId !== 'string') {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+
+  if (!Array.isArray(messages)) {
+    return res.status(400).json({ error: 'messages must be an array' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    const normalizedChatFiles = chatFiles(req.body?.chatFiles);
+    const normalizedSelectedSources = selectedSources(req.body?.selectedSources);
+    if (mode === 'chat') {
+      let finalResult: Awaited<ReturnType<typeof workspaceTerminalChatService.chat>> | null = null;
+      for await (const item of workspaceTerminalChatService.chatStream({
+        workspaceId,
+        workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+        sessionId: typeof sessionId === 'string' ? sessionId : null,
+        messages,
+        selectedSources: normalizedSelectedSources,
+        selectedSourceIds: selectedSourceIds(req.body?.selectedSourceIds),
+        chatFiles: normalizedChatFiles
+      })) {
+        if (item.type === 'status') send('status', { type: 'status', node: 'WorkspaceChat', status: item.status });
+        if (item.type === 'delta') send('delta', { type: 'delta', node: 'WorkspaceChat', delta: item.delta });
+        if (item.type === 'final') finalResult = item.result;
+      }
+      if (!finalResult) throw new Error('Workspace chat stream ended before final result');
+      await persistTerminalConversation({
+        workspaceId,
+        workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+        sessionId: typeof sessionId === 'string' ? sessionId : null,
+        checkpointThreadId: typeof checkpointThreadId === 'string' ? checkpointThreadId : null,
+        mode,
+        messages,
+        result: finalResult,
+        selectedSources: normalizedSelectedSources,
+        chatFiles: normalizedChatFiles
+      });
+      send('final', { type: 'final', node: 'WorkspaceChat', result: finalResult });
+    } else {
+      for await (const item of workspaceAgentRuntime.streamRun({
+        workspaceId,
+        workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+        sessionId: typeof sessionId === 'string' ? sessionId : null,
+        checkpointThreadId: typeof checkpointThreadId === 'string' ? checkpointThreadId : null,
+        messages,
+        chatFiles: normalizedChatFiles
+      })) {
+        if ((item.type === 'final' || item.type === 'approval_required') && item.result) {
+          await persistTerminalConversation({
+            workspaceId,
+            workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+            sessionId: typeof sessionId === 'string' ? sessionId : null,
+            checkpointThreadId: typeof checkpointThreadId === 'string' ? checkpointThreadId : null,
+            mode,
+            messages,
+            result: item.result,
+            selectedSources: normalizedSelectedSources,
+            chatFiles: normalizedChatFiles
+          });
+        }
+        send(item.type, item);
+      }
+    }
+    send('done', { ok: true });
+  } catch (error) {
+    send('error', { error: getErrorMessage(error) });
+  } finally {
+    res.end();
+  }
+});
+
+router.post('/terminal/approval', async (req: Request, res: Response) => {
+  const { workspaceId, workbenchId, sessionId, checkpointThreadId, messages, decision } = req.body ?? {};
+
+  if (!workspaceId || typeof workspaceId !== 'string') {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+
+  if (!decision || typeof decision !== 'object') {
+    return res.status(400).json({ error: 'decision is required' });
+  }
+
+  try {
+    const result = await workspaceAgentRuntime.resumeApproval(
+      {
+        workspaceId,
+        workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+        sessionId: typeof sessionId === 'string' ? sessionId : null,
+        checkpointThreadId: typeof checkpointThreadId === 'string' ? checkpointThreadId : null,
+        messages: Array.isArray(messages) ? messages : []
+      },
+      decision
+    );
+    await persistTerminalConversation({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      sessionId: typeof sessionId === 'string' ? sessionId : null,
+      checkpointThreadId: typeof checkpointThreadId === 'string' ? checkpointThreadId : null,
+      mode: 'agentic',
+      messages: Array.isArray(messages) ? messages : [],
+      result
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/terminal/chats', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const workbenchId = typeof req.query.workbenchId === 'string' ? req.query.workbenchId : null;
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 30;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const sessions = await conversationHistoryService.listTerminalSessions({ workspaceId, workbenchId, limit });
+    return res.json({ sessions });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.get('/terminal/chats/:sessionId/messages', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const sessionId = typeof req.params.sessionId === 'string' ? req.params.sessionId : '';
+  const before = typeof req.query.before === 'string' ? req.query.before : null;
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 30;
+  if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+  if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+  try {
+    const result = await conversationHistoryService.getTerminalMessages({
+      workspaceId,
+      sessionId,
+      before,
+      limit
+    });
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
@@ -127,6 +405,68 @@ router.get('/events', async (req: Request, res: Response) => {
   try {
     const events = await learningEventCollectionService.list({ workspaceId, workbenchId, eventType, actor, objectType, objectId, limit });
     return res.json({ events });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.patch('/events/:eventId', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.body?.workspaceId === 'string' ? req.body.workspaceId : '';
+  const eventId = Array.isArray(req.params.eventId) ? req.params.eventId[0] : req.params.eventId;
+  const { eventType, summary, confidence } = req.body ?? {};
+  if (!workspaceId || !eventId) return res.status(400).json({ error: 'workspaceId and eventId are required' });
+  try {
+    const existing = await prisma.learningEvent.findFirst({ where: { id: eventId, workspaceId } });
+    if (!existing) return res.status(404).json({ error: 'Learning event not found' });
+    const payload = JSON.parse(existing.payloadJson || '{}');
+    const nextPayload = typeof summary === 'string'
+      ? { ...payload, summary, interaction: { ...(payload.interaction || {}), userText: summary } }
+      : payload;
+    const event = await prisma.learningEvent.update({
+      where: { id: eventId },
+      data: {
+        ...(typeof eventType === 'string' && eventType.trim() ? { eventType: eventType.trim() } : {}),
+        ...(typeof confidence === 'number' ? { confidence } : {}),
+        payloadJson: JSON.stringify(nextPayload)
+      }
+    });
+    return res.json({
+      event: {
+        id: event.id,
+        eventType: event.eventType,
+        actor: event.actor,
+        schemaVersion: event.schemaVersion,
+        eventFamily: event.eventFamily,
+        workspaceId: event.workspaceId,
+        workbenchId: event.workbenchId,
+        goalId: event.goalId,
+        objectType: event.objectType,
+        objectId: event.objectId,
+        sessionId: event.sessionId,
+        confidence: event.confidence,
+        payload: JSON.parse(event.payloadJson || '{}'),
+        metadata: JSON.parse(event.metadataJson || '{}'),
+        cognitiveSignals: JSON.parse(event.cognitiveSignalsJson || '[]'),
+        diagnosticFeatures: JSON.parse(event.diagnosticFeaturesJson || '{}'),
+        quality: JSON.parse(event.qualityJson || '{}'),
+        observedAt: event.observedAt.toISOString(),
+        createdAt: event.createdAt.toISOString()
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.delete('/events/:eventId', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const eventId = Array.isArray(req.params.eventId) ? req.params.eventId[0] : req.params.eventId;
+  if (!workspaceId || !eventId) return res.status(400).json({ error: 'workspaceId and eventId are required' });
+  try {
+    const existing = await prisma.learningEvent.findFirst({ where: { id: eventId, workspaceId } });
+    if (!existing) return res.status(404).json({ error: 'Learning event not found' });
+    await prisma.learningEvent.delete({ where: { id: eventId } });
+    return res.json({ ok: true });
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
   }
@@ -202,7 +542,7 @@ router.post('/workbenches/guided', async (req: Request, res: Response) => {
 });
 
 router.post('/knowledge/index', async (req: Request, res: Response) => {
-  const { workspaceId, fileObjectId } = req.body ?? {};
+  const { workspaceId, fileObjectId, force } = req.body ?? {};
 
   if (!workspaceId || typeof workspaceId !== 'string') {
     return res.status(400).json({ error: 'workspaceId is required' });
@@ -216,7 +556,8 @@ router.post('/knowledge/index', async (req: Request, res: Response) => {
     const job = await knowledgeIndexingService.indexFile({
       workspaceId,
       fileObjectId,
-      reason: 'manual-index'
+      reason: force ? 'manual-reindex' : 'manual-index',
+      force: Boolean(force)
     });
     return res.json({ job });
   } catch (error) {
@@ -394,6 +735,71 @@ router.post('/knowledge/search', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/workspace/files/cards', async (req: Request, res: Response) => {
+  const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+  const query = typeof req.query.query === 'string' ? req.query.query : '';
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 80;
+
+  if (!workspaceId) {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+
+  try {
+    const files = await workspaceFileIndexService.listFileCards({
+      workspaceId,
+      query,
+      limit: Number.isFinite(limit) ? limit : 80
+    });
+    return res.json({ files });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/workspace/files/index', async (req: Request, res: Response) => {
+  const { workspaceId, force, maxFiles, fileIds } = req.body ?? {};
+
+  if (!workspaceId || typeof workspaceId !== 'string') {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+
+  try {
+    const report = await workspaceFileIndexService.ensureWorkspaceIndexed({
+      workspaceId,
+      force: Boolean(force),
+      maxFiles: typeof maxFiles === 'number' ? maxFiles : undefined,
+      fileIds: Array.isArray(fileIds) ? fileIds.filter((value): value is string => typeof value === 'string') : undefined
+    });
+    return res.json({ report });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/workspace/files/search', async (req: Request, res: Response) => {
+  const { workspaceId, query, fileLimit, chunkLimit, ensureIndexed } = req.body ?? {};
+
+  if (!workspaceId || typeof workspaceId !== 'string') {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: 'query is required' });
+  }
+
+  try {
+    const result = await workspaceFileIndexService.search({
+      workspaceId,
+      query,
+      fileLimit: typeof fileLimit === 'number' ? fileLimit : undefined,
+      chunkLimit: typeof chunkLimit === 'number' ? chunkLimit : undefined,
+      ensureIndexed: Boolean(ensureIndexed)
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
 router.get('/knowledge/graph', async (req: Request, res: Response) => {
   const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
   const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 80;
@@ -483,6 +889,44 @@ router.post('/knowledge/graph/concepts/:conceptId/tag-suggestions', async (req: 
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/knowledge/graph/concepts/:conceptId/explain-stream', async (req: Request, res: Response) => {
+  const conceptId = typeof req.params.conceptId === 'string' ? req.params.conceptId : '';
+  const { workspaceId, question, history } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (!conceptId) return res.status(400).json({ error: 'conceptId is required' });
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  let reply = '';
+  try {
+    const stream = courseKnowledgeGraphService.streamConceptExplanation({
+      workspaceId,
+      conceptId,
+      question: typeof question === 'string' ? question : undefined,
+      history: Array.isArray(history)
+        ? history.filter((item: any) => item && (item.role === 'user' || item.role === 'assistant') && typeof item.content === 'string')
+        : undefined
+    });
+    for await (const delta of stream) {
+      reply += delta;
+      send('delta', delta);
+    }
+    send('done', { reply });
+  } catch (error) {
+    send('error', { error: getErrorMessage(error) });
+  } finally {
+    res.end();
   }
 });
 
@@ -910,6 +1354,29 @@ router.post('/planning/plans/:planId/apply', async (req: Request, res: Response)
   }
 });
 
+router.delete('/planning/plans/:planId', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const { workspaceId } = req.body ?? {};
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+
+  try {
+    const plan = await learningMemoryService.deleteLearningPlan({
+      workspaceId,
+      planId
+    });
+
+    if (!plan) {
+      return res.status(404).json({ error: 'Learning plan not found' });
+    }
+
+    return res.json({ plan });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
 router.post('/planning/plans/:planId/actions', async (req: Request, res: Response) => {
   const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
   const { workspaceId, action, targetPlanId, title, note } = req.body ?? {};
@@ -991,6 +1458,136 @@ router.patch('/planning/plans/:planId/steps/:stepId/details', async (req: Reques
 
     if (!plan) return res.status(404).json({ error: 'Learning plan not found' });
     return res.json({ plan });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.patch('/planning/plans/:planId/stages/:stageId', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const stageId = typeof req.params.stageId === 'string' ? req.params.stageId : '';
+  const { workspaceId, title, content, changeSource, note, proposalId } = req.body ?? {};
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!stageId) return res.status(400).json({ error: 'stageId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+  if (typeof content !== 'string' || !content.trim()) return res.status(400).json({ error: 'content is required' });
+
+  try {
+    const plan = await learningMemoryService.updateStructuredPlanStage({
+      workspaceId,
+      planId,
+      stageId,
+      title: typeof title === 'string' ? title : '',
+      content,
+      changeSource: changeSource === 'llm_patch' ? 'llm_patch' : 'manual',
+      note: typeof note === 'string' ? note : undefined,
+      proposalId: typeof proposalId === 'string' ? proposalId : null
+    });
+    if (!plan) return res.status(404).json({ error: 'Learning plan not found' });
+    return res.json({ plan });
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/planning/plans/:planId/stages/:stageId/patch-proposal', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const stageId = typeof req.params.stageId === 'string' ? req.params.stageId : '';
+  const { workspaceId, instruction } = req.body ?? {};
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!stageId) return res.status(400).json({ error: 'stageId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+
+  try {
+    const result = await planGovernanceService.proposeStagePatch({
+      workspaceId,
+      planId,
+      stageId,
+      instruction: typeof instruction === 'string' ? instruction : undefined
+    });
+    if (!result) return res.status(404).json({ error: 'Learning plan not found' });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/planning/plans/:planId/stages/:stageId/explain', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const stageId = typeof req.params.stageId === 'string' ? req.params.stageId : '';
+  const { workspaceId, question, history } = req.body ?? {};
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!stageId) return res.status(400).json({ error: 'stageId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+
+  try {
+    const result = await planGovernanceService.explainStage({
+      workspaceId,
+      planId,
+      stageId,
+      question: typeof question === 'string' ? question : undefined,
+      history: Array.isArray(history)
+        ? history
+            .map((item: any) => ({
+              role: item?.role === 'assistant' ? 'assistant' as const : 'user' as const,
+              content: typeof item?.content === 'string' ? item.content : ''
+            }))
+            .filter((item) => item.content)
+        : undefined
+    });
+    if (!result) return res.status(404).json({ error: 'Learning plan not found' });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/planning/plans/:planId/explain', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const { workspaceId, question, history } = req.body ?? {};
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+
+  try {
+    const result = await planGovernanceService.explainPlan({
+      workspaceId,
+      planId,
+      question: typeof question === 'string' ? question : undefined,
+      history: Array.isArray(history)
+        ? history
+            .map((item: any) => ({
+              role: item?.role === 'assistant' ? 'assistant' as const : 'user' as const,
+              content: typeof item?.content === 'string' ? item.content : ''
+            }))
+            .filter((item) => item.content)
+        : undefined
+    });
+    if (!result) return res.status(404).json({ error: 'Learning plan not found' });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ error: getErrorMessage(error) });
+  }
+});
+
+router.post('/planning/plans/:planId/review', async (req: Request, res: Response) => {
+  const planId = typeof req.params.planId === 'string' ? req.params.planId : '';
+  const { workspaceId, instruction } = req.body ?? {};
+
+  if (!planId) return res.status(400).json({ error: 'planId is required' });
+  if (!workspaceId || typeof workspaceId !== 'string') return res.status(400).json({ error: 'workspaceId is required' });
+
+  try {
+    const result = await planGovernanceService.reviewPlan({
+      workspaceId,
+      planId,
+      instruction: typeof instruction === 'string' ? instruction : undefined
+    });
+    if (!result) return res.status(404).json({ error: 'Learning plan not found' });
+    return res.json(result);
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
   }

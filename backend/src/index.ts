@@ -9,11 +9,14 @@ import { ensureWorkbenchTableSchema } from './config/ensureWorkbenchTableSchema'
 import { ensureWorkbenchNoteRevisionSchema } from './config/ensureWorkbenchNoteRevisionSchema';
 import { ensureCourseKnowledgeGraphSchema } from './config/ensureCourseKnowledgeGraphSchema';
 import { ensureStudioArtifactSchema } from './config/ensureStudioArtifactSchema';
+import { ensureSqlitePerformanceSchema } from './config/ensureSqlitePerformanceSchema';
 import { conversationHistoryService } from './services/conversationHistoryService';
 import { videoAnalysisService } from './services/videoAnalysisService';
 import { audioNoteService } from './services/audioNoteService';
+import { knowledgeIndexQueueService } from './services/knowledgeIndexQueueService';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { securityHeaders } from './middleware/securityHeaders';
+import { configureSqliteConnection } from './config/db';
 
 const app = express();
 const parsePort = (value: string | undefined) => {
@@ -52,6 +55,7 @@ app.use(
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '16mb' }));
 
 const start = async () => {
+  await configureSqliteConnection();
   await ensureAuthSecuritySchema();
   await ensurePlanningSchema();
   await ensureLearningStateSchema();
@@ -59,9 +63,11 @@ const start = async () => {
   await ensureWorkbenchNoteRevisionSchema();
   await ensureCourseKnowledgeGraphSchema();
   await ensureStudioArtifactSchema();
+  await ensureSqlitePerformanceSchema();
   conversationHistoryService.registerBackgroundJobs();
   videoAnalysisService.registerBackgroundJobs();
   audioNoteService.registerBackgroundJobs();
+  knowledgeIndexQueueService.start();
 
   app.use('/api', routes);
 

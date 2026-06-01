@@ -1,4 +1,4 @@
-import prisma from '../config/db';
+import prisma, { withPrismaRetry } from '../config/db';
 
 const stringify = (value: unknown) => {
   try {
@@ -16,72 +16,84 @@ export class LearningRunService {
     intent: string;
     input?: Record<string, unknown>;
   }) {
-    return prisma.learningRun.create({
-      data: {
-        workspaceId: input.workspaceId,
-        workbenchId: input.workbenchId || null,
-        goalId: input.goalId || null,
-        intent: input.intent,
-        status: 'running',
-        inputJson: stringify(input.input || {})
-      }
-    });
+    return withPrismaRetry(() =>
+      prisma.learningRun.create({
+        data: {
+          workspaceId: input.workspaceId,
+          workbenchId: input.workbenchId || null,
+          goalId: input.goalId || null,
+          intent: input.intent,
+          status: 'running',
+          inputJson: stringify(input.input || {})
+        }
+      })
+    );
   }
 
   async startStep(runId: string, capability: string, input?: Record<string, unknown>) {
-    return prisma.learningRunStep.create({
-      data: {
-        runId,
-        capability,
-        status: 'running',
-        inputJson: stringify(input || {}),
-        startedAt: new Date()
-      }
-    });
+    return withPrismaRetry(() =>
+      prisma.learningRunStep.create({
+        data: {
+          runId,
+          capability,
+          status: 'running',
+          inputJson: stringify(input || {}),
+          startedAt: new Date()
+        }
+      })
+    );
   }
 
   async completeStep(stepId: string, output?: Record<string, unknown>) {
-    return prisma.learningRunStep.update({
-      where: { id: stepId },
-      data: {
-        status: 'completed',
-        outputJson: stringify(output || {}),
-        completedAt: new Date()
-      }
-    });
+    return withPrismaRetry(() =>
+      prisma.learningRunStep.update({
+        where: { id: stepId },
+        data: {
+          status: 'completed',
+          outputJson: stringify(output || {}),
+          completedAt: new Date()
+        }
+      })
+    );
   }
 
   async failStep(stepId: string, error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    return prisma.learningRunStep.update({
-      where: { id: stepId },
-      data: {
-        status: 'failed',
-        errorMessage: message,
-        completedAt: new Date()
-      }
-    });
+    return withPrismaRetry(() =>
+      prisma.learningRunStep.update({
+        where: { id: stepId },
+        data: {
+          status: 'failed',
+          errorMessage: message,
+          completedAt: new Date()
+        }
+      })
+    );
   }
 
   async completeRun(runId: string, result?: Record<string, unknown>) {
-    return prisma.learningRun.update({
-      where: { id: runId },
-      data: {
-        status: 'completed',
-        resultJson: stringify(result || {})
-      }
-    });
+    return withPrismaRetry(() =>
+      prisma.learningRun.update({
+        where: { id: runId },
+        data: {
+          status: 'completed',
+          resultJson: stringify(result || {})
+        }
+      })
+    );
   }
 
   async failRun(runId: string, error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    return prisma.learningRun.update({
-      where: { id: runId },
-      data: {
-        status: 'failed',
-        errorMessage: message
-      }
-    });
+    return withPrismaRetry(() =>
+      prisma.learningRun.update({
+        where: { id: runId },
+        data: {
+          status: 'failed',
+          errorMessage: message
+        }
+      })
+    );
   }
 
   async listRuns(workspaceId: string, limit = 20) {

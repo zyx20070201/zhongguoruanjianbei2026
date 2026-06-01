@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import prisma from '../config/db';
-import { FileSystemService } from './fileSystemService';
 import { knowledgeSearchService } from './knowledgeSearchService';
 import { learningRunService } from './learningRunService';
 import { learnerStateAnalyzer } from './learnerStateAnalyzer';
@@ -51,6 +50,7 @@ interface BuiltContext {
   activeFileId?: string | null;
   selectedText?: string;
   openPanels: ClientPanelContext[];
+  visiblePanels: ClientPanelContext[];
   activePanel?: ClientPanelContext | null;
   workbenchFiles: Array<{ id: string; name: string; path: string; content?: string | null }>;
   workspace: { id: string; name: string; description?: string | null; major?: string | null };
@@ -66,6 +66,7 @@ interface BuiltContext {
   capsule: ContextCapsule;
   contextPolicy: ContextPolicyDecision;
   promptPreview: string;
+  contextTrace: ContextTraceItem[];
 }
 
 export interface RetrievedChunk {
@@ -91,6 +92,19 @@ interface AgentTimelineItem {
   durationMs: number;
 }
 
+interface ContextTraceItem {
+  step: string;
+  status: 'completed' | 'failed' | 'background';
+  durationMs: number;
+  summary?: string;
+}
+
+type ContextCacheEntry<T> = {
+  value: T;
+  expiresAt: number;
+  refreshPromise?: Promise<T>;
+};
+
 const DEFAULT_PROFILE: LearningProfile = {
   knowledgeLevel: 'unknown',
   learningGoal: '未明确',
@@ -100,6 +114,89 @@ const DEFAULT_PROFILE: LearningProfile = {
   resourcePreference: '当前文件与课程资料优先',
   recentFocus: []
 };
+
+const CONTEXT_MEMORY_CACHE_TTL_MS = Number(process.env.AI_CONTEXT_MEMORY_CACHE_TTL_MS || 60_000);
+const CONTEXT_HISTORY_CACHE_TTL_MS = Number(process.env.AI_CONTEXT_HISTORY_CACHE_TTL_MS || 45_000);
+const CONTEXT_LEARNER_CACHE_TTL_MS = Number(process.env.AI_CONTEXT_LEARNER_CACHE_TTL_MS || 60_000);
+
+const savedMemoryContextCache = new Map<string, ContextCacheEntry<string>>();
+const retrievedHistoryCache = new Map<string, ContextCacheEntry<RetrievedConversationMemory[]>>();
+const learnerContextCache = new Map<string, ContextCacheEntry<LearnerStateAgentContext>>();
+
+const cacheGet = <T>(cache: Map<string, ContextCacheEntry<T>>, key: string): T | undefined => {
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= Date.now()) return undefined;
+  return entry.value;
+};
+
+const refreshCache = <T>(
+  cache: Map<string, ContextCacheEntry<T>>,
+  key: string,
+  ttlMs: number,
+  loader: () => Promise<T>,
+  onError?: (error: unknown) => void
+) => {
+  const existing = cache.get(key);
+  if (existing?.refreshPromise) return existing.refreshPromise;
+
+  const refreshPromise = loader()
+    .then((value) => {
+      cache.set(key, { value, expiresAt: Date.now() + ttlMs });
+      return value;
+    })
+    .catch((error) => {
+      onError?.(error);
+      throw error;
+    })
+    .finally(() => {
+      const latest = cache.get(key);
+      if (latest?.refreshPromise === refreshPromise) {
+        delete latest.refreshPromise;
+      }
+    });
+
+  cache.set(key, {
+    value: existing?.value as T,
+    expiresAt: existing?.expiresAt || 0,
+    refreshPromise
+  });
+  return refreshPromise;
+};
+
+const defaultLearnerAgentContext = (): LearnerStateAgentContext => ({
+  audience: 'tutor',
+  summary: 'Learner context: refresh pending',
+  promptContext: 'Learner context: refresh pending; use the current user question and source context first.',
+  personalizationHints: [],
+  learningSignals: {
+    recentTopics: [],
+    activeGoals: [],
+    goals: [],
+    focusConcepts: [],
+    candidateWeaknesses: [],
+    stableWeaknesses: [],
+    emergingStrengths: [],
+    misconceptions: [],
+    preferredResourceForms: [],
+    cognitiveLoad: null,
+    learnerLevel: null,
+    recommendedDifficulty: null,
+    nextActions: [],
+    reviewPressure: [],
+    corrections: [],
+    downranks: []
+  },
+  guardrails: ['Learner context refresh is pending; do not infer stable learner traits from this fallback.'],
+  provenance: {
+    learnerStateId: 'pending',
+    version: 0,
+    confidence: 0,
+    evidenceCount: 0,
+    pendingPatchCount: 0,
+    updatedAt: new Date(0).toISOString()
+  }
+});
 
 const clip = (value: string | null | undefined, maxLength = 500) => {
   const text = String(value || '').trim();
@@ -269,78 +366,199 @@ class AgentRunLogger {
 
 class ContextService {
   async build(input: { context: ClientWorkbenchContext; messages: ChatMessage[] }): Promise<BuiltContext> {
-    const workspace = await prisma.workspace.findUnique({ where: { id: input.context.workspaceId } });
-    if (!workspace) throw new Error('Workspace not found');
+    const contextTrace: ContextTraceItem[] = [];
+    const trace = async <T>(step: string, action: () => Promise<T>, summarize?: (value: T) => string): Promise<T> => {
+      const startedAt = Date.now();
+      try {
+        const value = await action();
+        contextTrace.push({
+          step,
+          status: 'completed',
+          durationMs: Date.now() - startedAt,
+          summary: summarize ? summarize(value) : undefined
+        });
+        return value;
+      } catch (error) {
+        contextTrace.push({
+          step,
+          status: 'failed',
+          durationMs: Date.now() - startedAt,
+          summary: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
+      }
+    };
 
-    const workbench = input.context.workbenchId
-      ? await prisma.workbench.findFirst({
+    const workspacePromise = prisma.workspace.findUnique({ where: { id: input.context.workspaceId } });
+    const workbenchPromise = input.context.workbenchId
+      ? prisma.workbench.findFirst({
           where: { id: input.context.workbenchId, workspaceId: input.context.workspaceId }
         })
-      : null;
+      : Promise.resolve(null);
+
+    const workspace = await trace('workspace.load', () => workspacePromise, (value) => `found=${value ? 'yes' : 'no'}`);
+    if (!workspace) throw new Error('Workspace not found');
 
     const userId = input.context.userId || workspace.userId;
     const activePanelId = input.context.activePanelId || null;
     const openPanels = input.context.openPanels || [];
+    const submittedVisiblePanels = input.context.visiblePanels || [];
     const activePanel = openPanels.find((panel) => panel.panelId === activePanelId) || null;
+    const visiblePanels = submittedVisiblePanels.length
+      ? submittedVisiblePanels.map((panel) => openPanels.find((candidate) => candidate.panelId === panel.panelId) || panel)
+      : activePanel
+        ? [activePanel]
+        : [];
     const activeFileId = input.context.activeFileId || activePanel?.fileId || input.context.activeFile?.id || null;
-    const selectedText = clip(input.context.selectedText || activePanel?.selectedText || '', 4000);
-    const profile = await new ProfileAgent().loadOrCreate(userId, input.context.workspaceId);
-    const workbenchFileIds = [
+    const selectedText = clip(input.context.selectedText || input.context.lockedSelection?.content || activePanel?.selectedText || '', 4000);
+    const profile = await trace(
+      'profile.load_or_create',
+      () => new ProfileAgent().loadOrCreate(userId, input.context.workspaceId),
+      (value) => `recentFocus=${value.recentFocus.length}, weakPoints=${value.weakPoints.length}`
+    );
+    const visibleFileIds = [
       ...new Set(
-        openPanels
+        visiblePanels
           .map((panel) => panel.fileId)
           .concat(activeFileId)
+          .concat(input.context.lockedSelection?.fileId || null)
           .filter((value): value is string => Boolean(value))
       )
     ];
 
-    const fileRecords = input.context.workbenchId
-      ? await findWorkbenchResourceFiles({
+    const fileRecordsPromise = input.context.workbenchId
+      ? findWorkbenchResourceFiles({
           workspaceId: input.context.workspaceId,
           workbenchId: input.context.workbenchId,
           take: 12,
           orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }]
         })
-      : workbenchFileIds.length
-        ? await prisma.fileSystemObject.findMany({
-            where: { workspaceId: input.context.workspaceId, id: { in: workbenchFileIds }, nodeType: 'file' }
+      : visibleFileIds.length
+        ? prisma.fileSystemObject.findMany({
+            where: { workspaceId: input.context.workspaceId, id: { in: visibleFileIds }, nodeType: 'file' }
           })
         : [];
 
     const clientActiveContent = input.context.activeFile?.content;
-    const workbenchFiles = await Promise.all(
-      fileRecords.map(async (file) => ({
-        id: file.id,
-        name: file.name,
-        path: file.path,
-        content:
-          file.id === activeFileId && typeof clientActiveContent === 'string'
-            ? clientActiveContent
-            : await FileSystemService.getFileContent(input.context.workspaceId, file.id).catch(() => null)
+    const workbenchFilesPromise = trace(
+      'workbench_files.prefetch',
+      () =>
+        Promise.resolve(fileRecordsPromise).then((fileRecords) =>
+          Promise.resolve(fileRecords.map((file) => ({
+            id: file.id,
+            name: file.name,
+            path: file.path,
+            content: file.id === activeFileId && typeof clientActiveContent === 'string' ? clientActiveContent : null
+          })))
+        ),
+      (value) => `files=${value.length}, content=active_only`
+    );
+    const profileSummaryText = profileSummary(profile);
+    const query = latestUserMessage(input.messages);
+    const capsulePromise = trace(
+      'capsule.build',
+      () =>
+        workbenchContextService.buildCapsule({
+          context: input.context,
+          messages: input.messages,
+          profileSummary: profileSummaryText
+        }),
+      (value) => `mode=${value.capsule.mode}, resources=${value.capsule.resources?.length || 0}, retrieved=${value.capsule.retrievedChunks?.length || 0}`
+    );
+    const learnerCacheKey = `${input.context.workspaceId}:${input.context.workbenchId || 'global'}:tutor`;
+    const cachedLearnerAgentContext = cacheGet(learnerContextCache, learnerCacheKey);
+    const learnerAgentContextPromise = cachedLearnerAgentContext
+      ? Promise.resolve(cachedLearnerAgentContext)
+      : Promise.resolve(defaultLearnerAgentContext());
+    const learnerTraceStart = Date.now();
+    const learnerRefreshPromise = refreshCache(
+      learnerContextCache,
+      learnerCacheKey,
+      CONTEXT_LEARNER_CACHE_TTL_MS,
+      () =>
+        learnerStateContextAdapter.build({
+          workspaceId: input.context.workspaceId,
+          workbenchId: input.context.workbenchId || null,
+          audience: 'tutor'
+      }),
+      (error) => console.warn('Learner context refresh failed:', error)
+    );
+    void learnerRefreshPromise.catch(() => undefined);
+    contextTrace.push({
+      step: 'learner_context',
+      status: cachedLearnerAgentContext ? 'completed' : 'background',
+      durationMs: Date.now() - learnerTraceStart,
+      summary: cachedLearnerAgentContext ? 'cache_hit' : 'cache_miss_background_refresh'
+    });
+
+    const savedMemoryCacheKey = `${input.context.workspaceId}:${input.context.workbenchId || 'global'}:8`;
+    const cachedSavedMemoryContext = cacheGet(savedMemoryContextCache, savedMemoryCacheKey);
+    const savedMemoryTraceStart = Date.now();
+    const savedMemoryContextPromise = Promise.resolve(cachedSavedMemoryContext || 'Saved memories: refresh pending.');
+    const savedMemoryRefreshPromise = refreshCache(
+      savedMemoryContextCache,
+      savedMemoryCacheKey,
+      CONTEXT_MEMORY_CACHE_TTL_MS,
+      () => savedMemoryService.promptContext({ workspaceId: input.context.workspaceId, limit: 8 }),
+      (error) => console.warn('Saved memory refresh failed:', error)
+    );
+    void savedMemoryRefreshPromise.catch(() => undefined);
+    contextTrace.push({
+      step: 'saved_memory',
+      status: cachedSavedMemoryContext ? 'completed' : 'background',
+      durationMs: Date.now() - savedMemoryTraceStart,
+      summary: cachedSavedMemoryContext ? 'cache_hit' : 'cache_miss_background_refresh'
+    });
+
+    const historyCacheKey = [
+      input.context.workspaceId,
+      input.context.workbenchId || 'global',
+      userId,
+      input.context.sessionId || 'none',
+      query
+    ].join(':');
+    const cachedRetrievedHistory = cacheGet(retrievedHistoryCache, historyCacheKey);
+    const historyTraceStart = Date.now();
+    const retrievedHistoryPromise = Promise.resolve(cachedRetrievedHistory || []);
+    const historyRefreshPromise = refreshCache(
+      retrievedHistoryCache,
+      historyCacheKey,
+      CONTEXT_HISTORY_CACHE_TTL_MS,
+      () =>
+        conversationHistoryService.retrieve({
+          workspaceId: input.context.workspaceId,
+          workbenchId: input.context.workbenchId || null,
+          userId,
+          currentSessionId: input.context.sessionId || null,
+          query,
+          limit: 6
+        }),
+      (error) => console.warn('Conversation history refresh failed:', error)
+    );
+    void historyRefreshPromise.catch(() => undefined);
+    contextTrace.push({
+      step: 'conversation_history',
+      status: cachedRetrievedHistory ? 'completed' : 'background',
+      durationMs: Date.now() - historyTraceStart,
+      summary: cachedRetrievedHistory ? `cache_hit=${cachedRetrievedHistory.length}` : 'cache_miss_background_refresh'
+    });
+
+    const [workbench, workbenchFiles, capsuleResult, learnerAgentContext, savedMemoryContext, retrievedHistory] = await Promise.all([
+      workbenchPromise,
+      workbenchFilesPromise,
+      capsulePromise,
+      learnerAgentContextPromise,
+      savedMemoryContextPromise,
+      retrievedHistoryPromise
+    ]);
+    contextTrace.push(
+      ...(capsuleResult.trace || []).map((item) => ({
+        step: `capsule.${item.step}`,
+        status: item.status,
+        durationMs: item.durationMs,
+        summary: item.summary
       }))
     );
-    const capsuleResult = await workbenchContextService.buildCapsule({
-      context: input.context,
-      messages: input.messages,
-      profileSummary: profileSummary(profile)
-    });
-    const learnerAgentContext = await learnerStateContextAdapter.build({
-      workspaceId: input.context.workspaceId,
-      workbenchId: input.context.workbenchId || null,
-      audience: 'tutor'
-    });
-    const query = latestUserMessage(input.messages);
-    const [savedMemoryContext, retrievedHistory] = await Promise.all([
-      savedMemoryService.promptContext({ workspaceId: input.context.workspaceId, limit: 8 }),
-      conversationHistoryService.retrieve({
-        workspaceId: input.context.workspaceId,
-        workbenchId: input.context.workbenchId || null,
-        userId,
-        currentSessionId: input.context.sessionId || null,
-        query,
-        limit: 6
-      })
-    ]);
 
     return {
       userId,
@@ -352,6 +570,7 @@ class ContextService {
       activeFileId,
       selectedText,
       openPanels,
+      visiblePanels,
       activePanel,
       workbenchFiles,
       workspace: {
@@ -367,7 +586,7 @@ class ContextService {
           : null,
       recentMessages: input.context.recentMessages || input.messages,
       profile,
-      profileSummary: profileSummary(profile),
+      profileSummary: profileSummaryText,
       learnerAgentContext,
       savedMemoryContext,
       referenceHistoryContext: conversationHistoryService.formatRetrieved(retrievedHistory),
@@ -375,7 +594,8 @@ class ContextService {
       chatSessionAttachments: (input.context.chatSessionAttachments || []) as ChatSessionAttachmentContext[],
       capsule: capsuleResult.capsule,
       contextPolicy: capsuleResult.policy,
-      promptPreview: capsuleResult.promptPreview
+      promptPreview: capsuleResult.promptPreview,
+      contextTrace
     };
   }
 }
@@ -575,10 +795,10 @@ class RetrievalAgent {
     }
 
     if (input.context.activePanel) pushPanelChunk(input.context.activePanel, 'activePanel', 90);
-    input.context.openPanels
+    input.context.visiblePanels
       .filter((panel) => panel.panelId !== input.context.activePanelId)
-      .slice(0, 4)
-      .forEach((panel, index) => pushPanelChunk(panel, 'openPanel', 70 - index * 5));
+      .slice(0, 3)
+      .forEach((panel, index) => pushPanelChunk(panel, 'openPanel', 82 - index * 5));
 
     if (chunks.length < 3) {
       input.context.workbenchFiles.slice(0, 5).forEach((file, index) => {
@@ -630,6 +850,20 @@ class RetrievalAgent {
 }
 
 class ExplainAgent {
+  private attachmentInstruction(context: BuiltContext) {
+    const attachments = context.chatSessionAttachments || [];
+    if (!attachments.length) return '';
+    const imageCount = attachments.filter((attachment) => attachment.kind === 'image').length;
+    const names = attachments.map((attachment) => `${attachment.name} (${attachment.kind})`).slice(0, 6).join('、');
+    return [
+      `临时附件优先：本轮用户上传了 ${attachments.length} 个 Chat 附件：${names}。`,
+      '当用户说“这个/这张图/这个软件/这个文件/附件”时，默认优先指这些临时附件，而不是当前 Workbench 面板或当前文件。',
+      imageCount > 0
+        ? '如果模型实际收到了图片载荷，请直接基于图片内容回答；如果当前模型/接口无法读取图片像素，只能看到附件元数据，必须明确说明无法看图，不要改用当前面板内容冒充回答。'
+        : '请优先使用附件正文/解析内容回答；只有附件信息不足时再说明不足。'
+    ].join('\n');
+  }
+
   private focusInstruction(context: BuiltContext) {
     const scope = context.contextPolicy.ragScope;
     if (context.capsule.mode === 'model_knowledge') {
@@ -701,6 +935,7 @@ class ExplainAgent {
       input.context.capsule.mode === 'model_knowledge'
         ? '请优先结合最近对话理解用户真实问题，并可使用模型通用知识回答；Workbench 资料只作为背景线索，不要因为资料未覆盖就拒答。'
         : '请只基于下面的资料片段和当前上下文回答；如果依据不足，要明确说不足。',
+      this.attachmentInstruction(input.context),
       '如果最新用户消息是追问、省略、纠正上一轮限制或改变回答依据，必须结合“最近对话”还原用户真实问题，不要把最新一句孤立理解。',
       '引用规则：优先在段落或条目末尾给 1 个引用；同一来源支撑的连续句子合并引用；不要把同一个 [S#] 在相邻短句里反复贴出来。',
       this.focusInstruction(input.context),
@@ -766,6 +1001,7 @@ class ExplainAgent {
       input.context.capsule.mode === 'model_knowledge'
         ? '请优先结合最近对话理解用户真实问题，并可使用模型通用知识回答；Workbench 资料只作为背景线索，不要因为资料未覆盖就拒答。'
         : '请只基于下面的资料片段和当前上下文回答；如果依据不足，要明确说不足。',
+      this.attachmentInstruction(input.context),
       '如果最新用户消息是追问、省略、纠正上一轮限制或改变回答依据，必须结合“最近对话”还原用户真实问题，不要把最新一句孤立理解。',
       '引用规则：优先在段落或条目末尾给 1 个引用；同一来源支撑的连续句子合并引用；不要把同一个 [S#] 在相邻短句里反复贴出来。',
       this.focusInstruction(input.context),
@@ -993,7 +1229,8 @@ export class MultiAgentOrchestrator {
           clippedItems: context.capsule.clippedItems || [],
           citations: context.capsule.citations.map((citation) => citation.label),
           sources: context.capsule.sourceMap?.length || 0,
-          sourceConfidence: sourceConfidenceSummary(context)
+          sourceConfidence: sourceConfidenceSummary(context),
+          contextTrace: context.contextTrace
         },
         memoryContext: {
           savedMemoryContext: context.savedMemoryContext,
@@ -1068,16 +1305,7 @@ export class MultiAgentOrchestrator {
       emit('timeline', logger.getTimeline());
 
       const taskType = inferTaskType(query, context);
-
-      const profile = await logger.step(
-        'ProfileAgent',
-        '读取或初始化学习画像',
-        () => this.profileAgent.loadOrCreate(context.userId, context.workspaceId),
-        (output) => `recentFocus=${output.recentFocus.length}, weakPoints=${output.weakPoints.length}`
-      );
-      context.profile = profile;
-      context.profileSummary = profileSummary(profile);
-      emit('timeline', logger.getTimeline());
+      const profile = context.profile;
 
       const retrievedChunks = await logger.step(
         'RetrievalAgent',
@@ -1109,7 +1337,8 @@ export class MultiAgentOrchestrator {
           clippedItems: context.capsule.clippedItems || [],
           citations: context.capsule.citations.map((citation) => citation.label),
           sources: context.capsule.sourceMap?.length || 0,
-          sourceConfidence: sourceConfidenceSummary(context)
+          sourceConfidence: sourceConfidenceSummary(context),
+          contextTrace: context.contextTrace
         },
         model: aiModelProviderService.isConfigured({ useCase: 'chat' })
           ? aiModelProviderService.model(
@@ -1171,73 +1400,6 @@ export class MultiAgentOrchestrator {
       }
       emit('timeline', logger.getTimeline());
 
-      const updatedProfile = await logger.step(
-        'ProfileAgent.update',
-        '根据问题与回答轻量更新 recentFocus/weakPoints',
-        () =>
-          this.profileAgent.update({
-            userId: context.userId,
-            workspaceId: context.workspaceId,
-            currentProfile: profile,
-            query,
-            answer,
-            context
-          }),
-        (output) => `recentFocus=${output.recentFocus.join('、') || 'none'}`
-      );
-      await logger.step(
-        'LearnerStateAnalyzer.chat',
-        '抽取低置信度聊天画像信号',
-        () =>
-          learnerStateAnalyzer.analyzeChat({
-            workspaceId: input.context.workspaceId,
-            workbenchId: input.context.workbenchId || null,
-            messages: input.messages,
-            answer,
-            taskType,
-            sourceId: run.id
-          }),
-        (output) => `patches=${output.patches.length}`
-      );
-      const savedTurn = await logger.step(
-        'ConversationHistory.saveTurn',
-        '保存 workbench AI 对话并运行 memory extractor',
-        async () => {
-          const saved = await conversationHistoryService.saveTurn({
-            workspaceId: context.workspaceId,
-            workbenchId: context.workbenchId || null,
-            userId: context.userId,
-            sessionId: input.context.sessionId || null,
-            title: query,
-            source: 'workbench_ai',
-            messages: input.messages,
-            assistantReply: answer
-          });
-          const memoryExtraction = await memoryExtractorService.apply({
-            workspaceId: context.workspaceId,
-            workbenchId: context.workbenchId || null,
-            userId: context.userId,
-            messages: input.messages,
-            answer,
-            sourceId: run.id
-          });
-          const learnerState = await learnerStateService.applyPendingPatches(context.workspaceId, {
-            changedBy: 'MultiAgentOrchestrator.chatStream'
-          });
-          return { saved, memoryExtraction };
-        },
-        (output) => `session=${output.saved.sessionId}, savedMemory=${output.memoryExtraction.savedMemory ? 'yes' : 'no'}, signals=${output.memoryExtraction.extraction.learnerStateSignals.length}`
-      );
-
-      await learningRunService.completeRun(run.id, {
-        taskType,
-        quality,
-        retrievedChunks,
-        profile: updatedProfile,
-        answer,
-        conversationSessionId: savedTurn.saved.sessionId
-      });
-
       const result = {
         reply: answer,
         taskType,
@@ -1270,13 +1432,8 @@ export class MultiAgentOrchestrator {
           savedMemoryContext: context.savedMemoryContext,
           referenceHistory: context.retrievedHistory,
           learnerStateSummary: context.learnerAgentContext.summary,
-          extraction: savedTurn.memoryExtraction.extraction,
-          askUserToSave: savedTurn.memoryExtraction.extraction.shouldAskUserToSave
-            ? {
-                text: savedTurn.memoryExtraction.extraction.askUserToSaveText || savedTurn.memoryExtraction.extraction.savedMemoryCandidate?.text || '',
-                candidate: savedTurn.memoryExtraction.extraction.savedMemoryCandidate
-              }
-            : null
+          extraction: null,
+          askUserToSave: null
         },
         memoryDebug: {
           input: { query, sessionId: input.context.sessionId || null, source: 'workbench_ai' },
@@ -1288,17 +1445,12 @@ export class MultiAgentOrchestrator {
             context.referenceHistoryContext,
             context.learnerAgentContext.promptContext
           ].join('\n\n'),
-          extraction: savedTurn.memoryExtraction.extraction,
-          savedMemory: savedTurn.memoryExtraction.savedMemory,
-          learnerStatePatches: savedTurn.memoryExtraction.patches.map((patch: any) => ({
-            id: patch.id,
-            targetDimension: patch.targetDimension,
-            confidence: patch.confidence,
-            rationale: patch.rationale
-          }))
+          extraction: null,
+          savedMemory: null,
+          learnerStatePatches: []
         },
         quality,
-        profile: updatedProfile,
+        profile,
         model: aiModelProviderService.isConfigured({ useCase: 'chat' })
           ? aiModelProviderService.model(
               (chatModelOptions(context).provider || aiModelProviderService.provider({ useCase: 'chat' })),
@@ -1310,6 +1462,87 @@ export class MultiAgentOrchestrator {
       };
 
       emit('done', result);
+      void (async () => {
+        try {
+          const updatedProfile = await logger.step(
+            'ProfileAgent.update',
+            '根据问题与回答轻量更新 recentFocus/weakPoints',
+            () =>
+              this.profileAgent.update({
+                userId: context.userId,
+                workspaceId: context.workspaceId,
+                currentProfile: profile,
+                query,
+                answer,
+                context
+              }),
+            (output) => `recentFocus=${output.recentFocus.join('、') || 'none'}`
+          );
+          await logger.step(
+            'LearnerStateAnalyzer.chat',
+            '抽取低置信度聊天画像信号',
+            () =>
+              learnerStateAnalyzer.analyzeChat({
+                workspaceId: input.context.workspaceId,
+                workbenchId: input.context.workbenchId || null,
+                messages: input.messages,
+                answer,
+                taskType,
+                sourceId: run.id
+              }),
+            (output) => `patches=${output.patches.length}`
+          );
+          const savedTurn = await logger.step(
+            'ConversationHistory.saveTurn',
+            '保存 workbench AI 对话并运行 memory extractor',
+            async () => {
+              const saved = await conversationHistoryService.saveTurn({
+                workspaceId: context.workspaceId,
+                workbenchId: context.workbenchId || null,
+                userId: context.userId,
+                sessionId: input.context.sessionId || null,
+                title: query,
+                source: 'workbench_ai',
+                messages: input.messages,
+                assistantReply: answer
+              });
+              const memoryExtraction = await memoryExtractorService.apply({
+                workspaceId: context.workspaceId,
+                workbenchId: context.workbenchId || null,
+                userId: context.userId,
+                messages: input.messages,
+                answer,
+                sourceId: run.id
+              });
+              await learnerStateService.applyPendingPatches(context.workspaceId, {
+                changedBy: 'MultiAgentOrchestrator.chatStream'
+              });
+              return { saved, memoryExtraction };
+            },
+            (output) => `session=${output.saved.sessionId}, savedMemory=${output.memoryExtraction.savedMemory ? 'yes' : 'no'}, signals=${output.memoryExtraction.extraction.learnerStateSignals.length}`
+          );
+
+          await learningRunService.completeRun(run.id, {
+            taskType,
+            quality,
+            retrievedChunks,
+            profile: updatedProfile,
+            answer,
+            conversationSessionId: savedTurn.saved.sessionId,
+            postAnswerCompletedAt: new Date().toISOString()
+          });
+        } catch (backgroundError) {
+          console.warn('Workbench AI chat post-answer persistence failed:', backgroundError);
+          await learningRunService.completeRun(run.id, {
+            taskType,
+            quality,
+            retrievedChunks,
+            profile,
+            answer,
+            postAnswerError: backgroundError instanceof Error ? backgroundError.message : String(backgroundError)
+          }).catch(() => undefined);
+        }
+      })();
       return result;
     } catch (error) {
       await learningRunService.failRun(run.id, error);

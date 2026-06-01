@@ -3,6 +3,7 @@ import client from '../api/client';
 const STUDIO_READ_TIMEOUT_MS = 45000;
 const STUDIO_GENERATE_TIMEOUT_MS = 420000;
 const STUDIO_JUDGE_TIMEOUT_MS = 90000;
+const STUDIO_CODE_RUN_TIMEOUT_MS = 60000;
 
 export interface AiChatMessage {
   role: 'user' | 'assistant';
@@ -77,7 +78,8 @@ export type AiStudioResourceType =
   | 'mind_map'
   | 'flashcards'
   | 'quiz'
-  | 'data_table';
+  | 'data_table'
+  | 'code_lab';
 
 export type AiStudioGoalCategory =
   | 'understand'
@@ -221,6 +223,22 @@ export interface AiStudioRenderJob {
   completedAt?: string | null;
 }
 
+export interface AiCodeLabRunResult {
+  provider: 'judge0';
+  language: string;
+  status: {
+    id: number | null;
+    description: string;
+    success: boolean;
+  };
+  stdout: string;
+  stderr: string;
+  compileOutput: string;
+  message: string;
+  time: string | null;
+  memory: number | null;
+}
+
 export interface AiContextChipPayload {
   id: string;
   kind: 'selection' | 'viewport' | 'active_file' | 'resource_scope';
@@ -324,6 +342,29 @@ export interface AiChatContext {
     visibleContent?: string;
     language?: string;
   }>;
+  visiblePanels?: Array<{
+    panelId: string;
+    panelType: string;
+    title?: string;
+    fileId?: string | null;
+    fileName?: string;
+    filePath?: string;
+    fileCategory?: string;
+    resourceType?: string;
+    scope?: string;
+    origin?: string;
+    ownerWorkbenchId?: string;
+    visiblePages?: number[];
+    primaryPage?: number;
+    visibleLineRange?: { start: number; end: number } | null;
+    visibleBlockIds?: string[];
+    approxChunkIndex?: number | null;
+    scrollRatio?: number | null;
+    selectedText?: string;
+    selectedRange?: AiContextSelectionRange | null;
+    visibleContent?: string;
+    language?: string;
+  }>;
   lockedSelection?: AiLockedSelectionContext | null;
   persistentCitations?: Array<{
     sourceId?: string;
@@ -374,6 +415,12 @@ export interface AiUsedContextSummary {
   citations?: string[];
   sources?: number;
   sourceConfidence?: { high: number; medium: number; low: number };
+  contextTrace?: Array<{
+    step: string;
+    status: 'completed' | 'failed' | 'background';
+    durationMs: number;
+    summary?: string;
+  }>;
 }
 
 export type FlashcardRating = 'again' | 'hard' | 'good' | 'easy';
@@ -653,6 +700,24 @@ export const aiApi = {
   getStudioVisualizationIrSchema: async (): Promise<{ schemaVersion: string; schema: Record<string, unknown> }> => {
     const response = await client.get('/studio/visualization-ir/schema', {
       timeout: STUDIO_READ_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
+  listCodeLabLanguages: async (): Promise<{ languages: string[] }> => {
+    const response = await client.get('/studio/code-lab/languages', {
+      timeout: STUDIO_READ_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
+  runCodeLab: async (payload: {
+    language: string;
+    sourceCode: string;
+    stdin?: string;
+  }): Promise<AiCodeLabRunResult> => {
+    const response = await client.post('/studio/code-lab/run', payload, {
+      timeout: STUDIO_CODE_RUN_TIMEOUT_MS
     });
     return response.data;
   },

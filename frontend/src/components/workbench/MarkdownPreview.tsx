@@ -83,7 +83,7 @@ const renderInline = (
           key={index}
           className={
             isMessage
-              ? 'rounded bg-[#eeeeec] px-1.5 py-0.5 font-mono text-[0.92em] text-[#25272b]'
+              ? 'rounded-md bg-gray-100 px-1 py-0.5 font-mono text-[0.875em] text-gray-900'
               : 'rounded bg-[var(--wb-sidebar-alt)] px-1.5 py-0.5 font-mono text-[0.92em] text-[#d7e7ff]'
           }
         >
@@ -150,7 +150,7 @@ function CodeBlock({
     <div
       data-md-block={blockIndex}
       className={`group overflow-hidden rounded-xl border ${
-        isMessage ? 'border-[#e6e6e2] bg-[#f8f8f6]' : 'border-[var(--wb-border)] bg-[var(--wb-panel)]'
+        isMessage ? 'border-gray-100 bg-gray-50' : 'border-[var(--wb-border)] bg-[var(--wb-panel)]'
       } ${highlighted ? 'ring-1 ring-[#d3a900]/30' : ''}`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-black/5 px-3 py-2">
@@ -187,11 +187,11 @@ function CodeBlock({
           <textarea
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            className="block min-h-[160px] w-full resize-y border-0 bg-transparent p-3 font-mono text-xs leading-5 text-[#25272b] outline-none"
+            className={`block min-h-[160px] w-full resize-y border-0 bg-transparent p-3 font-mono text-xs leading-5 outline-none ${isMessage ? 'text-gray-900' : 'text-[#25272b]'}`}
             spellCheck={false}
           />
         ) : (
-          <pre className={`${isMessage ? 'text-[#25272b]' : 'text-[#d7e7ff]'} overflow-x-auto p-3 font-mono text-xs leading-5`}>
+          <pre className={`${isMessage ? 'text-gray-900' : 'text-[#d7e7ff]'} overflow-x-auto p-3 font-mono text-xs leading-5`}>
             <code dangerouslySetInnerHTML={{ __html: escapeHtml(value) }} />
           </pre>
         )
@@ -275,7 +275,7 @@ export default function MarkdownPreview({
       <p
         data-md-block={blocks.length}
         key={`p-${blocks.length}`}
-        className={`${isMessage ? 'text-sm leading-6 text-inherit' : 'text-sm leading-7 text-[var(--wb-text-muted)]'} ${highlightClass(blocks.length)}`}
+        className={`${isMessage ? 'text-[15px] font-normal leading-7 text-gray-900' : 'text-sm leading-7 text-[var(--wb-text-muted)]'} ${highlightClass(blocks.length)}`}
       >
         {renderInline(paragraph.join(' '), isMessage, citationSourceById, onCitationJump)}
       </p>
@@ -289,7 +289,7 @@ export default function MarkdownPreview({
       <ul
         data-md-block={blocks.length}
         key={`ul-${blocks.length}`}
-        className={`${isMessage ? 'list-disc space-y-1 pl-5 text-sm leading-6 text-inherit' : 'list-disc space-y-2 pl-6 text-sm leading-7 text-[var(--wb-text-muted)]'} ${highlightClass(blocks.length)}`}
+        className={`${isMessage ? 'list-disc space-y-1.5 pl-5 text-[15px] leading-7 text-gray-900' : 'list-disc space-y-2 pl-6 text-sm leading-7 text-[var(--wb-text-muted)]'} ${highlightClass(blocks.length)}`}
       >
         {listItems.map((item, index) => (
           <li key={index}>{renderInline(item, isMessage, citationSourceById, onCitationJump)}</li>
@@ -305,7 +305,7 @@ export default function MarkdownPreview({
       <ol
         data-md-block={blocks.length}
         key={`ol-${blocks.length}`}
-        className={`${isMessage ? 'list-decimal space-y-2 pl-5 text-sm leading-6 text-inherit' : 'list-decimal space-y-2 pl-6 text-sm leading-7 text-[var(--wb-text-muted)]'} ${highlightClass(blocks.length)}`}
+        className={`${isMessage ? 'list-decimal space-y-2 pl-5 text-[15px] leading-7 text-gray-900' : 'list-decimal space-y-2 pl-6 text-sm leading-7 text-[var(--wb-text-muted)]'} ${highlightClass(blocks.length)}`}
       >
         {orderedListItems.map((item, index) => (
           <li key={index}>{renderInline(item, isMessage, citationSourceById, onCitationJump)}</li>
@@ -365,8 +365,12 @@ export default function MarkdownPreview({
       const className =
         isMessage
           ? level === 1
-            ? 'text-lg font-semibold text-inherit'
-            : 'text-sm font-semibold text-inherit'
+            ? 'mb-2 mt-7 text-[2rem] font-bold leading-tight tracking-normal text-gray-900 first:mt-0'
+            : level === 2
+              ? 'mb-2 mt-6 text-2xl font-bold leading-snug tracking-normal text-gray-900 first:mt-0'
+              : level === 3
+                ? 'mb-1.5 mt-5 text-xl font-semibold leading-snug tracking-normal text-gray-900 first:mt-0'
+                : 'mb-1 mt-4 text-base font-semibold leading-snug tracking-normal text-gray-900 first:mt-0'
           : level === 1
           ? 'text-3xl font-semibold text-[var(--wb-text)]'
           : level === 2
@@ -402,7 +406,7 @@ export default function MarkdownPreview({
       blocks.push(
         <blockquote
           key={`blockquote-${blocks.length}`}
-          className={isMessage ? 'border-l-2 border-[#d7d8d4] pl-3 text-sm italic leading-6 text-inherit' : 'border-l-2 border-[rgba(90,166,255,0.5)] pl-4 text-sm italic leading-7 text-[var(--wb-text-muted)]'}
+          className={isMessage ? 'border-l-2 border-gray-200 pl-4 text-[15px] font-normal leading-7 text-gray-900' : 'border-l-2 border-[rgba(90,166,255,0.5)] pl-4 text-sm italic leading-7 text-[var(--wb-text-muted)]'}
         >
           {renderInline(line.replace(/^>\s?/, ''), isMessage, citationSourceById, onCitationJump)}
         </blockquote>
@@ -414,7 +418,7 @@ export default function MarkdownPreview({
       flushParagraph();
       flushList();
       flushOrderedList();
-      blocks.push(<hr key={`hr-${blocks.length}`} className={isMessage ? 'border-[#e5e5e1]' : 'border-[var(--wb-border)]'} />);
+      blocks.push(<hr key={`hr-${blocks.length}`} className={isMessage ? 'my-4 border-gray-100' : 'border-[var(--wb-border)]'} />);
       continue;
     }
 
@@ -431,14 +435,14 @@ export default function MarkdownPreview({
       ref={containerRef}
       className={
         isMessage
-          ? 'flex flex-col gap-3 text-inherit'
+          ? 'openwebui-markdown flex flex-col gap-3 text-gray-900'
           : 'h-full overflow-auto bg-[var(--wb-editor)] p-6'
       }
       onScroll={reportViewport}
       onMouseEnter={reportViewport}
       onMouseUp={reportViewport}
     >
-      <div className={isMessage ? 'flex flex-col gap-3 text-inherit' : 'flex flex-col gap-5'}>
+      <div className={isMessage ? 'flex flex-col gap-3 text-gray-900' : 'flex flex-col gap-5'}>
         {blocks}
         {!content && isStreaming ? <span className="text-sm text-inherit">...</span> : null}
       </div>

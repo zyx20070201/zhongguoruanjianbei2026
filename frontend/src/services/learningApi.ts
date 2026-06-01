@@ -5,22 +5,230 @@ import {
   PersonalizedWorkspaceIntegration,
   LearningTerminalMessage,
   LearningTerminalResponse,
+  TerminalChatFile,
   Workbench
 } from '../types';
+
+const getApiBaseUrl = () => {
+  const baseURL = client.defaults.baseURL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
+  return String(baseURL).replace(/\/$/, '');
+};
+
+const parseSseBlock = (block: string) => {
+  let event = 'message';
+  const dataLines: string[] = [];
+
+  block.split('\n').forEach((line) => {
+    if (line.startsWith('event:')) {
+      event = line.slice(6).trim();
+      return;
+    }
+    if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+  });
+
+  return { event, data: dataLines.join('\n') };
+};
+
+export type TerminalChatMode = 'chat' | 'agentic';
+
+export interface TerminalChatListItem {
+  id: string;
+  title: string;
+  mode: TerminalChatMode;
+  selectedSources?: Array<{ fileId: string; mode: 'focused' | 'full_context' }>;
+  chatFiles?: TerminalChatFile[];
+  checkpointThreadId?: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  lastMessagePreview?: string;
+}
+
+export interface TerminalChatMessagesPage {
+  messages: LearningTerminalMessage[];
+  hasMore: boolean;
+  nextBefore: string | null;
+}
 
 export const learningApi = {
   chatTerminal: async (
     workspaceId: string,
     messages: LearningTerminalMessage[],
-    options?: { sessionId?: string; workbenchId?: string }
+    options?: {
+      sessionId?: string;
+      workbenchId?: string;
+      checkpointThreadId?: string;
+      stream?: boolean;
+      mode?: TerminalChatMode;
+      selectedSourceIds?: string[];
+      selectedSources?: Array<{ fileId: string; mode?: 'focused' | 'full_context' }>;
+      chatFiles?: TerminalChatFile[];
+    }
   ): Promise<LearningTerminalResponse> => {
+    if (options?.stream) {
+      const response = await fetch(`${getApiBaseUrl()}/learning/terminal/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          workspaceId,
+          sessionId: options?.sessionId,
+          workbenchId: options?.workbenchId,
+          checkpointThreadId: options?.checkpointThreadId,
+          mode: options?.mode,
+          selectedSourceIds: options?.selectedSourceIds,
+          selectedSources: options?.selectedSources,
+          chatFiles: options?.chatFiles,
+          messages: messages.map(({ role, content, files }) => ({ role, content, files }))
+        })
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(`Stream request failed: ${response.status}`);
+      }
+      return {
+        reply: '',
+        sessionId: options?.sessionId,
+        checkpointThreadId: options?.checkpointThreadId,
+        status: 'completed'
+      };
+    }
     const response = await client.post('/learning/terminal/chat', {
       workspaceId,
       sessionId: options?.sessionId,
       workbenchId: options?.workbenchId,
-      messages: messages.map(({ role, content }) => ({ role, content }))
+      checkpointThreadId: options?.checkpointThreadId,
+      mode: options?.mode,
+      selectedSourceIds: options?.selectedSourceIds,
+      selectedSources: options?.selectedSources,
+      chatFiles: options?.chatFiles,
+      messages: messages.map(({ role, content, files }) => ({ role, content, files }))
+    }, { timeout: 0 });
+    return response.data;
+  },
+
+  approveTerminalAction: async (data: {
+    workspaceId: string;
+    messages: LearningTerminalMessage[];
+    sessionId?: string;
+    workbenchId?: string;
+    checkpointThreadId?: string;
+    decision: {
+      decision: 'approve' | 'reject';
+      actionIds?: string[];
+      note?: string;
+    };
+  }): Promise<LearningTerminalResponse> => {
+    const response = await client.post('/learning/terminal/approval', {
+      workspaceId: data.workspaceId,
+      sessionId: data.sessionId,
+      workbenchId: data.workbenchId,
+      checkpointThreadId: data.checkpointThreadId,
+      messages: data.messages.map(({ role, content }) => ({ role, content })),
+      decision: data.decision
+    }, { timeout: 0 });
+    return response.data;
+  },
+
+  listTerminalChats: async (
+    workspaceId: string,
+    params?: { workbenchId?: string; limit?: number }
+  ): Promise<{ sessions: TerminalChatListItem[] }> => {
+    const response = await client.get('/learning/terminal/chats', {
+      params: { workspaceId, ...(params || {}) }
     });
     return response.data;
+  },
+
+  getTerminalChatMessages: async (
+    workspaceId: string,
+    sessionId: string,
+    params?: { before?: string | null; limit?: number }
+  ): Promise<TerminalChatMessagesPage> => {
+    const response = await client.get(`/learning/terminal/chats/${encodeURIComponent(sessionId)}/messages`, {
+      params: { workspaceId, ...(params || {}) }
+    });
+    return response.data;
+  },
+
+  chatTerminalStream: async (
+    workspaceId: string,
+    messages: LearningTerminalMessage[],
+    options: {
+      sessionId?: string;
+      workbenchId?: string;
+      checkpointThreadId?: string;
+      mode?: TerminalChatMode;
+      selectedSourceIds?: string[];
+      selectedSources?: Array<{ fileId: string; mode?: 'focused' | 'full_context' }>;
+      chatFiles?: TerminalChatFile[];
+      onEvent: (event: string, data: any) => void;
+    }
+  ): Promise<LearningTerminalResponse | null> => {
+    const response = await fetch(`${getApiBaseUrl()}/learning/terminal/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'include',
+      body: JSON.stringify({
+        workspaceId,
+        sessionId: options.sessionId,
+        workbenchId: options.workbenchId,
+        checkpointThreadId: options.checkpointThreadId,
+        mode: options.mode,
+        selectedSourceIds: options.selectedSourceIds,
+        selectedSources: options.selectedSources,
+        chatFiles: options.chatFiles,
+        messages: messages.map(({ role, content, files }) => ({ role, content, files }))
+      })
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`Stream request failed: ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult: LearningTerminalResponse | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() || '';
+      for (const block of blocks) {
+        if (!block.trim()) continue;
+        const parsed = parseSseBlock(block);
+        if (!parsed.data) continue;
+        const data = JSON.parse(parsed.data);
+        options.onEvent(parsed.event, data);
+        if (parsed.event === 'error') {
+          throw new Error(data?.error || 'AI Terminal stream failed');
+        }
+        if ((parsed.event === 'final' || parsed.event === 'approval_required') && data?.result) {
+          finalResult = data.result;
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      const parsed = parseSseBlock(buffer);
+      if (parsed.data) {
+        const data = JSON.parse(parsed.data);
+        options.onEvent(parsed.event, data);
+        if (parsed.event === 'error') {
+          throw new Error(data?.error || 'AI Terminal stream failed');
+        }
+        if ((parsed.event === 'final' || parsed.event === 'approval_required') && data?.result) {
+          finalResult = data.result;
+        }
+      }
+    }
+
+    return finalResult;
   },
 
   createGuidedWorkbench: async (data: {
@@ -34,14 +242,15 @@ export const learningApi = {
     generatedResources: FileSystemObject[];
     goalDraft: LearningGoalDraft;
   }> => {
-    const response = await client.post('/learning/workbenches/guided', data);
+    const response = await client.post('/learning/workbenches/guided', data, { timeout: 90000 });
     return response.data;
   },
 
-  indexKnowledgeFile: async (workspaceId: string, fileObjectId: string) => {
+  indexKnowledgeFile: async (workspaceId: string, fileObjectId: string, options?: { force?: boolean }) => {
     const response = await client.post('/learning/knowledge/index', {
       workspaceId,
-      fileObjectId
+      fileObjectId,
+      force: Boolean(options?.force)
     });
     return response.data;
   },
@@ -144,6 +353,38 @@ export const learningApi = {
     return response.data;
   },
 
+  listWorkspaceFileCards: async (workspaceId: string, params?: { query?: string; limit?: number }) => {
+    const response = await client.get('/learning/workspace/files/cards', {
+      params: {
+        workspaceId,
+        ...(params?.query ? { query: params.query } : {}),
+        ...(typeof params?.limit === 'number' ? { limit: params.limit } : {})
+      }
+    });
+    return response.data;
+  },
+
+  indexWorkspaceFiles: async (data: {
+    workspaceId: string;
+    force?: boolean;
+    maxFiles?: number;
+    fileIds?: string[];
+  }) => {
+    const response = await client.post('/learning/workspace/files/index', data, { timeout: 0 });
+    return response.data;
+  },
+
+  searchWorkspaceFiles: async (data: {
+    workspaceId: string;
+    query: string;
+    fileLimit?: number;
+    chunkLimit?: number;
+    ensureIndexed?: boolean;
+  }) => {
+    const response = await client.post('/learning/workspace/files/search', data, { timeout: 0 });
+    return response.data;
+  },
+
   buildContext: async (data: {
     workspaceId: string;
     workbenchId?: string;
@@ -232,6 +473,63 @@ export const learningApi = {
     return response.data;
   },
 
+  streamConceptExplanation: async (
+    data: {
+      workspaceId: string;
+      conceptId: string;
+      question?: string;
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    },
+    handlers: {
+      onDelta?: (delta: string) => void;
+    } = {}
+  ) => {
+    const response = await fetch(`${getApiBaseUrl()}/learning/knowledge/graph/concepts/${data.conceptId}/explain-stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream'
+      },
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok || !response.body) {
+      const payload = await response.json().catch(() => null);
+      throw new Error(payload?.error || `AI request failed with status ${response.status}`);
+    }
+
+    const decoder = new TextDecoder();
+    const reader = response.body.getReader();
+    let buffer = '';
+    let finalResult: { reply?: string } | null = null;
+
+    const handleBlock = (block: string) => {
+      const { event, data: rawData } = parseSseBlock(block);
+      if (!rawData) return;
+      const parsed = JSON.parse(rawData);
+      if (event === 'delta') {
+        handlers.onDelta?.(String(parsed));
+      } else if (event === 'done') {
+        finalResult = parsed as { reply?: string };
+      } else if (event === 'error') {
+        throw new Error(parsed?.error || 'AI request failed');
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() || '';
+      blocks.forEach(handleBlock);
+    }
+
+    if (buffer.trim()) handleBlock(buffer);
+    if (!finalResult) throw new Error('AI stream ended before a final response was received');
+    return finalResult;
+  },
+
   getConceptExercises: async (workspaceId: string, conceptId: string, params?: { limit?: number }) => {
     const response = await client.get(`/learning/knowledge/graph/concepts/${conceptId}/exercises`, {
       params: { workspaceId, limit: params?.limit }
@@ -310,6 +608,11 @@ export const learningApi = {
     return response.data;
   },
 
+  deleteLearningPlan: async (planId: string, data: { workspaceId: string }) => {
+    const response = await client.delete(`/learning/planning/plans/${planId}`, { data });
+    return response.data;
+  },
+
   updateLearningPlanStepStatus: async (
     planId: string,
     stepId: string,
@@ -348,6 +651,64 @@ export const learningApi = {
     }
   ) => {
     const response = await client.patch(`/learning/planning/plans/${planId}/steps/${stepId}/details`, data);
+    return response.data;
+  },
+
+  updateLearningPlanStage: async (
+    planId: string,
+    stageId: string,
+    data: {
+      workspaceId: string;
+      title: string;
+      content: string;
+      changeSource?: 'manual' | 'llm_patch';
+      note?: string;
+      proposalId?: string | null;
+    }
+  ) => {
+    const response = await client.patch(`/learning/planning/plans/${planId}/stages/${encodeURIComponent(stageId)}`, data);
+    return response.data;
+  },
+
+  proposeLearningPlanStagePatch: async (
+    planId: string,
+    stageId: string,
+    data: { workspaceId: string; instruction?: string }
+  ) => {
+    const response = await client.post(`/learning/planning/plans/${planId}/stages/${encodeURIComponent(stageId)}/patch-proposal`, data, { timeout: 120000 });
+    return response.data;
+  },
+
+  explainLearningPlanStage: async (
+    planId: string,
+    stageId: string,
+    data: {
+      workspaceId: string;
+      question?: string;
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    }
+  ) => {
+    const response = await client.post(`/learning/planning/plans/${planId}/stages/${encodeURIComponent(stageId)}/explain`, data, { timeout: 60000 });
+    return response.data;
+  },
+
+  explainLearningPlan: async (
+    planId: string,
+    data: {
+      workspaceId: string;
+      question?: string;
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    }
+  ) => {
+    const response = await client.post(`/learning/planning/plans/${planId}/explain`, data, { timeout: 60000 });
+    return response.data;
+  },
+
+  reviewLearningPlan: async (
+    planId: string,
+    data: { workspaceId: string; instruction?: string }
+  ) => {
+    const response = await client.post(`/learning/planning/plans/${planId}/review`, data, { timeout: 120000 });
     return response.data;
   },
 
@@ -424,6 +785,25 @@ export const learningApi = {
     return response.data;
   },
 
+  updateLearningEvent: async (
+    workspaceId: string,
+    eventId: string,
+    data: { eventType?: string; summary?: string; confidence?: number }
+  ) => {
+    const response = await client.patch(`/learning/events/${encodeURIComponent(eventId)}`, {
+      workspaceId,
+      ...data
+    });
+    return response.data;
+  },
+
+  deleteLearningEvent: async (workspaceId: string, eventId: string) => {
+    const response = await client.delete(`/learning/events/${encodeURIComponent(eventId)}`, {
+      params: { workspaceId }
+    });
+    return response.data;
+  },
+
   getLearnerState: async (workspaceId: string, params?: { workbenchId?: string; goalId?: string }) => {
     const response = await client.get('/learning/learner-state', {
       params: { workspaceId, ...(params || {}) }
@@ -457,6 +837,41 @@ export const learningApi = {
   listLearnerMemories: async (workspaceId: string, params?: { workbenchId?: string; limit?: number }) => {
     const response = await client.get('/learning/learner-state/memories', {
       params: { workspaceId, ...(params || {}) }
+    });
+    return response.data;
+  },
+
+  listSavedMemories: async (workspaceId: string, params?: { workbenchId?: string; limit?: number; includeDeleted?: boolean }) => {
+    const response = await client.get('/learning/saved-memories', {
+      params: { workspaceId, ...(params || {}) }
+    });
+    return response.data;
+  },
+
+  createSavedMemory: async (data: { workspaceId: string; workbenchId?: string; text: string; category?: string }) => {
+    const response = await client.post('/learning/saved-memories', data);
+    return response.data;
+  },
+
+  updateSavedMemory: async (workspaceId: string, memoryKey: string, data: { text?: string; category?: string; action?: 'restore' }) => {
+    const response = await client.patch(`/learning/saved-memories/${encodeURIComponent(memoryKey)}`, {
+      workspaceId,
+      ...data
+    });
+    return response.data;
+  },
+
+  restoreSavedMemory: async (memoryKey: string, data: { workspaceId: string }) => {
+    const response = await client.patch(`/learning/saved-memories/${encodeURIComponent(memoryKey)}`, {
+      ...data,
+      action: 'restore'
+    });
+    return response.data;
+  },
+
+  deleteSavedMemory: async (workspaceId: string, memoryKey: string) => {
+    const response = await client.delete(`/learning/saved-memories/${encodeURIComponent(memoryKey)}`, {
+      params: { workspaceId }
     });
     return response.data;
   },
@@ -527,38 +942,6 @@ export const learningApi = {
   ) => {
     const response = await client.get('/learning/memory/debug', {
       params: { workspaceId, ...(params || {}) }
-    });
-    return response.data;
-  },
-
-  listSavedMemories: async (workspaceId: string, params?: { limit?: number; includeDeleted?: boolean }) => {
-    const response = await client.get('/learning/saved-memories', {
-      params: { workspaceId, ...(params || {}) }
-    });
-    return response.data;
-  },
-
-  createSavedMemory: async (data: {
-    workspaceId: string;
-    workbenchId?: string;
-    text: string;
-    category?: string;
-  }) => {
-    const response = await client.post('/learning/saved-memories', data);
-    return response.data;
-  },
-
-  updateSavedMemory: async (workspaceId: string, memoryKey: string, data: { text?: string; category?: string; action?: 'restore' }) => {
-    const response = await client.patch(`/learning/saved-memories/${encodeURIComponent(memoryKey)}`, {
-      workspaceId,
-      ...data
-    });
-    return response.data;
-  },
-
-  deleteSavedMemory: async (workspaceId: string, memoryKey: string) => {
-    const response = await client.delete(`/learning/saved-memories/${encodeURIComponent(memoryKey)}`, {
-      params: { workspaceId }
     });
     return response.data;
   },

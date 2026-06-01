@@ -4,6 +4,8 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
+  ClipboardCheck,
   Download,
   Dumbbell,
   Code,
@@ -29,6 +31,7 @@ import {
   ZoomOut
 } from 'lucide-react';
 import { ComponentType, useEffect, useMemo, useRef, useState } from 'react';
+import Editor from '@monaco-editor/react';
 import { Graph } from '@antv/x6';
 import ELK, { ElkNode } from 'elkjs/lib/elk.bundled.js';
 import katex from 'katex';
@@ -39,6 +42,7 @@ import 'mind-elixir/style.css';
 import SpriteText from 'three-spritetext';
 import {
   aiApi,
+  AiCodeLabRunResult,
   AiChatContext,
   AiChatMessage,
   AiContextMode,
@@ -134,6 +138,8 @@ interface StudioResult {
   renderJob?: AiStudioRenderJob | null;
   delivery?: AiStudioDeliveryArtifact | null;
   structured?: unknown;
+  createdNote?: FileSystemObject | null;
+  autoCreateNoteError?: string | null;
 }
 
 type QuizQuestionType =
@@ -705,6 +711,7 @@ const templateResourceType = (template?: AiStudioTemplate | null): AiStudioResou
   if (template?.renderer === 'flashcards') return 'flashcards';
   if (template?.renderer === 'mermaid') return 'mind_map';
   if (template?.renderer === 'slides') return 'slide_deck';
+  if (template?.renderer === 'code_lab' || template?.generator === 'code_lab' || template?.id === 'code_lab' || template?.id === 'debug_task') return 'code_lab';
   return 'report';
 };
 
@@ -727,6 +734,7 @@ const resultTitle = (type: AiStudioResourceType) => {
   if (type === 'flashcards') return 'Flashcards';
   if (type === 'quiz') return 'Quiz';
   if (type === 'data_table') return 'Data Table';
+  if (type === 'code_lab') return 'Code Lab';
   return 'Report';
 };
 
@@ -871,6 +879,73 @@ const noteFilenameFromTitle = (title: string) => {
     .replace(/^-+|-+$/g, '')
     .slice(0, 80) || 'resource-notes';
   return `${base}.md`;
+};
+
+const sourceCountForResult = (result: StudioResult) =>
+  result.summary?.resources ||
+  result.summary?.sources ||
+  (Array.isArray((result.artifact as any)?.sourceRefs) ? (result.artifact as any).sourceRefs.length : 0) ||
+  0;
+
+const noteContentForResult = (result: StudioResult, title?: string) => {
+  const noteTitle = noteTitleForResult(result);
+  const noteBody = stripMarkdownTitle(result.content);
+  return `# ${String(title || noteTitle).trim() || noteTitle}\n\n${noteBody}`.trim() + '\n';
+};
+
+const resourceReferenceFromFile = (file: FileSystemObject): ResourceReference => ({
+  id: file.id,
+  name: file.name,
+  path: file.path,
+  type: file.fileCategory || file.extension || 'note',
+  resourceType: file.resourceType,
+  scope: file.scope,
+  origin: file.origin,
+  ownerWorkbenchId: file.ownerWorkbenchId,
+  metadata: file.metadata,
+  tags: file.tags,
+  extension: file.extension,
+  mimeType: file.mimeType,
+  fileCategory: file.fileCategory,
+  isBinary: file.isBinary
+});
+
+const createResourceNotesFile = async ({
+  workspaceId,
+  workbenchId,
+  result,
+  title,
+  density = 'balanced'
+}: {
+  workspaceId: string;
+  workbenchId?: string;
+  result: StudioResult;
+  title?: string;
+  density?: 'compact' | 'balanced' | 'expanded';
+}) => {
+  const noteTitle = title?.trim() || noteTitleForResult(result);
+  const sourceCount = sourceCountForResult(result);
+  return fileSystemApi.createFile(workspaceId, {
+    name: noteFilenameFromTitle(noteTitle),
+    content: noteContentForResult(result, noteTitle),
+    fileCategory: 'note',
+    mimeType: 'text/markdown',
+    workbenchId,
+    resourceRole: 'note',
+    resourceType: 'note',
+    scope: workbenchId ? 'workbench' : 'workspace',
+    origin: 'ai-studio',
+    tags: ['ai-studio', 'resource-notes'],
+    metadata: {
+      source: 'ai_studio_resource_to_notes',
+      studioResultFileId: result.id,
+      templateId: resultTemplateId(result),
+      sourceCount,
+      density,
+      noteTitle,
+      autoCreated: true
+    }
+  });
 };
 
 function buildPrompt(modal: StudioModalState) {
@@ -6005,6 +6080,203 @@ function RenderJobPanel({
   );
 }
 
+const monacoLanguageFor = (language: string) => {
+  const normalized = language.toLowerCase();
+  if (['js', 'node', 'nodejs'].includes(normalized)) return 'javascript';
+  if (['ts'].includes(normalized)) return 'typescript';
+  if (['py', 'python3'].includes(normalized)) return 'python';
+  if (['c++', 'cpp17', 'cc'].includes(normalized)) return 'cpp';
+  if (normalized === 'golang') return 'go';
+  if (['sqlite3', 'sqlite', 'sql'].includes(normalized)) return 'sql';
+  return normalized || 'javascript';
+};
+
+const extractFirstCodeBlock = (content: string) => {
+  const match = content.match(/```([a-zA-Z0-9_+#-]*)\s*([\s\S]*?)```/);
+  return {
+    language: monacoLanguageFor(match?.[1] || 'javascript'),
+    code: match?.[2]?.trim() || ''
+  };
+};
+
+const extractMarkdownSectionLines = (content: string, titles: string[]) => {
+  const escaped = titles.map((title) => title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const match = content.match(new RegExp(`##\\s*(?:${escaped})\\s*([\\s\\S]*?)(?:\\n##|$)`, 'i'));
+  return (match?.[1] || '')
+    .split('\n')
+    .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, '').trim())
+    .filter(Boolean)
+    .slice(0, 12);
+};
+
+const buildCodeLabModel = (result: StudioResult) => {
+  const structured = isObjectRecord(result.structured) ? result.structured : null;
+  const payload = isObjectRecord(structured?.payload) ? structured.payload : null;
+  const markdownCode = extractFirstCodeBlock(result.content);
+  const language = monacoLanguageFor(String(payload?.language || markdownCode.language || 'javascript'));
+  const starterCode = String(payload?.starterCode || markdownCode.code || [
+    'function solve() {',
+    '  console.log("Hello, Code Lab");',
+    '}',
+    '',
+    'solve();'
+  ].join('\n'));
+  return {
+    title: result.template?.title || resultTitle(result.resourceType),
+    objective: String(payload?.objective || result.content.match(/##\s*实验目标\s*([\s\S]*?)(?:\n##|$)/i)?.[1] || '').trim(),
+    steps: Array.isArray(payload?.steps) ? payload.steps.map(String) : extractMarkdownSectionLines(result.content, ['TODO', '实验步骤']),
+    tests: Array.isArray(payload?.tests) ? payload.tests.map(String) : extractMarkdownSectionLines(result.content, ['测试任务', '测试用例']),
+    debugHints: Array.isArray(payload?.debugHints) ? payload.debugHints.map(String) : extractMarkdownSectionLines(result.content, ['调试提示']),
+    language,
+    starterCode
+  };
+};
+
+function CodeLabWorkbench({ result }: { result: StudioResult }) {
+  const lab = useMemo(() => buildCodeLabModel(result), [result.id, result.content, result.structured]);
+  const [language, setLanguage] = useState(lab.language);
+  const [code, setCode] = useState(lab.starterCode);
+  const [stdin, setStdin] = useState('');
+  const [runResult, setRunResult] = useState<AiCodeLabRunResult | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    setLanguage(lab.language);
+    setCode(lab.starterCode);
+    setStdin('');
+    setRunResult(null);
+    setRunError(null);
+  }, [lab.language, lab.starterCode, result.id]);
+
+  const run = async () => {
+    if (running) return;
+    setRunning(true);
+    setRunError(null);
+    try {
+      setRunResult(await aiApi.runCodeLab({ language, sourceCode: code, stdin }));
+    } catch (error: any) {
+      setRunError(error?.response?.data?.error || error?.message || 'Code execution failed');
+      setRunResult(null);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const outputText = [
+    runResult?.stdout ? `stdout\n${runResult.stdout}` : '',
+    runResult?.compileOutput ? `compile output\n${runResult.compileOutput}` : '',
+    runResult?.stderr ? `stderr\n${runResult.stderr}` : '',
+    runResult?.message ? `message\n${runResult.message}` : ''
+  ].filter(Boolean).join('\n\n');
+
+  return (
+    <div className="grid h-[calc(100vh-190px)] min-h-[620px] grid-cols-[minmax(260px,340px)_minmax(0,1fr)] overflow-hidden rounded-xl border border-[#dfe3ea] bg-white shadow-sm">
+      <aside className="min-h-0 overflow-auto border-r border-[#e5e7eb] bg-[#fbfcfd] p-4">
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
+          <Code className="h-4 w-4" /> Code Lab
+        </div>
+        <h3 className="mt-2 text-lg font-semibold text-[#202124]">{lab.title}</h3>
+        {lab.objective && <p className="mt-3 text-sm leading-6 text-[#4f5665]">{lab.objective}</p>}
+        {lab.steps.length > 0 && (
+          <section className="mt-5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#202124]"><ClipboardCheck className="h-4 w-4" /> Steps</div>
+            <ol className="mt-2 space-y-2 text-sm leading-6 text-[#4f5665]">
+              {lab.steps.map((step, index) => <li key={`${step}-${index}`}>{index + 1}. {step}</li>)}
+            </ol>
+          </section>
+        )}
+        {lab.tests.length > 0 && (
+          <section className="mt-5">
+            <div className="text-sm font-semibold text-[#202124]">Tests</div>
+            <div className="mt-2 space-y-2">
+              {lab.tests.map((test, index) => (
+                <div key={`${test}-${index}`} className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-sm leading-5 text-[#4f5665]">{test}</div>
+              ))}
+            </div>
+          </section>
+        )}
+        {lab.debugHints.length > 0 && (
+          <section className="mt-5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#202124]"><CircleAlert className="h-4 w-4" /> Hints</div>
+            <ul className="mt-2 space-y-2 text-sm leading-6 text-[#4f5665]">
+              {lab.debugHints.map((hint, index) => <li key={`${hint}-${index}`}>- {hint}</li>)}
+            </ul>
+          </section>
+        )}
+      </aside>
+      <main className="flex min-h-0 min-w-0 flex-col bg-[#0f172a]">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-700 bg-slate-900 px-3 py-2">
+          <select
+            value={language}
+            onChange={(event) => setLanguage(event.target.value)}
+            className="h-9 rounded-md border border-slate-700 bg-slate-950 px-3 text-sm font-semibold text-slate-200 outline-none"
+          >
+            {['javascript', 'typescript', 'python', 'java', 'cpp', 'c', 'go', 'rust', 'sql'].map((item) => (
+              <option key={item} value={item}>{item}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => void run()}
+            disabled={running}
+            className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-500 px-4 text-sm font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Run
+          </button>
+        </div>
+        <div className="min-h-0 flex-1">
+          <Editor
+            height="100%"
+            language={monacoLanguageFor(language)}
+            theme="vs-dark"
+            value={code}
+            onChange={(value) => setCode(value || '')}
+            options={{
+              minimap: { enabled: false },
+              fontSize: 14,
+              fontFamily: 'JetBrains Mono, Menlo, Monaco, Consolas, monospace',
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              tabSize: 2,
+              wordWrap: 'on'
+            }}
+          />
+        </div>
+        <div className="grid h-56 grid-cols-[minmax(220px,32%)_minmax(0,1fr)] border-t border-slate-700">
+          <label className="flex min-h-0 flex-col border-r border-slate-700 bg-slate-950">
+            <span className="border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">stdin</span>
+            <textarea
+              value={stdin}
+              onChange={(event) => setStdin(event.target.value)}
+              className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-sm text-slate-200 outline-none"
+              spellCheck={false}
+            />
+          </label>
+          <div className="min-h-0 overflow-auto bg-slate-950">
+            <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">output</span>
+              {runResult && (
+                <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${runResult.status.success ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                  {runResult.status.description}
+                </span>
+              )}
+            </div>
+            <pre className="whitespace-pre-wrap p-3 font-mono text-sm leading-6 text-slate-200">
+              {runError || outputText || 'Run code to see stdout, stderr, compile output, time, and memory.'}
+            </pre>
+            {runResult && (
+              <div className="border-t border-slate-800 px-3 py-2 text-xs text-slate-400">
+                time {runResult.time || '-'}s · memory {runResult.memory ?? '-'} KB · provider {runResult.provider}
+              </div>
+            )}
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
 function ResultView({
   result,
   workspaceId,
@@ -6073,6 +6345,8 @@ function ResultView({
               <MindMapViewer result={result} />
             ) : result.resourceType === 'data_table' ? (
               <DataTableViewer result={result} />
+            ) : result.resourceType === 'code_lab' ? (
+              <CodeLabWorkbench result={result} />
             ) : result.resourceType === 'quiz' ? (
               <QuizViewer
                 result={result}
@@ -6217,19 +6491,14 @@ function ResourceNotesResultView({
   onOpenResource?: (resource: ResourceReference) => void;
 }) {
   const [creating, setCreating] = useState(false);
-  const [createdNote, setCreatedNote] = useState<FileSystemObject | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [createdNote, setCreatedNote] = useState<FileSystemObject | null>(result.createdNote || null);
+  const [error, setError] = useState<string | null>(result.autoCreateNoteError || null);
   const [title, setTitle] = useState(noteTitleForResult(result));
   const [density, setDensity] = useState<'compact' | 'balanced' | 'expanded'>('balanced');
   const [sourcePreviewOpen, setSourcePreviewOpen] = useState(true);
   const noteTitle = noteTitleForResult(result);
-  const noteBody = stripMarkdownTitle(result.content);
-  const noteContent = `# ${title.trim() || noteTitle}\n\n${noteBody}`.trim() + '\n';
-  const sourceCount =
-    result.summary?.resources ||
-    result.summary?.sources ||
-    (Array.isArray((result.artifact as any)?.sourceRefs) ? (result.artifact as any).sourceRefs.length : 0) ||
-    0;
+  const noteContent = noteContentForResult(result, title.trim() || noteTitle);
+  const sourceCount = sourceCountForResult(result);
   const coverage = [
     result.summary?.selection ? 'Selection' : null,
     result.summary?.viewport ? 'Viewport' : null,
@@ -6237,25 +6506,18 @@ function ResourceNotesResultView({
     sourceCount ? `${sourceCount} sources` : null
   ].filter(Boolean) as string[];
 
+  useEffect(() => {
+    setCreatedNote(result.createdNote || null);
+  }, [result.createdNote]);
+
+  useEffect(() => {
+    setError(result.autoCreateNoteError || null);
+  }, [result.autoCreateNoteError]);
+
   const openCreatedNote = (file: FileSystemObject) => {
     if (typeof window === 'undefined') return;
     if (onOpenResource) {
-      onOpenResource({
-        id: file.id,
-        name: file.name,
-        path: file.path,
-        type: file.fileCategory || file.extension || 'note',
-        resourceType: file.resourceType,
-        scope: file.scope,
-        origin: file.origin,
-        ownerWorkbenchId: file.ownerWorkbenchId,
-        metadata: file.metadata,
-        tags: file.tags,
-        extension: file.extension,
-        mimeType: file.mimeType,
-        fileCategory: file.fileCategory,
-        isBinary: file.isBinary
-      });
+      onOpenResource(resourceReferenceFromFile(file));
       return;
     }
     const url = new URL(window.location.href);
@@ -6265,28 +6527,19 @@ function ResourceNotesResultView({
 
   const createNote = async () => {
     if (creating) return;
+    if (createdNote) {
+      openCreatedNote(createdNote);
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
-      const created = await fileSystemApi.createFile(workspaceId, {
-        name: noteFilenameFromTitle(title.trim() || noteTitle),
-        content: noteContent,
-        fileCategory: 'note',
-        mimeType: 'text/markdown',
+      const created = await createResourceNotesFile({
+        workspaceId,
         workbenchId,
-        resourceRole: 'note',
-        resourceType: 'note',
-        scope: workbenchId ? 'workbench' : 'workspace',
-        origin: 'ai-studio',
-        tags: ['ai-studio', 'resource-notes'],
-        metadata: {
-          source: 'ai_studio_resource_to_notes',
-          studioResultFileId: result.id,
-          templateId: resultTemplateId(result),
-          sourceCount,
-          density,
-          noteTitle: title.trim() || noteTitle
-        }
+        result,
+        title: title.trim() || noteTitle,
+        density
       });
       setCreatedNote(created);
       openCreatedNote(created);
@@ -6324,7 +6577,7 @@ function ResourceNotesResultView({
             className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-4 py-2 text-sm font-semibold text-white transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
           >
             {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-            Create BlockSuite Note
+            {createdNote ? 'Open BlockSuite Note' : 'Create BlockSuite Note'}
           </button>
         </div>
         </div>
@@ -6619,7 +6872,7 @@ export default function AIStudioPanel({
         context: contextPayload
       });
       const responseTemplate = response.template || (activeModal.templateId ? effectiveTemplates.find((template) => template.id === activeModal.templateId) : null);
-      const result: StudioResult = {
+      let result: StudioResult = {
         id: response.file.id,
         name: response.file.name,
         path: response.file.path,
@@ -6643,10 +6896,30 @@ export default function AIStudioPanel({
         qualityReport: response.qualityReport as StudioResult['qualityReport'],
         practiceNext: response.practiceNext || null
       };
+      let activeStudioResultId: string | null = result.id;
+      let autoCreatedNote: FileSystemObject | null = null;
+      if (isResourceNotesResult(result)) {
+        try {
+          autoCreatedNote = await createResourceNotesFile({
+            workspaceId,
+            workbenchId: effectiveWorkbenchId,
+            result
+          });
+          result = { ...result, createdNote: autoCreatedNote };
+          activeStudioResultId = null;
+        } catch (noteError: any) {
+          const noteMessage =
+            noteError?.response?.data?.error ||
+            noteError?.message ||
+            'AI Studio generated notes, but failed to create the BlockSuite note.';
+          result = { ...result, autoCreateNoteError: noteMessage };
+          setError(noteMessage);
+        }
+      }
       const nextResults = [result, ...results.filter((item) => item.id !== result.id)].slice(0, 12);
       onUpdateViewState?.(editor.id, {
         studioResults: nextResults,
-        activeStudioResultId: result.id,
+        activeStudioResultId,
         lastStudioDebug: {
           contextCapsule: response.contextCapsule,
           contextPolicy: response.contextPolicy,
@@ -6664,6 +6937,9 @@ export default function AIStudioPanel({
       });
       setModal(null);
       if (response.artifact) setArtifacts((current) => [response.artifact!, ...current.filter((item) => item.id !== response.artifact?.id)].slice(0, 8));
+      if (autoCreatedNote) {
+        onOpenResource?.(resourceReferenceFromFile(autoCreatedNote));
+      }
     } catch (generateError: any) {
       setError(generateError?.response?.data?.error || generateError?.message || 'AI Studio generation failed');
     } finally {

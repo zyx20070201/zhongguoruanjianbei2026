@@ -26,6 +26,26 @@ const fileObjectSummarySelect = {
   workspaceId: true,
   ownerWorkbenchId: true,
   parentId: true,
+  _count: {
+    select: {
+      knowledgeChunks: true
+    }
+  },
+  knowledgeIndexJobs: {
+    orderBy: { updatedAt: 'desc' },
+    take: 1,
+    select: {
+      id: true,
+      status: true,
+      extractor: true,
+      errorMessage: true,
+      chunkCount: true,
+      startedAt: true,
+      completedAt: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  }
 } as const;
 
 export const createWorkspace = async (req: Request, res: Response) => {
@@ -235,6 +255,7 @@ export const getWorkspaces = async (req: Request, res: Response) => {
     where: { userId: parsedUserId },
     include: {
       fileObjects: {
+        where: { scope: { not: 'chat' } },
         select: fileObjectSummarySelect,
         orderBy: { updatedAt: 'desc' },
         take: 1,
@@ -276,6 +297,7 @@ export const getWorkspace = async (req: Request, res: Response) => {
     where: { id: workspaceId },
     include: {
       fileObjects: {
+        where: { scope: { not: 'chat' } },
         select: fileObjectSummarySelect,
         orderBy: { updatedAt: 'desc' },
       },

@@ -121,19 +121,24 @@ export class PlanStructurerService {
     }
 
     if (!aiModelProviderService.isConfigured({ useCase: 'planner' })) {
-      throw new Error('AI planner provider is not configured; PlanStructurer cannot run.');
+      return emptyPlan(objective, planMarkdown, new Error('AI planner provider is not configured; PlanStructurer cannot run.'));
     }
 
-    const response = await aiModelProviderService.json<SliceModelResponse>({
-      instruction: buildSlicePrompt(),
-      schema: sliceSchema,
-      input: {
-        objective,
-        planMarkdown
-      },
-      useCase: 'planner',
-      timeoutMs: PLAN_STRUCTURER_TIMEOUT_MS
-    });
+    let response: { data?: SliceModelResponse };
+    try {
+      response = await aiModelProviderService.json<SliceModelResponse>({
+        instruction: buildSlicePrompt(),
+        schema: sliceSchema,
+        input: {
+          objective,
+          planMarkdown
+        },
+        useCase: 'planner',
+        timeoutMs: PLAN_STRUCTURER_TIMEOUT_MS
+      });
+    } catch (error) {
+      return emptyPlan(objective, planMarkdown, error);
+    }
 
     const rawSlices = Array.isArray(response.data?.slices) ? response.data.slices : [];
     const slices = rawSlices

@@ -1435,6 +1435,63 @@ export class CourseKnowledgeGraphService {
     };
   }
 
+  async *streamConceptExplanation(input: {
+    workspaceId: string;
+    conceptId: string;
+    question?: string;
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  }) {
+    const graph = await this.getGraph({ workspaceId: input.workspaceId, limit: 220 });
+    const concept = (graph.nodes as any[]).find((node) => node.id === input.conceptId);
+    if (!concept) throw new Error('concept not found');
+    const neighbors = (graph.edges as any[])
+      .filter((edge) => edge.from === input.conceptId || edge.to === input.conceptId)
+      .slice(0, 12)
+      .map((edge) => ({
+        relationType: edge.relationType,
+        direction: edge.from === input.conceptId ? 'outgoing' : 'incoming',
+        concept: (graph.nodes as any[]).find((node) => node.id === (edge.from === input.conceptId ? edge.to : edge.from))?.title || ''
+      }));
+    const sourceSnippets = (concept.sources || [])
+      .flatMap((source: any) => (source.snippets || []).slice(0, 2).map((snippet: any) => ({
+        source: source.name,
+        quote: snippet.quote || snippet.snippet || ''
+      })))
+      .slice(0, 6);
+    const history = Array.isArray(input.history)
+      ? input.history
+          .slice(-6)
+          .map((message) => `${message.role === 'assistant' ? 'Assistant' : 'User'}: ${clip(message.content, 600)}`)
+          .join('\n')
+      : '';
+
+    const prompt = [
+      '你是一个轻量知识图谱节点助手。',
+      '只基于给定节点、邻近图信息、来源片段和用户问题回答。',
+      '直接解释这个节点的概念、作用、前置关系、常见误区或来源依据。',
+      '不要输出掌握度、薄弱点、学习状态，也不要生成 tag 列表。',
+      '默认使用简体中文，回答可以使用 Markdown，但保持简洁。',
+      '',
+      `用户问题: ${input.question || '请解释这个节点。'}`,
+      `节点: ${JSON.stringify({
+        title: concept.title,
+        description: concept.description || '',
+        category: concept.category || '',
+        tags: concept.tags || []
+      })}`,
+      `邻近关系: ${JSON.stringify(neighbors)}`,
+      `来源片段: ${JSON.stringify(sourceSnippets)}`,
+      history ? `历史对话:\n${history}` : ''
+    ].filter(Boolean).join('\n\n');
+
+    for await (const delta of aiModelProviderService.chatStream(
+      [{ role: 'user', content: prompt }],
+      { useCase: 'chat', timeoutMs: 45000 }
+    )) {
+      yield delta;
+    }
+  }
+
   async getGraph(input: { workspaceId: string; limit?: number; sourceIds?: string[]; tagQuery?: string }) {
     const sourceIds = unique(input.sourceIds || []);
     const rawConcepts = await prisma.courseKnowledgeConcept.findMany({

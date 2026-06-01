@@ -134,6 +134,17 @@ interface RecordLearningPlanFeedbackInput {
   rating?: number | null;
 }
 
+interface UpdateStructuredPlanStageInput {
+  workspaceId: string;
+  planId: string;
+  stageId: string;
+  title: string;
+  content: string;
+  changeSource?: 'manual' | 'llm_patch';
+  note?: string;
+  proposalId?: string | null;
+}
+
 const stringify = (value: unknown, fallback: string) => {
   try {
     return JSON.stringify(value ?? JSON.parse(fallback));
@@ -153,6 +164,9 @@ const parseJson = <T>(value: string | null | undefined, fallback: T): T => {
 
 const mapLearningPlanRecord = (plan: any) => {
   const knowledgeGraphSnapshot = parseJson<Record<string, unknown>>(plan.knowledgeGraphSnapshotJson, {});
+  const structuredPlan = knowledgeGraphSnapshot.structuredPlan && typeof knowledgeGraphSnapshot.structuredPlan === 'object'
+    ? knowledgeGraphSnapshot.structuredPlan as LearningPlan['structuredPlan']
+    : null;
   return {
     id: plan.id,
     workspaceId: plan.workspaceId,
@@ -173,10 +187,8 @@ const mapLearningPlanRecord = (plan: any) => {
     evidence: parseJson(plan.evidenceJson, {}),
     diagnosticReport: parseJson(plan.diagnosticReportJson, {}),
     candidateResources: parseJson(plan.candidateResourcesJson, []),
-    naturalPlanMarkdown: knowledgeGraphSnapshot.plannerMode === 'llm_only' ? plan.rationale : undefined,
-    structuredPlan: knowledgeGraphSnapshot.plannerMode === 'llm_only'
-      ? (knowledgeGraphSnapshot.structuredPlan as LearningPlan['structuredPlan'] | undefined) || null
-      : undefined,
+    naturalPlanMarkdown: typeof knowledgeGraphSnapshot.naturalPlanMarkdown === 'string' ? knowledgeGraphSnapshot.naturalPlanMarkdown : plan.rationale,
+    structuredPlan,
     knowledgeGraphSnapshot,
     reflectionHistory: parseJson(plan.reflectionHistoryJson, []),
     constraintScores: parseJson(plan.constraintScoresJson, {}),
@@ -186,6 +198,25 @@ const mapLearningPlanRecord = (plan: any) => {
     createdAt: plan.createdAt.toISOString(),
     updatedAt: plan.updatedAt.toISOString()
   };
+};
+
+const stepsFromStructuredPlan = (structuredPlan: LearningPlan['structuredPlan'] | null | undefined): LearningPlan['steps'] => {
+  const stages = Array.isArray(structuredPlan?.stages) ? structuredPlan.stages : [];
+  return stages.map((stage: any, index) => ({
+    id: String(stage.id || `structured-${stage.order || index + 1}`),
+    type: 'practice',
+    title: String(stage.title || stage.name || `Stage ${index + 1}`),
+    rationale: String(stage.display?.summary || stage.detail?.narrative || stage.goal || stage.description || ''),
+    targetSkills: Array.isArray(stage.focusTags) ? stage.focusTags.map(String) : [],
+    prerequisites: [],
+    estimatedLoad: 'medium' as const,
+    expectedEvidence: Array.isArray(stage.detail?.completionCriteria)
+      ? stage.detail.completionCriteria.map(String)
+      : Array.isArray(stage.outputs)
+        ? stage.outputs.map(String)
+        : [],
+    status: index === 0 ? 'active' as const : 'pending' as const
+  }));
 };
 
 const stepIsOpen = (step: Record<string, any>) => !['done', 'skipped'].includes(String(step.status || 'pending'));
@@ -393,6 +424,9 @@ export class LearningMemoryService {
       }).catch((error) => console.warn('Failed to supersede previous active learning plan:', error));
     }
     const nextVersion = Math.max(input.plan.version || 1, (previousActive?.version || 0) + 1);
+    const planSteps = input.plan.steps?.length
+      ? input.plan.steps
+      : stepsFromStructuredPlan(input.plan.structuredPlan);
     const planRecord = await prisma.learningPlan.create({
       data: {
         id: input.plan.id,
@@ -409,7 +443,7 @@ export class LearningMemoryService {
         targetSkillsJson: stringify(input.plan.targetSkills, '[]'),
         weakSkillsJson: stringify(input.plan.weakSkills, '[]'),
         milestonesJson: stringify(input.plan.milestones, '[]'),
-        stepsJson: stringify(input.plan.steps, '[]'),
+        stepsJson: stringify(planSteps, '[]'),
         adaptationPolicyJson: stringify(input.plan.adaptationPolicy, '{}'),
         evidenceJson: stringify(input.plan.evidence, '{}'),
         diagnosticReportJson: stringify(input.plan.diagnosticReport || {}, '{}'),
@@ -418,7 +452,8 @@ export class LearningMemoryService {
           ...(input.plan.knowledgeGraphSnapshot || {}),
           plannerMode: 'llm_only',
           sideEffectsPaused: true,
-          structuredPlan: input.plan.structuredPlan || null
+          structuredPlan: input.plan.structuredPlan || null,
+          naturalPlanMarkdown: input.plan.naturalPlanMarkdown || input.plan.rationale || ''
         } : input.plan.knowledgeGraphSnapshot || {}, '{}'),
         reflectionHistoryJson: stringify(input.plan.reflectionHistory || [], '[]'),
         constraintScoresJson: stringify(input.plan.constraintScores || {}, '{}'),
@@ -842,6 +877,97 @@ export class LearningMemoryService {
     return mapLearningPlanRecord(updatedPlan);
   }
 
+  async updateStructuredPlanStage(input: UpdateStructuredPlanStageInput) {
+    const plan = await prisma.learningPlan.findFirst({
+      where: { id: input.planId, workspaceId: input.workspaceId }
+    });
+    if (!plan) return null;
+
+    const knowledgeGraphSnapshot = parseJson<Record<string, any>>(plan.knowledgeGraphSnapshotJson, {});
+    const structuredPlan = knowledgeGraphSnapshot.structuredPlan && typeof knowledgeGraphSnapshot.structuredPlan === 'object'
+      ? cloneDeep(knowledgeGraphSnapshot.structuredPlan as Record<string, any>)
+      : null;
+    const stages = Array.isArray(structuredPlan?.stages) ? structuredPlan.stages as Array<Record<string, any>> : [];
+    const stageIndex = stages.findIndex((stage, index) => structuredStageId(stage, index) === input.stageId);
+    if (!structuredPlan || stageIndex < 0) throw new Error(`Structured plan stage not found: ${input.stageId}`);
+
+    const currentStage = cloneDeep(stages[stageIndex]);
+    const title = String(input.title || '').trim() || String(currentStage.title || `Stage ${stageIndex + 1}`);
+    const content = String(input.content || '').trim();
+    if (!content) throw new Error('Stage content is required');
+
+    const nextStage = {
+      ...currentStage,
+      title,
+      display: {
+        ...(currentStage.display || {}),
+        narrative: content,
+        summary: content
+      },
+      detail: {
+        ...(currentStage.detail || {}),
+        narrative: content
+      }
+    };
+    stages[stageIndex] = nextStage;
+    structuredPlan.stages = stages;
+    structuredPlan.rawMarkdown = stages.map((stage, index) =>
+      `## ${stage.title || `Stage ${index + 1}`}\n\n${stage.detail?.narrative || stage.display?.narrative || ''}`
+    ).join('\n\n');
+
+    const existingRevisions = Array.isArray(knowledgeGraphSnapshot.planRevisions)
+      ? knowledgeGraphSnapshot.planRevisions as Array<Record<string, any>>
+      : [];
+    const revision = {
+      id: crypto.randomUUID(),
+      type: 'stage_update',
+      source: input.changeSource || 'manual',
+      stageId: input.stageId,
+      stageTitle: title,
+      previousTitle: currentStage.title || null,
+      previousContent: currentStage.detail?.narrative || currentStage.display?.narrative || '',
+      note: input.note || '',
+      proposalId: input.proposalId || null,
+      createdAt: new Date().toISOString()
+    };
+    const updatedSnapshot = {
+      ...knowledgeGraphSnapshot,
+      structuredPlan,
+      naturalPlanMarkdown: structuredPlan.rawMarkdown || knowledgeGraphSnapshot.naturalPlanMarkdown || plan.rationale,
+      planRevisions: [revision, ...existingRevisions].slice(0, 50)
+    };
+    const nextSteps = stepsFromStructuredPlan(structuredPlan as LearningPlan['structuredPlan']);
+    const updatedPlan = await prisma.learningPlan.update({
+      where: { id: plan.id },
+      data: {
+        rationale: structuredPlan.rawMarkdown || plan.rationale,
+        stepsJson: stringify(nextSteps, '[]'),
+        knowledgeGraphSnapshotJson: stringify(updatedSnapshot, '{}'),
+        revisionCount: (plan.revisionCount || 0) + 1
+      }
+    });
+
+    await this.recordEvent({
+      workspaceId: input.workspaceId,
+      workbenchId: updatedPlan.workbenchId || null,
+      goalId: updatedPlan.goalId || null,
+      eventType: input.changeSource === 'llm_patch' ? 'learning_plan.stage_patch_applied' : 'learning_plan.stage_edited',
+      actor: input.changeSource === 'llm_patch' ? 'assistant' : 'user',
+      payload: {
+        planId: updatedPlan.id,
+        stageId: input.stageId,
+        title,
+        note: input.note || null,
+        proposalId: input.proposalId || null
+      },
+      object: { type: 'learning_plan_stage', id: input.stageId, title },
+      source: { component: 'planning_governance' },
+      confidence: input.changeSource === 'llm_patch' ? 0.72 : 0.9
+    }).catch((error) => console.warn('Failed to record structured plan stage update event:', error));
+
+    return mapLearningPlanRecord(updatedPlan);
+  }
+
   async performLearningPlanAction(input: PerformLearningPlanActionInput) {
     const plan = await prisma.learningPlan.findFirst({
       where: { id: input.planId, workspaceId: input.workspaceId }
@@ -934,6 +1060,36 @@ export class LearningMemoryService {
     }).catch((error) => console.warn('Failed to record plan action event:', error));
 
     return mapLearningPlanRecord(updatedPlan);
+  }
+
+  async deleteLearningPlan(input: { workspaceId: string; planId: string }) {
+    const plan = await prisma.learningPlan.findFirst({
+      where: { id: input.planId, workspaceId: input.workspaceId }
+    });
+    if (!plan) return null;
+
+    const detachedVersions = await prisma.learningPlan.updateMany({
+      where: { previousPlanId: plan.id },
+      data: { previousPlanId: null }
+    });
+
+    await prisma.learningPlan.delete({
+      where: { id: plan.id }
+    });
+
+    await this.recordEvent({
+      workspaceId: input.workspaceId,
+      workbenchId: plan.workbenchId || null,
+      goalId: plan.goalId || null,
+      eventType: 'learning_plan.deleted',
+      actor: 'user',
+      payload: { planId: plan.id, detachedVersionCount: detachedVersions.count },
+      object: { type: 'learning_plan', id: plan.id, title: plan.objective },
+      source: { component: 'workbench_plans' },
+      confidence: 0.88
+    }).catch((error) => console.warn('Failed to record plan delete event:', error));
+
+    return mapLearningPlanRecord(plan);
   }
 
   async supersedeLearningPlan(planId: string) {

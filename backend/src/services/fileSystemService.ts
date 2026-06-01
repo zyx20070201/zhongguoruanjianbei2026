@@ -20,6 +20,7 @@ import {
 import { LocalStorageService } from './storage/localStorageService';
 import { inferFileCategory, isTextLikeFile } from './fileTypeService';
 import { knowledgeIndexingService } from './knowledgeIndexingService';
+import { knowledgeIndexQueueService } from './knowledgeIndexQueueService';
 import {
   buildWorkbenchResourceWhere,
   buildWorkspaceResourceWhere,
@@ -104,6 +105,7 @@ const RESOURCE_ROLE_LABELS: Record<string, string> = {
   note: 'Files',
   file: 'Files',
   workspace: 'Files',
+  chat_attachment: 'Attachments',
   generated: 'Generated',
   artifact: 'Artifacts'
 };
@@ -137,8 +139,18 @@ const inferResourceRole = (input: {
   return 'resource';
 };
 
-const normalizeScope = (scope?: string | null, workbenchId?: string | null) =>
-  scope === 'workbench' || workbenchId ? 'workbench' : 'workspace';
+const normalizeScope = (scope?: string | null, workbenchId?: string | null) => {
+  const normalized = String(scope || '').trim().toLowerCase();
+  if (normalized === 'chat') return 'chat';
+  return normalized === 'workbench' || workbenchId ? 'workbench' : 'workspace';
+};
+
+const chatAttachmentPathSegment = (value: unknown) =>
+  String(value || 'chat')
+    .trim()
+    .replace(/[^\p{L}\p{N}_-]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'chat';
 
 const INDEXABLE_EXTENSIONS = new Set([
   'pdf',
@@ -257,6 +269,7 @@ export class FileSystemService {
     workbenchId?: string | null;
     role?: string | null;
     scope?: string | null;
+    metadata?: Record<string, unknown>;
   }) {
     if (input.parentId || input.parentPath) {
       return {
@@ -268,6 +281,13 @@ export class FileSystemService {
     const role = normalizeResourceRole(input.role);
     const scope = normalizeScope(input.scope, input.workbenchId);
     const section = RESOURCE_ROLE_LABELS[role] || RESOURCE_ROLE_LABELS.resource;
+
+    if (scope === 'chat') {
+      return {
+        parentId: undefined,
+        parentPath: `/Chat Attachments/${chatAttachmentPathSegment(input.metadata?.chatId || input.metadata?.sessionId)}`
+      };
+    }
 
     if (scope === 'workbench' && input.workbenchId) {
       const workbench = await prisma.workbench.findFirst({
@@ -298,7 +318,11 @@ export class FileSystemService {
 
   private static scheduleKnowledgeIndexing(node: any) {
     setImmediate(() => {
-      FileSystemService.indexFileForKnowledge(node).catch((error) => {
+      knowledgeIndexQueueService.enqueueFile({
+        workspaceId: node.workspaceId,
+        fileObjectId: node.id,
+        reason: node.fileCategory === 'generated' ? 'generated-resource' : 'workspace-file'
+      }).catch((error) => {
         console.warn(
           `Knowledge indexing failed for ${node?.id || node?.name || 'file'}:`,
           error instanceof Error ? error.message : error
@@ -426,7 +450,8 @@ export class FileSystemService {
       parentPath: dto.parentPath,
       workbenchId: dto.workbenchId,
       role: resourceType,
-      scope: dto.scope
+      scope: dto.scope,
+      metadata: dto.metadata
     });
     const path = generateNewPath(target.parentPath, name);
 
@@ -471,9 +496,7 @@ export class FileSystemService {
       source: dto.origin || 'local',
       metadata: dto.metadata
     });
-    if (dto.indexInBackground) {
-      FileSystemService.scheduleKnowledgeIndexing(created);
-    } else if (dto.workbenchId) {
+    if (dto.indexInBackground !== false) {
       FileSystemService.scheduleKnowledgeIndexing(created);
     } else {
       await FileSystemService.indexFileForKnowledge(created);
@@ -538,7 +561,9 @@ export class FileSystemService {
     options: {
       workbenchId?: string;
       resourceRole?: string;
+      resourceType?: string;
       scope?: string;
+      origin?: string;
       metadata?: Record<string, unknown>;
       indexInBackground?: boolean;
     } = {}
@@ -550,7 +575,8 @@ export class FileSystemService {
       nodeType: 'file',
       fileCategory: inferredCategory,
       extension,
-      explicitRole: options.resourceRole
+      explicitRole: options.resourceRole,
+      explicitType: options.resourceType
     });
     const target = await FileSystemService.resolveDefaultParent({
       workspaceId,
@@ -558,7 +584,8 @@ export class FileSystemService {
       parentPath,
       workbenchId: options.workbenchId,
       role: resourceType,
-      scope: options.scope
+      scope: options.scope,
+      metadata: options.metadata
     });
     const path = generateNewPath(target.parentPath, normalizedName);
 
@@ -582,7 +609,7 @@ export class FileSystemService {
         fileCategory: inferredCategory,
         resourceType,
         scope: normalizeScope(options.scope, options.workbenchId),
-        origin: 'upload',
+        origin: options.origin || 'upload',
         metadataJson: serializeMetadata(options.metadata),
         tags: '[]',
         extension,
@@ -596,13 +623,15 @@ export class FileSystemService {
         ownerWorkbenchId: options.workbenchId || undefined
       } as any
     });
-    await FileSystemService.bindResourceToWorkbench(created, {
-      workbenchId: options.workbenchId,
-      role: resourceType,
-      source: 'uploaded',
-      metadata: options.metadata
-    });
-    if (options.indexInBackground ?? Boolean(options.workbenchId)) {
+    if (normalizeScope(options.scope, options.workbenchId) !== 'chat') {
+      await FileSystemService.bindResourceToWorkbench(created, {
+        workbenchId: options.workbenchId,
+        role: resourceType,
+        source: 'uploaded',
+        metadata: options.metadata
+      });
+    }
+    if (options.indexInBackground ?? true) {
       FileSystemService.scheduleKnowledgeIndexing(created);
     } else {
       await FileSystemService.indexFileForKnowledge(created);
@@ -1157,7 +1186,11 @@ export class FileSystemService {
       source: 'generated',
       metadata: dto.metadata
     });
-    await FileSystemService.indexFileForKnowledge(created);
+    if (dto.indexInBackground ?? true) {
+      FileSystemService.scheduleKnowledgeIndexing(created);
+    } else {
+      await FileSystemService.indexFileForKnowledge(created);
+    }
     return mapFileSystemObject(created);
   }
 

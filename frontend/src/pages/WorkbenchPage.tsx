@@ -46,9 +46,11 @@ import {
 import {
   createLeaf,
   createPaneId,
+  collectLeafIds,
   findLeafById,
   getResolvedLayout,
   mapLayoutTree,
+  normalizeLeaf,
   removeEditorFromLayout,
   updateLeafEditors,
   WorkbenchDropPlacement
@@ -995,6 +997,36 @@ function WorkbenchPageContent() {
       }),
     [documentStateByResourceId, resourceMap, state?.editors]
   );
+  const visiblePanelIds = useMemo(() => {
+    if (!state?.editors?.length) return new Set<string>();
+    const layout = getResolvedLayout(
+      state.editorLayout,
+      state.editors.map((editor) => editor.id),
+      state.activeEditorId
+    );
+    if (!layout) return new Set<string>();
+
+    return new Set(
+      collectLeafIds(layout)
+        .map((paneId) => {
+          const leaf = findLeafById(layout, paneId);
+          if (!leaf) return null;
+          const normalizedLeaf = normalizeLeaf(leaf);
+          const activeId =
+            normalizedLeaf.activeEditorId && normalizedLeaf.editorIds.includes(normalizedLeaf.activeEditorId)
+              ? normalizedLeaf.activeEditorId
+              : normalizedLeaf.editorIds.find((editorId) => editorId === state.activeEditorId) ||
+                normalizedLeaf.editorIds[0] ||
+                null;
+          return activeId;
+        })
+        .filter((value): value is string => Boolean(value))
+    );
+  }, [state?.activeEditorId, state?.editorLayout, state?.editors]);
+  const visiblePanelContexts = useMemo(
+    () => openPanelContexts.filter((panel) => visiblePanelIds.has(panel.panelId)),
+    [openPanelContexts, visiblePanelIds]
+  );
   const aiAssistantContext = useMemo(
     () => ({
       userId: user?.id,
@@ -1011,7 +1043,8 @@ function WorkbenchPageContent() {
       activeFile: activeFileContext,
       activeFileContent,
       activeExternal: activeExternalContext,
-      openPanels: openPanelContexts
+      openPanels: openPanelContexts,
+      visiblePanels: visiblePanelContexts
     }),
     [
       activeEditor?.type,
@@ -1021,6 +1054,7 @@ function WorkbenchPageContent() {
       liveContextUpdatedAt,
       liveContextVersion,
       openPanelContexts,
+      visiblePanelContexts,
       preferredFileEditor?.id,
       state?.activeEditorId,
       user?.id,
@@ -1573,6 +1607,10 @@ function WorkbenchPageContent() {
 
   const handleOpenResourceReference = (resource: ResourceReference) => {
     if (!state) return;
+
+    if (!resourceMap.has(resource.id)) {
+      setResources([...resources, resource]);
+    }
 
     const existingEditor = state.editors.find((editor) => editor.resourceId === resource.id);
     if (existingEditor) {

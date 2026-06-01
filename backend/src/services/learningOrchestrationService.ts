@@ -58,6 +58,8 @@ interface GeneratedWorkbenchContent {
   notes: string;
 }
 
+const WORKBENCH_CONTENT_TIMEOUT_MS = Number(process.env.AI_WORKBENCH_CONTENT_TIMEOUT_MS || 12000);
+
 const clampTitle = (value: string, fallback: string) => {
   const normalized = value
     .replace(/[\\/:*?"<>|]/g, ' ')
@@ -272,7 +274,7 @@ const generateWorkbenchContentWithModel = async (params: {
         role: 'user',
         content: buildWorkbenchContentPrompt(params)
       }
-    ], { useCase: 'learning' });
+    ], { useCase: 'learning', timeoutMs: WORKBENCH_CONTENT_TIMEOUT_MS });
     const parsed = extractJsonObject(response.reply);
     const fallback = buildFallbackWorkbenchContent(params.goalDraft, params.workspaceName);
 
@@ -673,6 +675,7 @@ class LearningOrchestrationService {
       resourceType: 'generated',
       scope: 'workbench',
       origin: 'ai',
+      indexInBackground: true,
       content: generatedContent.brief
     });
     const practice = await FileSystemService.saveGeneratedContent({
@@ -685,6 +688,7 @@ class LearningOrchestrationService {
       resourceType: 'generated',
       scope: 'workbench',
       origin: 'ai',
+      indexInBackground: true,
       content: generatedContent.practice
     });
     const plan = await FileSystemService.saveGeneratedContent({
@@ -697,6 +701,7 @@ class LearningOrchestrationService {
       resourceType: 'generated',
       scope: 'workbench',
       origin: 'ai',
+      indexInBackground: true,
       content: generatedContent.plan
     });
     const notes = await FileSystemService.saveGeneratedContent({
@@ -709,6 +714,7 @@ class LearningOrchestrationService {
       resourceType: 'note',
       scope: 'workbench',
       origin: 'ai',
+      indexInBackground: true,
       content: generatedContent.notes
     });
 

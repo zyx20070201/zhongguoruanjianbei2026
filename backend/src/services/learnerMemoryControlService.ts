@@ -47,6 +47,37 @@ const isoDate = (value?: Date | string | null) => {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 };
 
+const toControlView = (control: {
+  id: string;
+  memoryKey: string;
+  dimension: string;
+  action: string;
+  status: string;
+  originalText: string;
+  correctedText: string;
+  reason: string;
+  weightMultiplier: number;
+  workbenchId?: string | null;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+}) => ({
+  id: control.id,
+  key: control.memoryKey,
+  memoryKey: control.memoryKey,
+  dimension: control.dimension,
+  action: control.action,
+  status: control.status,
+  originalText: control.originalText || '',
+  correctedText: control.correctedText || '',
+  value: control.correctedText || control.originalText || control.memoryKey,
+  reason: control.reason || '',
+  weightMultiplier: control.weightMultiplier,
+  workbenchId: control.workbenchId || null,
+  createdAt: isoDate(control.createdAt),
+  updatedAt: isoDate(control.updatedAt),
+  source: 'learner_memory_control'
+});
+
 const friendlyPreference = (value: string) => {
   const labels: Record<string, string> = {
     examples: '更适合先用现实案例进入抽象概念。',
@@ -76,6 +107,7 @@ export class LearnerMemoryControlService {
       orderBy: { updatedAt: 'desc' }
     });
     const controlByKey = new Map(controls.map((control) => [control.memoryKey, control]));
+    const pushedKeys = new Set<string>();
     const items: KeyMemoryItem[] = [];
 
     const push = (params: {
@@ -104,6 +136,7 @@ export class LearnerMemoryControlService {
             : control?.action === 'downrank'
               ? 'downranked'
               : 'active';
+      pushedKeys.add(key);
       items.push({
         key,
         dimension: params.dimension,
@@ -233,6 +266,34 @@ export class LearnerMemoryControlService {
       })
     );
     controls
+      .filter((control) => control.action !== 'delete' && !pushedKeys.has(control.memoryKey))
+      .forEach((control) => {
+        const status =
+          control.action === 'correct'
+            ? 'corrected'
+            : control.action === 'freeze'
+              ? 'frozen'
+              : control.action === 'downrank'
+                ? 'downranked'
+                : 'active';
+        items.push({
+          key: control.memoryKey,
+          dimension: control.dimension,
+          label: 'User-governed profile item',
+          userFacingLabel: '用户管理的学习画像',
+          signalType: 'user_control.profile',
+          value: control.correctedText || control.originalText || control.memoryKey,
+          confidence: control.action === 'downrank' ? Math.min(control.weightMultiplier || 0.4, 0.5) : 1,
+          confidenceLabel: control.action === 'downrank' ? 'medium' : 'high',
+          evidenceCount: 0,
+          sources: ['user control'],
+          status,
+          explanation: control.reason || 'User-managed learner profile control.',
+          editable: true
+        });
+      });
+
+    controls
       .filter((control) => control.action === 'delete')
       .forEach((control) => {
         items.push({
@@ -258,6 +319,7 @@ export class LearnerMemoryControlService {
       memories: items
         .sort((a, b) => b.confidence - a.confidence)
         .slice(0, Math.min(Math.max(input.limit || 12, 1), 30)),
+      controls: controls.map(toControlView),
       contextSummary: context.summary,
       provenance: context.provenance
     };

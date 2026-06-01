@@ -1,11 +1,10 @@
-import prisma from '../config/db';
+import prisma, { withPrismaRetry } from '../config/db';
 import { FileSystemError } from '../types/fileSystem';
 import { stableHash } from './chunkSchema';
 import { documentTextExtractionService } from './documentTextExtractionService';
 import { documentChunkStore } from './documentChunkStore';
 import { knowledgeChunkingService } from './knowledgeChunkingService';
 import { vectorStoreService } from './vectorStoreService';
-import { courseKnowledgeGraphService, isCourseKnowledgeGraphSourceFile } from './courseKnowledgeGraphService';
 import { videoAnalysisService } from './videoAnalysisService';
 
 interface IndexFileInput {
@@ -13,10 +12,12 @@ interface IndexFileInput {
   fileObjectId: string;
   reason?: string;
   force?: boolean;
+  jobId?: string;
 }
 
 type IndexStage = 'pending' | 'extracting' | 'chunking' | 'embedding' | 'upserting' | 'verifying' | 'indexed' | 'degraded' | 'skipped' | 'failed';
 const KNOWLEDGE_INDEX_REUSABLE_STATUSES = ['completed', 'degraded', 'skipped'];
+const KNOWLEDGE_INDEX_ACTIVE_STATUSES = ['queued', 'running', 'pending'];
 
 interface IndexLifecycleSnapshot {
   stage: IndexStage;
@@ -26,8 +27,6 @@ interface IndexLifecycleSnapshot {
   chunkCount?: number;
   vectorIndexed?: boolean;
   vectorError?: string;
-  courseKnowledgeGraphIndexed?: boolean;
-  courseKnowledgeGraphError?: string;
   timings: Record<string, number>;
   completedStages: IndexStage[];
 }
@@ -85,7 +84,7 @@ const hasIndexableVideoAnalysis = (file: any) => {
 };
 
 export class KnowledgeIndexingService {
-  async indexFile(input: IndexFileInput) {
+  async enqueueFile(input: Omit<IndexFileInput, 'jobId'>) {
     const file = await prisma.fileSystemObject.findFirst({
       where: {
         id: input.fileObjectId,
@@ -95,8 +94,103 @@ export class KnowledgeIndexingService {
 
     if (!file) throw new FileSystemError(404, 'File not found');
     if (file.nodeType !== 'file') throw new FileSystemError(400, 'Cannot index a folder');
+
+    const sourceHash = fileSourceHash(file);
+    const reason = input.reason || 'queued-index';
+    const latestActive = await prisma.knowledgeIndexJob.findFirst({
+      where: {
+        workspaceId: input.workspaceId,
+        fileObjectId: input.fileObjectId,
+        status: { in: KNOWLEDGE_INDEX_ACTIVE_STATUSES }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    if (!input.force && latestActive) {
+      return latestActive;
+    }
+
+    return prisma.knowledgeIndexJob.create({
+      data: {
+        workspaceId: input.workspaceId,
+        fileObjectId: input.fileObjectId,
+        status: 'queued',
+        errorMessage: lifecycleMessage({
+          stage: 'pending',
+          reason,
+          sourceHash,
+          timings: {},
+          completedStages: []
+        })
+      }
+    });
+  }
+
+  async indexFile(input: IndexFileInput) {
+    const job = input.jobId
+      ? await prisma.knowledgeIndexJob.findFirst({
+          where: {
+            id: input.jobId,
+            workspaceId: input.workspaceId,
+            fileObjectId: input.fileObjectId
+          }
+        })
+      : null;
+
+    if (input.jobId && !job) {
+      throw new FileSystemError(404, 'Index job not found');
+    }
+
+    return this.runIndexFile(input, job);
+  }
+
+  async processQueuedJob(jobId: string) {
+    const job = await prisma.knowledgeIndexJob.findFirst({ where: { id: jobId } });
+    if (!job) throw new FileSystemError(404, 'Index job not found');
+    return this.runIndexFile({
+      workspaceId: job.workspaceId,
+      fileObjectId: job.fileObjectId,
+      reason: parseLifecycle(job.errorMessage)?.reason || 'queued-index',
+      jobId: job.id
+    }, job);
+  }
+
+  private async runIndexFile(input: IndexFileInput, existingJob?: any) {
+    const file = await prisma.fileSystemObject.findFirst({
+      where: {
+        id: input.fileObjectId,
+        workspaceId: input.workspaceId
+      }
+    });
+
+    if (!file) throw new FileSystemError(404, 'File not found');
+    if (file.nodeType !== 'file') throw new FileSystemError(400, 'Cannot index a folder');
+    const sourceLifecycle = parseLifecycle(existingJob?.errorMessage);
+    const initialReason = input.reason || sourceLifecycle?.reason || 'index-job';
+
     if (hasIndexableVideoAnalysis(file)) {
-      await videoAnalysisService.indexStoredAnalysis(input.workspaceId, input.fileObjectId, input.reason || 'knowledge-index-video-analysis');
+      await videoAnalysisService.indexStoredAnalysis(input.workspaceId, input.fileObjectId, initialReason || 'knowledge-index-video-analysis');
+      if (existingJob) {
+        const chunkCount = await prisma.knowledgeChunk.count({
+          where: { workspaceId: input.workspaceId, fileObjectId: input.fileObjectId }
+        });
+        return prisma.knowledgeIndexJob.update({
+          where: { id: existingJob.id },
+          data: {
+            status: 'completed',
+            chunkCount,
+            completedAt: new Date(),
+            errorMessage: lifecycleMessage({
+              stage: 'indexed',
+              reason: initialReason,
+              chunkCount,
+              vectorIndexed: true,
+              timings: {},
+              completedStages: ['indexed']
+            })
+          }
+        });
+      }
       return this.getLatestStatus(input.workspaceId, input.fileObjectId);
     }
 
@@ -118,14 +212,13 @@ export class KnowledgeIndexingService {
     });
 
     if (!input.force && latestLifecycle?.sourceHash === sourceHash && existingChunkCount > 0) {
-      return prisma.knowledgeIndexJob.create({
-        data: {
+      const data = {
           workspaceId: input.workspaceId,
           fileObjectId: input.fileObjectId,
           status: 'skipped',
           extractor: latestLifecycle.extractor,
           chunkCount: existingChunkCount,
-          startedAt: new Date(),
+          startedAt: existingJob?.startedAt || new Date(),
           completedAt: new Date(),
           errorMessage: lifecycleMessage({
             stage: 'skipped',
@@ -137,11 +230,13 @@ export class KnowledgeIndexingService {
             timings: {},
             completedStages: ['skipped']
           })
-        }
-      });
+        };
+      return existingJob
+        ? prisma.knowledgeIndexJob.update({ where: { id: existingJob.id }, data })
+        : prisma.knowledgeIndexJob.create({ data });
     }
 
-    const job = await prisma.knowledgeIndexJob.create({
+    const job = existingJob || await prisma.knowledgeIndexJob.create({
       data: {
         workspaceId: input.workspaceId,
         fileObjectId: input.fileObjectId,
@@ -149,7 +244,7 @@ export class KnowledgeIndexingService {
         startedAt: new Date(),
         errorMessage: lifecycleMessage({
           stage: 'pending',
-          reason: input.reason || 'index-job',
+          reason: initialReason,
           sourceHash,
           timings: {},
           completedStages: []
@@ -159,7 +254,7 @@ export class KnowledgeIndexingService {
 
     const snapshot: IndexLifecycleSnapshot = {
       stage: 'pending',
-      reason: input.reason || 'index-job',
+      reason: initialReason,
       sourceHash,
       timings: {},
       completedStages: []
@@ -174,15 +269,19 @@ export class KnowledgeIndexingService {
       Object.assign(snapshot, patch);
       if (!snapshot.completedStages.includes(stage)) snapshot.completedStages.push(stage);
       stageStartedAt.set(stage, now());
-      await prisma.knowledgeIndexJob.update({
-        where: { id: job.id },
-        data: {
-          status: stage === 'failed' ? 'failed' : stage === 'indexed' ? 'completed' : stage === 'degraded' ? 'degraded' : 'running',
-          extractor: snapshot.extractor,
-          chunkCount: snapshot.chunkCount || 0,
-          errorMessage: lifecycleMessage(snapshot)
-        }
-      });
+      await withPrismaRetry(() =>
+        prisma.knowledgeIndexJob.update({
+          where: { id: job.id },
+          data: {
+            status: stage === 'failed' ? 'failed' : stage === 'indexed' ? 'completed' : stage === 'degraded' ? 'degraded' : 'running',
+            extractor: snapshot.extractor,
+            chunkCount: snapshot.chunkCount || 0,
+            startedAt: job.startedAt || new Date(),
+            completedAt: ['failed', 'indexed', 'degraded'].includes(stage) ? new Date() : job.completedAt || null,
+            errorMessage: lifecycleMessage(snapshot)
+          }
+        })
+      );
     };
 
     try {
@@ -195,12 +294,12 @@ export class KnowledgeIndexingService {
         workspaceId: input.workspaceId,
         fileObjectId: input.fileObjectId,
         content: extracted.text,
-        source: input.reason || 'index-job',
+        source: initialReason,
         purpose: file.fileCategory || 'grounding',
         metadata: {
           ...extracted.metadata,
           fileSourceHash: sourceHash,
-          lifecycleReason: input.reason || 'index-job'
+          lifecycleReason: initialReason
         }
       });
       snapshot.chunkCount = chunks.length;
@@ -229,66 +328,55 @@ export class KnowledgeIndexingService {
         fileObjectId: input.fileObjectId
       });
 
-      let courseKnowledgeGraphIndexed = false;
-      let courseKnowledgeGraphError: string | undefined;
       snapshot.timings[snapshot.stage] = now() - (stageStartedAt.get(snapshot.stage) || now());
-      if (isCourseKnowledgeGraphSourceFile(file)) {
-        try {
-          await courseKnowledgeGraphService.ingestResourceFile({
-            workspaceId: input.workspaceId,
-            fileObjectId: input.fileObjectId,
-            source: 'knowledge_indexing'
-          });
-          courseKnowledgeGraphIndexed = true;
-        } catch (error) {
-          courseKnowledgeGraphError = error instanceof Error ? error.message : String(error);
-          console.warn(`AI course KG indexing failed for ${input.fileObjectId}: ${courseKnowledgeGraphError}`);
-        }
-      }
 
-      const finalStage: IndexStage = vectorError || courseKnowledgeGraphError ? 'degraded' : 'indexed';
-      return prisma.knowledgeIndexJob.update({
-        where: { id: job.id },
-        data: {
-          status: finalStage === 'indexed' ? 'completed' : 'degraded',
-          extractor: extracted.extractor,
-          chunkCount: verifiedChunkCount.length,
-          completedAt: new Date(),
-          errorMessage: lifecycleMessage({
-            ...snapshot,
-            stage: finalStage,
+      const finalStage: IndexStage = vectorError ? 'degraded' : 'indexed';
+      return withPrismaRetry(() =>
+        prisma.knowledgeIndexJob.update({
+          where: { id: job.id },
+          data: {
+            status: finalStage === 'indexed' ? 'completed' : 'degraded',
+            extractor: extracted.extractor,
             chunkCount: verifiedChunkCount.length,
-            vectorIndexed,
-            vectorError,
-            courseKnowledgeGraphIndexed,
-            courseKnowledgeGraphError,
-            completedStages: [...new Set([...snapshot.completedStages, finalStage])]
-          })
-        }
-      });
+            completedAt: new Date(),
+            errorMessage: lifecycleMessage({
+              ...snapshot,
+              stage: finalStage,
+              chunkCount: verifiedChunkCount.length,
+              vectorIndexed,
+              vectorError,
+              completedStages: [...new Set([...snapshot.completedStages, finalStage])]
+            })
+          }
+        })
+      );
     } catch (error: any) {
       const message = error instanceof Error ? error.message : 'Failed to index file';
 
-      await prisma.knowledgeChunk.deleteMany({
-        where: {
-          workspaceId: input.workspaceId,
-          fileObjectId: input.fileObjectId
-        }
-      });
+      await withPrismaRetry(() =>
+        prisma.knowledgeChunk.deleteMany({
+          where: {
+            workspaceId: input.workspaceId,
+            fileObjectId: input.fileObjectId
+          }
+        })
+      );
 
-      return prisma.knowledgeIndexJob.update({
-        where: { id: job.id },
-        data: {
-          status: 'failed',
-          errorMessage: lifecycleMessage({
-            ...snapshot,
-            stage: 'failed',
-            vectorError: message,
-            completedStages: [...new Set<IndexStage>([...snapshot.completedStages, 'failed'])]
-          }),
-          completedAt: new Date()
-        }
-      });
+      return withPrismaRetry(() =>
+        prisma.knowledgeIndexJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'failed',
+            errorMessage: lifecycleMessage({
+              ...snapshot,
+              stage: 'failed',
+              vectorError: message,
+              completedStages: [...new Set<IndexStage>([...snapshot.completedStages, 'failed'])]
+            }),
+            completedAt: new Date()
+          }
+        })
+      );
     }
   }
 

@@ -5,6 +5,17 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   resolve: {
+    dedupe: [
+      'yjs',
+      'lit',
+      '@lit/reactive-element',
+      'lit-element',
+      'lit-html',
+      '@blocksuite/store',
+      '@blocksuite/block-std',
+      '@blocksuite/blocks',
+      '@blocksuite/presets'
+    ],
     alias: {
       'gl-bench': 'gl-bench/dist/gl-bench.module.js'
     }
@@ -18,6 +29,15 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    include: ['mermaid', 'dayjs']
+    include: [
+      'mermaid',
+      'dayjs',
+      'extend',
+      'lodash.chunk',
+      'lodash.clonedeep',
+      'lodash.ismatch',
+      'lodash.merge',
+      'lodash.mergewith'
+    ]
   }
 });

@@ -548,7 +548,7 @@ export const uploadFiles = async (req: Request, res: Response) => {
     const workspaceId = getSingleParam(req.params.workspaceId);
     // When using multer, files are in req.files
     const files = (req as any).files as any[];
-    const { parentId, parentPath, workbenchId, resourceRole, scope, metadata } = req.body;
+    const { parentId, parentPath, workbenchId, resourceRole, resourceType, scope, origin, metadata } = req.body;
     
     validateWorkspaceId(workspaceId);
 
@@ -568,9 +568,11 @@ export const uploadFiles = async (req: Request, res: Response) => {
           {
             workbenchId,
             resourceRole,
+            resourceType,
             scope,
+            origin,
             metadata: parseMetadataInput(metadata),
-            indexInBackground: Boolean(workbenchId)
+            indexInBackground: Boolean(workbenchId) || scope === 'chat'
           }
         );
         results.push({ success: true, file: created });

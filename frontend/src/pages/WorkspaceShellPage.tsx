@@ -2,8 +2,12 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  ArrowUp,
   BookOpen,
+  Check,
+  ChevronDown,
   ExternalLink,
+  Folder,
   FileText,
   FileCode,
   FileImage,
@@ -13,16 +17,18 @@ import {
   LibraryBig,
   Loader2,
   LogOut,
+  MoreHorizontal,
   Plus,
   Sparkles,
-  TextCursorInput,
+  Wrench,
   Upload
 } from 'lucide-react';
 import { workspaceApi } from '../api/client';
 import { fileSystemApi, DiscoveredResource } from '../services/fileSystemApi';
+import { learningApi, TerminalChatListItem } from '../services/learningApi';
 import { workbenchApi } from '../services/workbenchApi';
 import { useAuthStore } from '../store/authStore';
-import { LearningTerminalMessage, Workspace, Workbench, WorkbenchItem } from '../types';
+import { FileSystemObject, LearningTerminalMessage, TerminalChatFile, Workspace, Workbench, WorkbenchItem } from '../types';
 import LearningTerminal from '../components/workspace/LearningTerminal';
 import { AddSourcesDialog } from '../components/workspace/AddSourcesDialog';
 import LearningIntelligenceDashboard, {
@@ -56,6 +62,36 @@ interface CreateWorkspaceDraft {
   texts: QueuedTextSource[];
   webQuery: string;
 }
+
+interface TerminalChatSession {
+  id: string;
+  title: string;
+  mode: TerminalChatMode;
+  selectedSources: Array<{ fileId: string; mode: 'focused' | 'full_context' }>;
+  chatFiles: TerminalChatFile[];
+  messages: LearningTerminalMessage[];
+  checkpointThreadId?: string;
+  hasMoreMessages?: boolean;
+  nextBefore?: string | null;
+  messagesLoading?: boolean;
+  createdAt: string;
+  updatedAt: string;
+  messageCount?: number;
+  lastMessagePreview?: string;
+}
+
+type TerminalChatMode = 'chat' | 'agentic';
+
+type TerminalSourceFile = {
+  id: string;
+  name: string;
+  path: string;
+  updatedAt?: string;
+  indexStatusLabel?: string;
+  indexStatusDetail?: string;
+  indexStatusTone?: 'ready' | 'indexing' | 'degraded' | 'failed' | 'empty';
+  chunkCount?: number;
+};
 
 const emptyDraft = (): CreateWorkspaceDraft => ({
   name: '',
@@ -121,6 +157,169 @@ const getTimeRange = (value?: string) => {
   return date.toLocaleDateString('en-US', { month: 'long' });
 };
 
+const makeTerminalChatId = () => `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const normalizeTerminalChatMode = (value: unknown): TerminalChatMode =>
+  value === 'agentic' ? 'agentic' : 'chat';
+
+const clipTerminalText = (value: unknown, maxLength = 4000) => {
+  const text = String(value || '');
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+};
+
+const getTerminalChatTitle = (messages: LearningTerminalMessage[], fallback = 'New Chat') => {
+  const firstUserMessage = messages.find((message) => message.role === 'user')?.content.trim();
+  if (!firstUserMessage) return fallback;
+  return firstUserMessage.length > 64 ? `${firstUserMessage.slice(0, 61)}...` : firstUserMessage;
+};
+
+const terminalChatFileFromObject = (workspaceId: string, file: FileSystemObject): TerminalChatFile => ({
+  id: file.id,
+  name: file.name,
+  path: file.path,
+  mimeType: file.mimeType,
+  size: file.size,
+  extension: file.extension,
+  fileCategory: file.fileCategory,
+  resourceType: file.resourceType,
+  scope: file.scope,
+  origin: file.origin,
+  metadata: file.metadata,
+  createdAt: file.createdAt,
+  updatedAt: file.updatedAt,
+  status: 'ready',
+  downloadUrl: fileSystemApi.downloadUrl(workspaceId, file.id)
+});
+
+const sanitizeTerminalChatFiles = (value: unknown): TerminalChatFile[] =>
+  Array.isArray(value)
+    ? value
+        .map((item: any): TerminalChatFile => ({
+          id: typeof item?.id === 'string' ? item.id : '',
+          name: typeof item?.name === 'string' ? item.name : 'Attachment',
+          path: typeof item?.path === 'string' ? item.path : undefined,
+          mimeType: typeof item?.mimeType === 'string' ? item.mimeType : undefined,
+          size: typeof item?.size === 'number' ? item.size : undefined,
+          extension: typeof item?.extension === 'string' ? item.extension : undefined,
+          fileCategory: typeof item?.fileCategory === 'string' ? item.fileCategory : undefined,
+          resourceType: typeof item?.resourceType === 'string' ? item.resourceType : undefined,
+          scope: typeof item?.scope === 'string' ? item.scope : undefined,
+          origin: typeof item?.origin === 'string' ? item.origin : undefined,
+          downloadUrl: typeof item?.downloadUrl === 'string' ? item.downloadUrl : undefined,
+          status: item?.status === 'uploading' || item?.status === 'error' ? item.status : 'ready',
+          error: typeof item?.error === 'string' ? item.error : undefined,
+          createdAt: typeof item?.createdAt === 'string' ? item.createdAt : undefined,
+          updatedAt: typeof item?.updatedAt === 'string' ? item.updatedAt : undefined,
+          metadata: item?.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata) ? item.metadata : undefined
+        }))
+        .filter((item) => Boolean(item.id))
+        .slice(0, 24)
+    : [];
+
+const sanitizeTerminalSessionForStorage = (session: TerminalChatSession): TerminalChatSession => ({
+  ...session,
+  title: clipTerminalText(session.title, 80) || 'New Chat',
+  selectedSources: session.selectedSources.slice(0, 12),
+  chatFiles: sanitizeTerminalChatFiles(session.chatFiles),
+  messages: [],
+  hasMoreMessages: session.hasMoreMessages,
+  nextBefore: session.nextBefore || null,
+  messagesLoading: false,
+  messageCount: session.messageCount,
+  lastMessagePreview: clipTerminalText(session.lastMessagePreview, 180),
+  checkpointThreadId: session.checkpointThreadId
+});
+
+const sanitizeTerminalSessionsForStorage = (sessions: TerminalChatSession[]) =>
+  sessions
+    .map(sanitizeTerminalSessionForStorage)
+    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
+    .slice(0, 100);
+
+const createTerminalChatSession = (
+  input?: Partial<TerminalChatSession> & { messages?: LearningTerminalMessage[] }
+): TerminalChatSession => {
+  const now = new Date().toISOString();
+  const messages = input?.messages || [];
+  return {
+    id: input?.id || makeTerminalChatId(),
+    title: input?.title || getTerminalChatTitle(messages),
+    mode: normalizeTerminalChatMode(input?.mode),
+    selectedSources: Array.isArray(input?.selectedSources)
+      ? input.selectedSources
+          .map((item): { fileId: string; mode: 'focused' | 'full_context' } => ({
+            fileId: typeof item.fileId === 'string' ? item.fileId : '',
+            mode: item.mode === 'full_context' ? 'full_context' : 'focused'
+          }))
+          .filter((item) => Boolean(item.fileId))
+          .slice(0, 12)
+      : [],
+    chatFiles: sanitizeTerminalChatFiles(input?.chatFiles),
+    messages,
+    checkpointThreadId: typeof input?.checkpointThreadId === 'string' ? input.checkpointThreadId : undefined,
+    hasMoreMessages: Boolean(input?.hasMoreMessages),
+    nextBefore: typeof input?.nextBefore === 'string' ? input.nextBefore : null,
+    messagesLoading: false,
+    messageCount: typeof input?.messageCount === 'number' ? input.messageCount : messages.length,
+    lastMessagePreview: typeof input?.lastMessagePreview === 'string' ? input.lastMessagePreview : undefined,
+    createdAt: input?.createdAt || now,
+    updatedAt: input?.updatedAt || now
+  };
+};
+
+const terminalSessionFromServer = (item: TerminalChatListItem): TerminalChatSession => createTerminalChatSession({
+  id: item.id,
+  title: item.title,
+  mode: item.mode,
+  selectedSources: item.selectedSources,
+  chatFiles: item.chatFiles,
+  checkpointThreadId: item.checkpointThreadId,
+  messages: [],
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt,
+  messageCount: item.messageCount,
+  lastMessagePreview: item.lastMessagePreview,
+  hasMoreMessages: item.messageCount > 0,
+  nextBefore: null
+});
+
+const sanitizeTerminalChatSessions = (value: unknown): TerminalChatSession[] => {
+  if (!Array.isArray(value)) return [];
+
+  if (value.every((item) => item && typeof item === 'object' && 'role' in item)) {
+    const migratedMessages = value as LearningTerminalMessage[];
+    return migratedMessages.length
+      ? [createTerminalChatSession({ messages: migratedMessages })]
+      : [];
+  }
+
+  return value
+    .filter((item): item is Partial<TerminalChatSession> => Boolean(item && typeof item === 'object'))
+    .map((item) => createTerminalChatSession({
+      id: typeof item.id === 'string' ? item.id : undefined,
+      title: typeof item.title === 'string' ? item.title : undefined,
+      mode: normalizeTerminalChatMode(item.mode),
+      selectedSources: Array.isArray(item.selectedSources)
+        ? item.selectedSources
+            .map((source): { fileId: string; mode: 'focused' | 'full_context' } => ({
+              fileId: typeof source.fileId === 'string' ? source.fileId : '',
+              mode: source.mode === 'full_context' ? 'full_context' : 'focused'
+            }))
+            .filter((source) => Boolean(source.fileId))
+        : [],
+      chatFiles: sanitizeTerminalChatFiles(item.chatFiles),
+      messages: Array.isArray(item.messages) ? item.messages as LearningTerminalMessage[] : [],
+      checkpointThreadId: typeof item.checkpointThreadId === 'string' ? item.checkpointThreadId : undefined,
+      hasMoreMessages: Boolean(item.hasMoreMessages),
+      nextBefore: typeof item.nextBefore === 'string' ? item.nextBefore : null,
+      messageCount: typeof item.messageCount === 'number' ? item.messageCount : undefined,
+      lastMessagePreview: typeof item.lastMessagePreview === 'string' ? item.lastMessagePreview : undefined,
+      createdAt: typeof item.createdAt === 'string' ? item.createdAt : undefined,
+      updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : undefined
+    }))
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+};
+
 const formatRelative = (value?: string) => {
   if (!value) return '';
   const time = new Date(value).getTime();
@@ -136,6 +335,85 @@ const formatRelative = (value?: string) => {
   if (diffMs < day) return `${Math.floor(diffMs / hour)}h`;
   if (diffMs < day * 7) return `${Math.floor(diffMs / day)}d`;
   return `${Math.floor(diffMs / day / 7)}w`;
+};
+
+const parseKnowledgeIndexLifecycle = (value?: string | null): Record<string, any> => {
+  try {
+    const parsed = JSON.parse(value || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const getKnowledgeIndexStatusInfo = (file: Pick<FileSystemObject, '_count' | 'knowledgeIndexJobs' | 'isBinary' | 'extension' | 'mimeType' | 'fileCategory'>) => {
+  const chunkCount = Number(file._count?.knowledgeChunks || 0);
+  const latestJob = file.knowledgeIndexJobs?.[0];
+  const lifecycle = parseKnowledgeIndexLifecycle(latestJob?.errorMessage);
+  const stage = String(lifecycle.stage || '').toLowerCase();
+  const status = String(latestJob?.status || '').toLowerCase();
+  const vectorIndexed = lifecycle.vectorIndexed === true;
+  const vectorError = typeof lifecycle.vectorError === 'string' ? lifecycle.vectorError : '';
+
+  if (status === 'queued' || status === 'pending' || status === 'running' || ['pending', 'extracting', 'chunking', 'embedding', 'upserting', 'verifying'].includes(stage)) {
+    return {
+      label: 'Indexing',
+      detail: latestJob?.updatedAt ? `Updated ${formatRelative(latestJob.updatedAt)}` : 'Queued for processing',
+      tone: 'indexing' as const,
+      chunkCount
+    };
+  }
+
+  if (chunkCount > 0 && (status === 'degraded' || stage === 'degraded' || vectorError || !vectorIndexed)) {
+    return {
+      label: 'Text ready',
+      detail: `${chunkCount} chunks; vector index ${vectorIndexed ? 'ready' : 'not ready'}`,
+      tone: 'degraded' as const,
+      chunkCount
+    };
+  }
+
+  if (chunkCount > 0) {
+    return {
+      label: 'Ready',
+      detail: `${chunkCount} chunks indexed`,
+      tone: 'ready' as const,
+      chunkCount
+    };
+  }
+
+  if (status === 'failed' || stage === 'failed') {
+    return {
+      label: 'Index failed',
+      detail: vectorError || 'No searchable chunks available',
+      tone: 'failed' as const,
+      chunkCount
+    };
+  }
+
+  if (latestJob) {
+    return {
+      label: 'No chunks',
+      detail: 'Uploaded, but no searchable text chunks are available',
+      tone: 'empty' as const,
+      chunkCount
+    };
+  }
+
+  return {
+    label: 'Not indexed',
+    detail: 'No indexing job has run for this file yet',
+    tone: 'empty' as const,
+    chunkCount
+  };
+};
+
+const knowledgeIndexToneClass = (tone?: TerminalSourceFile['indexStatusTone']) => {
+  if (tone === 'ready') return 'bg-emerald-50 text-emerald-700';
+  if (tone === 'degraded') return 'bg-amber-50 text-amber-700';
+  if (tone === 'indexing') return 'bg-blue-50 text-blue-700';
+  if (tone === 'failed') return 'bg-red-50 text-red-700';
+  return 'bg-gray-100 text-gray-600';
 };
 
 const groupRecentWorkbenches = (workbenches: SidebarWorkbench[]) => {
@@ -352,7 +630,10 @@ export default function WorkspaceShellPage() {
   const [addSourcesOpen, setAddSourcesOpen] = useState(false);
   const [creatingWorkbench, setCreatingWorkbench] = useState(false);
   const [terminalDraftPrompt, setTerminalDraftPrompt] = useState('');
-  const [chatSessions, setChatSessions] = useState<Record<string, LearningTerminalMessage[]>>({});
+  const [terminalDraftMode, setTerminalDraftMode] = useState<TerminalChatMode>('chat');
+  const [terminalDraftSources, setTerminalDraftSources] = useState<Array<{ fileId: string; mode: 'focused' | 'full_context' }>>([]);
+  const [terminalChatSessions, setTerminalChatSessions] = useState<Record<string, TerminalChatSession[]>>({});
+  const [activeTerminalChatIds, setActiveTerminalChatIds] = useState<Record<string, string | null>>({});
   const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
@@ -483,24 +764,57 @@ export default function WorkspaceShellPage() {
 
   useEffect(() => {
     if (!selectedWorkspace?.id) return;
-    try {
-      const stored = window.localStorage.getItem(`workspace-shell:${selectedWorkspace.id}:terminal`);
-      setChatSessions((current) => ({
-        ...current,
-        [selectedWorkspace.id]: stored ? JSON.parse(stored) : []
-      }));
-    } catch {
-      setChatSessions((current) => ({ ...current, [selectedWorkspace.id]: [] }));
-    }
+    let cancelled = false;
+    const loadTerminalSessions = async () => {
+      const storageKey = `workspace-shell:${selectedWorkspace.id}:terminal-chats`;
+      let localSessions: TerminalChatSession[] = [];
+      try {
+        const storedSessions = window.localStorage.getItem(storageKey);
+        const legacyStoredMessages = window.localStorage.getItem(`workspace-shell:${selectedWorkspace.id}:terminal`);
+        localSessions = sanitizeTerminalChatSessions(JSON.parse(storedSessions || legacyStoredMessages || '[]'));
+      } catch {
+        localSessions = [];
+      }
+
+      try {
+        const response = await learningApi.listTerminalChats(selectedWorkspace.id, { limit: 100 });
+        if (cancelled) return;
+        const serverSessions = response.sessions.map(terminalSessionFromServer);
+        const serverIds = new Set(serverSessions.map((session) => session.id));
+        setTerminalChatSessions((current) => ({
+          ...current,
+          [selectedWorkspace.id]: [
+            ...serverSessions,
+            ...localSessions.filter((session) => !serverIds.has(session.id) && session.messages.length > 0)
+          ].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        }));
+      } catch (error) {
+        if (cancelled) return;
+        console.warn('Failed to load terminal chats from backend; using local index fallback.', error);
+        setTerminalChatSessions((current) => ({
+          ...current,
+          [selectedWorkspace.id]: localSessions
+        }));
+      }
+      setActiveTerminalChatIds((current) => ({ ...current, [selectedWorkspace.id]: null }));
+    };
+
+    void loadTerminalSessions();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedWorkspace?.id]);
 
   useEffect(() => {
     if (!selectedWorkspace?.id) return;
-    window.localStorage.setItem(
-      `workspace-shell:${selectedWorkspace.id}:terminal`,
-      JSON.stringify(chatSessions[selectedWorkspace.id] || [])
-    );
-  }, [chatSessions, selectedWorkspace?.id]);
+    try {
+      const storageKey = `workspace-shell:${selectedWorkspace.id}:terminal-chats`;
+      const sessions = sanitizeTerminalSessionsForStorage(terminalChatSessions[selectedWorkspace.id] || []);
+      window.localStorage.setItem(storageKey, JSON.stringify(sessions));
+    } catch (error) {
+      console.warn('Failed to persist terminal chat index.', error);
+    }
+  }, [terminalChatSessions, selectedWorkspace?.id]);
 
   const allWorkbenches = useMemo(() => {
     return workspaces
@@ -544,11 +858,35 @@ export default function WorkspaceShellPage() {
 
   const sourceFiles = useMemo(() => {
     return (selectedWorkspace?.fileObjects || [])
-      .filter((file) => file.nodeType === 'file')
+      .filter((file) => file.nodeType === 'file' && file.scope !== 'chat')
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }, [selectedWorkspace?.fileObjects]);
 
-  const currentMessages = selectedWorkspace ? chatSessions[selectedWorkspace.id] || [] : [];
+  const currentTerminalChatSessions = selectedWorkspace ? terminalChatSessions[selectedWorkspace.id] || [] : [];
+  const activeTerminalChatId = selectedWorkspace ? activeTerminalChatIds[selectedWorkspace.id] || null : null;
+  const activeTerminalChat = currentTerminalChatSessions.find((chat) => chat.id === activeTerminalChatId) || null;
+  const currentMessages = activeTerminalChat?.messages || [];
+  const currentTerminalMode = activeTerminalChat?.mode || 'chat';
+  const currentTerminalSources = activeTerminalChat?.selectedSources || [];
+  const currentTerminalChatFiles = activeTerminalChat?.chatFiles || [];
+  const terminalWorkspaceSources = useMemo(() => {
+    return sourceFiles
+      .filter((file) => file.scope !== 'chat' && (file.resourceType === 'source' || file.scope === 'workspace'))
+      .slice(0, 80)
+      .map((file): TerminalSourceFile => {
+        const status = getKnowledgeIndexStatusInfo(file);
+        return {
+          id: file.id,
+          name: file.name,
+          path: file.path,
+          updatedAt: file.updatedAt,
+          indexStatusLabel: status.label,
+          indexStatusDetail: status.detail,
+          indexStatusTone: status.tone,
+          chunkCount: status.chunkCount
+        };
+      });
+  }, [sourceFiles]);
 
   const refreshSelectedWorkspace = async () => {
     await loadWorkspaceShell();
@@ -753,8 +1091,190 @@ export default function WorkspaceShellPage() {
   };
 
   const openTerminalWithPrompt = (prompt: string) => {
+    if (selectedWorkspace?.id) {
+      const chat = createTerminalChatSession({ title: 'New Chat', mode: 'agentic' });
+      setTerminalChatSessions((current) => ({
+        ...current,
+        [selectedWorkspace.id]: [chat, ...(current[selectedWorkspace.id] || [])]
+      }));
+      setActiveTerminalChatIds((current) => ({ ...current, [selectedWorkspace.id]: chat.id }));
+    }
     setActiveTab('terminal');
     setTerminalDraftPrompt(prompt);
+  };
+
+  const startTerminalChat = (
+    prompt?: string,
+    options?: {
+      mode?: TerminalChatMode;
+      selectedSources?: Array<{ fileId: string; mode: 'focused' | 'full_context' }>;
+    }
+  ) => {
+    if (!selectedWorkspace?.id) return;
+    const chat = createTerminalChatSession({
+      title: 'New Chat',
+      mode: options?.mode || terminalDraftMode,
+      selectedSources: options?.selectedSources || terminalDraftSources
+    });
+    setTerminalChatSessions((current) => ({
+      ...current,
+      [selectedWorkspace.id]: [chat, ...(current[selectedWorkspace.id] || [])]
+    }));
+    setActiveTerminalChatIds((current) => ({ ...current, [selectedWorkspace.id]: chat.id }));
+    setTerminalDraftPrompt(prompt || '');
+  };
+
+  const openTerminalChat = (chatId: string) => {
+    if (!selectedWorkspace?.id) return;
+    setActiveTerminalChatIds((current) => ({ ...current, [selectedWorkspace.id]: chatId }));
+    setTerminalDraftPrompt('');
+  };
+
+  const loadTerminalChatMessages = async (chatId: string, direction: 'initial' | 'earlier' = 'initial') => {
+    if (!selectedWorkspace?.id) return;
+    const workspaceId = selectedWorkspace.id;
+    const chat = (terminalChatSessions[workspaceId] || []).find((item) => item.id === chatId);
+    if (!chat || chat.messagesLoading) return;
+    if (direction === 'earlier' && !chat.hasMoreMessages) return;
+
+    setTerminalChatSessions((current) => ({
+      ...current,
+      [workspaceId]: (current[workspaceId] || []).map((item) =>
+        item.id === chatId ? { ...item, messagesLoading: true } : item
+      )
+    }));
+
+    try {
+      const page = await learningApi.getTerminalChatMessages(workspaceId, chatId, {
+        before: direction === 'earlier' ? chat.nextBefore || null : null,
+        limit: 30
+      });
+      setTerminalChatSessions((current) => ({
+        ...current,
+        [workspaceId]: (current[workspaceId] || []).map((item) => {
+          if (item.id !== chatId) return item;
+          const existingKeys = new Set(item.messages.map((message) => `${message.role}:${message.content}`));
+          const nextMessages = direction === 'earlier'
+            ? [
+                ...page.messages.filter((message) => !existingKeys.has(`${message.role}:${message.content}`)),
+                ...item.messages
+              ]
+            : page.messages;
+          return {
+            ...item,
+            messages: nextMessages,
+            hasMoreMessages: page.hasMore,
+            nextBefore: page.nextBefore,
+            messagesLoading: false
+          };
+        })
+      }));
+    } catch (error) {
+      console.error('Failed to load terminal chat messages:', error);
+      setTerminalChatSessions((current) => ({
+        ...current,
+        [workspaceId]: (current[workspaceId] || []).map((item) =>
+          item.id === chatId ? { ...item, messagesLoading: false } : item
+        )
+      }));
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedWorkspace?.id || !activeTerminalChatId || !activeTerminalChat) return;
+    if (activeTerminalChat.messages.length > 0 || activeTerminalChat.messagesLoading) return;
+    if ((activeTerminalChat.messageCount || 0) <= 0) return;
+    void loadTerminalChatMessages(activeTerminalChatId, 'initial');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedWorkspace?.id, activeTerminalChatId, activeTerminalChat?.messageCount]);
+
+  const closeTerminalChat = () => {
+    if (!selectedWorkspace?.id) return;
+    setActiveTerminalChatIds((current) => ({ ...current, [selectedWorkspace.id]: null }));
+    setTerminalDraftPrompt('');
+  };
+
+  const updateActiveTerminalMessages = (messages: LearningTerminalMessage[]) => {
+    if (!selectedWorkspace?.id || !activeTerminalChatId) return;
+    const now = new Date().toISOString();
+    setTerminalChatSessions((current) => ({
+      ...current,
+      [selectedWorkspace.id]: (current[selectedWorkspace.id] || [])
+        .map((chat) => chat.id === activeTerminalChatId ? {
+          ...chat,
+          messages,
+          title: getTerminalChatTitle(messages, chat.title),
+          updatedAt: now,
+          messageCount: Math.max(chat.messageCount || 0, messages.length),
+          lastMessagePreview: messages[messages.length - 1]?.content || chat.lastMessagePreview
+        } : chat)
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    }));
+  };
+
+  const updateActiveTerminalMode = (mode: TerminalChatMode) => {
+    if (!selectedWorkspace?.id || !activeTerminalChatId) return;
+    setTerminalChatSessions((current) => ({
+      ...current,
+      [selectedWorkspace.id]: (current[selectedWorkspace.id] || [])
+        .map((chat) => chat.id === activeTerminalChatId ? { ...chat, mode } : chat)
+    }));
+  };
+
+  const updateActiveTerminalSourceModes = (nextSources: Array<{ fileId: string; mode: 'focused' | 'full_context' }>) => {
+    if (!selectedWorkspace?.id || !activeTerminalChatId) return;
+    setTerminalChatSessions((current) => ({
+      ...current,
+      [selectedWorkspace.id]: (current[selectedWorkspace.id] || [])
+        .map((chat) => chat.id === activeTerminalChatId ? { ...chat, selectedSources: nextSources } : chat)
+    }));
+  };
+
+  const updateActiveTerminalChatFiles = (chatFiles: TerminalChatFile[]) => {
+    if (!selectedWorkspace?.id || !activeTerminalChatId) return;
+    const now = new Date().toISOString();
+    setTerminalChatSessions((current) => ({
+      ...current,
+      [selectedWorkspace.id]: (current[selectedWorkspace.id] || [])
+        .map((chat) => chat.id === activeTerminalChatId ? { ...chat, chatFiles, updatedAt: now } : chat)
+    }));
+  };
+
+  const updateActiveTerminalCheckpointThread = (checkpointThreadId: string) => {
+    if (!selectedWorkspace?.id || !activeTerminalChatId) return;
+    setTerminalChatSessions((current) => ({
+      ...current,
+      [selectedWorkspace.id]: (current[selectedWorkspace.id] || [])
+        .map((chat) => chat.id === activeTerminalChatId ? { ...chat, checkpointThreadId } : chat)
+    }));
+  };
+
+  const uploadTerminalChatFiles = async (files: File[]): Promise<TerminalChatFile[]> => {
+    if (!selectedWorkspace?.id || !activeTerminalChatId || files.length === 0) return [];
+    const response = await fileSystemApi.upload(selectedWorkspace.id, files, undefined, undefined, {
+      resourceRole: 'chat_attachment',
+      resourceType: 'chat_attachment',
+      scope: 'chat',
+      origin: 'chat_attachment',
+      metadata: {
+        source: 'workspace_ai_terminal_chat',
+        chatId: activeTerminalChatId,
+        sessionId: activeTerminalChatId
+      }
+    });
+    const created = Array.isArray(response)
+      ? response
+          .filter((item: any) => item?.success && item?.file?.id)
+          .map((item: any) => terminalChatFileFromObject(selectedWorkspace.id, item.file as FileSystemObject))
+      : [];
+    if (created.length) {
+      const existingIds = new Set(currentTerminalChatFiles.map((file) => file.id));
+      updateActiveTerminalChatFiles([
+        ...currentTerminalChatFiles,
+        ...created.filter((file) => !existingIds.has(file.id))
+      ].slice(-24));
+    }
+    return created;
   };
 
   const openLearningSection = (section: IntelligenceSection) => {
@@ -1357,10 +1877,10 @@ export default function WorkspaceShellPage() {
         </div>
       )}
 
-      <main className="min-w-0 flex-1 overflow-y-auto bg-white">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
         {selectedWorkspace ? (
-          <div className="relative flex min-h-full w-full flex-col">
-            <nav className="px-2.5 pt-1.5 backdrop-blur-xl select-none">
+          <div className="relative flex h-full min-h-0 w-full flex-col">
+            <nav className="shrink-0 px-2.5 pt-1.5 backdrop-blur-xl select-none">
               <div className="flex items-center gap-1">
                 <div className="flex gap-1 overflow-x-auto w-fit text-center text-sm font-medium rounded-full bg-transparent py-1 touch-auto pointer-events-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {workspaceTabs.map((tab) => (
@@ -1380,7 +1900,11 @@ export default function WorkspaceShellPage() {
               </div>
             </nav>
 
-        <div className={`w-full flex-1 max-h-full ${activeTab === 'knowledge' ? 'min-h-0 overflow-hidden px-0 pb-0' : 'overflow-y-auto px-3 pb-1 md:px-[18px]'}`}>
+        <div className={`w-full flex-1 max-h-full ${
+          activeTab === 'knowledge' || activeTab === 'terminal'
+            ? 'min-h-0 overflow-hidden px-0 pb-0'
+            : 'overflow-y-auto px-3 pb-1 md:px-[18px]'
+        }`}>
 
             {activeTab === 'workbenches' ? (
               createWorkbenchOpen ? (
@@ -1389,7 +1913,7 @@ export default function WorkspaceShellPage() {
                   loading={creatingWorkbench}
                   error={createWorkbenchError}
                   workspaceName={selectedWorkspace.name}
-                  resources={(selectedWorkspace.fileObjects || []).filter((file) => file.nodeType === 'file')}
+                  resources={sourceFiles}
                   onClose={() => {
                     if (!creatingWorkbench) setCreateWorkbenchOpen(false);
                   }}
@@ -1410,7 +1934,7 @@ export default function WorkspaceShellPage() {
             {activeTab === 'files' ? (
               <FilesPanel
                 workspaceId={selectedWorkspace.id}
-                files={(selectedWorkspace.fileObjects || []).filter((file) => file.nodeType === 'file')}
+                files={sourceFiles}
                 onAdd={() => setAddSourcesOpen(true)}
                 onOpenFile={(fileId) => void openFileInWorkbench(fileId)}
                 onChanged={refreshSelectedWorkspace}
@@ -1451,12 +1975,11 @@ export default function WorkspaceShellPage() {
             {activeTab === 'planning' ? (
               <LearningIntelligenceDashboard
                 workspaceId={selectedWorkspace.id}
-                workbenchId={selectedWorkbenches[0]?.id}
                 workbenches={selectedWorkbenches.map((workbench) => ({ id: workbench.id, title: workbench.title }))}
                 activeSection="planning"
                 hideSectionNav
                 headerTitle="Planning"
-                headerDescription="计划、步骤与执行反馈。"
+                headerDescription=""
                 onSectionChange={openLearningSection}
                 onOpenWorkbench={openWorkbench}
                 onPlanApplied={refreshSelectedWorkspace}
@@ -1481,23 +2004,72 @@ export default function WorkspaceShellPage() {
             ) : null}
 
             {activeTab === 'terminal' ? (
-              <LearningTerminal
-                workspaceId={selectedWorkspace.id}
-                sessionId={`workspace-shell-${selectedWorkspace.id}`}
-                workspaceName={selectedWorkspace.name}
-                major={selectedWorkspace.major}
-                workbenches={selectedWorkbenchItems}
-                fileCount={sourceFiles.length}
-                messages={currentMessages}
-                onMessagesChange={(messages) => setChatSessions((current) => ({ ...current, [selectedWorkspace.id]: messages }))}
-                onChatStarted={() => undefined}
-                onUploadMaterials={() => setAddSourcesOpen(true)}
-                onCreateWorkbench={() => void createWorkbench(undefined, false)}
-                onWorkbenchCreated={(workbenchId) => openWorkbench(workbenchId)}
-                onRefresh={refreshSelectedWorkspace}
-                variant="full"
-                initialPrompt={terminalDraftPrompt}
-              />
+              activeTerminalChat ? (
+                <div className="flex h-full min-h-0 flex-col bg-white">
+                  <div className="mx-auto flex h-14 w-full max-w-6xl shrink-0 items-center justify-between px-4 md:px-6">
+                    <button
+                      type="button"
+                      onClick={closeTerminalChat}
+                      className="inline-flex h-9 items-center gap-2 rounded-full px-3 text-sm font-medium text-gray-600 transition hover:bg-gray-100 hover:text-gray-900"
+                    >
+                      <Folder className="size-4" />
+                      {selectedWorkspace.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startTerminalChat()}
+                      className="inline-flex size-9 items-center justify-center rounded-full text-gray-600 transition hover:bg-gray-100 hover:text-gray-900"
+                      title="New Chat"
+                    >
+                      <Plus className="size-5" />
+                    </button>
+                  </div>
+                  <LearningTerminal
+                    key={activeTerminalChat.id}
+                    workspaceId={selectedWorkspace.id}
+                    sessionId={activeTerminalChat.id}
+                    initialCheckpointThreadId={activeTerminalChat.checkpointThreadId}
+                    workspaceName={selectedWorkspace.name}
+                    major={selectedWorkspace.major}
+                    workbenches={selectedWorkbenchItems}
+                    fileCount={sourceFiles.length}
+                    messages={currentMessages}
+                    hasMoreMessages={Boolean(activeTerminalChat.hasMoreMessages)}
+                    loadingEarlierMessages={Boolean(activeTerminalChat.messagesLoading)}
+                    onLoadEarlierMessages={() => loadTerminalChatMessages(activeTerminalChat.id, 'earlier')}
+                    onMessagesChange={updateActiveTerminalMessages}
+                    onCheckpointThreadIdChange={updateActiveTerminalCheckpointThread}
+                    onChatStarted={() => undefined}
+                    onUploadMaterials={() => setAddSourcesOpen(true)}
+                    onCreateWorkbench={() => void createWorkbench(undefined, false)}
+                    onWorkbenchCreated={(workbenchId) => openWorkbench(workbenchId)}
+                    onRefresh={refreshSelectedWorkspace}
+                    variant="full"
+                    initialPrompt={terminalDraftPrompt}
+                    mode={currentTerminalMode}
+                    selectedSources={currentTerminalSources}
+                    chatFiles={currentTerminalChatFiles}
+                    sourceFiles={terminalWorkspaceSources}
+                    onModeChange={updateActiveTerminalMode}
+                    onSelectedSourcesChange={(sources) => updateActiveTerminalSourceModes(sources)}
+                    onChatFilesChange={updateActiveTerminalChatFiles}
+                    onUploadChatFiles={uploadTerminalChatFiles}
+                  />
+                </div>
+              ) : (
+                <WorkspaceTerminalFolderChat
+                  workspaceName={selectedWorkspace.name}
+                  chats={currentTerminalChatSessions}
+                  sourceFiles={terminalWorkspaceSources}
+                  onNewChat={() => startTerminalChat()}
+                  onOpenChat={openTerminalChat}
+                  onSubmitPrompt={(prompt, options) => startTerminalChat(prompt, options)}
+                  onUploadMaterials={() => setAddSourcesOpen(true)}
+                  onCreateWorkbench={() => void createWorkbench(undefined, false)}
+                  onModeChange={setTerminalDraftMode}
+                  onSelectedSourcesChange={setTerminalDraftSources}
+                />
+              )
             ) : null}
             </div>
           </div>
@@ -2006,6 +2578,7 @@ function FilesPanel({
   const [knowledgeType, setKnowledgeType] = useState('');
   const [openMenuFileId, setOpenMenuFileId] = useState<string | null>(null);
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
+  const [indexingFileId, setIndexingFileId] = useState<string | null>(null);
   const sorted = [...files].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   useEffect(() => {
@@ -2072,6 +2645,17 @@ function FilesPanel({
     await onChanged();
   };
 
+  const indexFile = async (fileId: string, force = false) => {
+    setIndexingFileId(fileId);
+    try {
+      await learningApi.indexKnowledgeFile(workspaceId, fileId, { force });
+      await onChanged();
+    } finally {
+      setIndexingFileId(null);
+      setOpenMenuFileId(null);
+    }
+  };
+
   return (
     <section>
       <WorkspacePanelHeader title="Knowledge" count={sorted.length} actionLabel="Add Knowledge" onAction={onAdd} />
@@ -2119,12 +2703,19 @@ function FilesPanel({
               const coverUrl = getFileCoverUrl(file);
               const faviconUrl = getFileFaviconUrl(file);
               const displayName = getFileDisplayName(file);
+              const indexStatus = getKnowledgeIndexStatusInfo(file);
 
               return (
-                <button
+                <div
                   key={file.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => onOpenFile(file.id)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    onOpenFile(file.id);
+                  }}
                   className="relative flex space-x-4 cursor-pointer text-left w-full px-3 py-2.5 hover:bg-gray-50 transition rounded-2xl"
                 >
                   <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gray-100 text-gray-500">
@@ -2156,10 +2747,10 @@ function FilesPanel({
                       </div>
                     </div>
                   </div>
-                  <span
+                  <button
                     data-resource-menu={file.id}
-                    role="button"
-                    tabIndex={0}
+                    type="button"
+                    onPointerDown={(event) => event.stopPropagation()}
                     onClick={(event) => {
                       event.stopPropagation();
                       setMenuRect(event.currentTarget.getBoundingClientRect());
@@ -2176,13 +2767,43 @@ function FilesPanel({
                     aria-label="More Options"
                   >
                     <OWEllipsisHorizontalIcon className="size-5" />
-                  </span>
+                  </button>
                   {openMenuFileId === file.id ? createPortal(
                     <div
                       className="workspace-card-menu z-[9999] min-w-[170px] rounded-2xl px-1 py-1 text-sm text-gray-900"
                       style={getMenuPositionStyle(menuRect, 170)}
                       data-resource-menu={file.id}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => event.stopPropagation()}
                     >
+                      <div
+                        className="flex w-full select-none items-start gap-2 rounded-xl px-3 py-2 text-left"
+                        title={indexStatus.detail}
+                      >
+                        <BookOpen className="mt-0.5 size-4 shrink-0 text-gray-500" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span>Status</span>
+                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${knowledgeIndexToneClass(indexStatus.tone)}`}>
+                              {indexStatus.label}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 line-clamp-2 text-xs text-gray-500">{indexStatus.detail}</div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={indexingFileId === file.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void indexFile(file.id, indexStatus.chunkCount > 0);
+                        }}
+                        className="workspace-card-menu-item flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {indexingFileId === file.id ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                        {indexStatus.chunkCount > 0 ? 'Re-index' : 'Index now'}
+                      </button>
                       <button type="button" onClick={() => exportFile(file.id)} className="workspace-card-menu-item flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left">
                         <OWDownloadIcon className="size-4" />
                         Export
@@ -2194,7 +2815,7 @@ function FilesPanel({
                     </div>,
                     document.body
                   ) : null}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -2257,6 +2878,336 @@ function ToolsPanel({
           <Upload className="h-4 w-4" />
           Add Knowledge
         </button>
+      </div>
+    </section>
+  );
+}
+
+function WorkspaceTerminalFolderChat({
+  workspaceName,
+  chats,
+  sourceFiles,
+  onNewChat,
+  onOpenChat,
+  onSubmitPrompt,
+  onUploadMaterials,
+  onCreateWorkbench,
+  onModeChange,
+  onSelectedSourcesChange
+}: {
+  workspaceName: string;
+  chats: TerminalChatSession[];
+  sourceFiles: TerminalSourceFile[];
+  onNewChat: () => void;
+  onOpenChat: (chatId: string) => void;
+  onSubmitPrompt: (prompt: string, options: { mode: TerminalChatMode; selectedSources: Array<{ fileId: string; mode: 'focused' | 'full_context' }> }) => void;
+  onUploadMaterials: () => void;
+  onCreateWorkbench: () => void;
+  onModeChange: (mode: TerminalChatMode) => void;
+  onSelectedSourcesChange: (sources: Array<{ fileId: string; mode: 'focused' | 'full_context' }>) => void;
+}) {
+  const [prompt, setPrompt] = useState('');
+  const [mode, setMode] = useState<TerminalChatMode>('chat');
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
+  const [sourceModes, setSourceModes] = useState<Record<string, 'focused' | 'full_context'>>({});
+  const sourceMenuRef = useRef<HTMLDivElement | null>(null);
+  const [orderBy, setOrderBy] = useState<'title' | 'updatedAt'>('updatedAt');
+  const [direction, setDirection] = useState<'asc' | 'desc'>('desc');
+  const selectedSourceCount = Object.keys(sourceModes).length;
+  const modeLabel = mode === 'agentic' ? 'Agentic' : 'Chat';
+
+  const sortedChats = useMemo(() => {
+    return [...chats].sort((a, b) => {
+      const aValue = orderBy === 'title' ? a.title.toLowerCase() : new Date(a.updatedAt).getTime();
+      const bValue = orderBy === 'title' ? b.title.toLowerCase() : new Date(b.updatedAt).getTime();
+      if (aValue === bValue) return 0;
+      if (direction === 'asc') return aValue > bValue ? 1 : -1;
+      return aValue < bValue ? 1 : -1;
+    });
+  }, [chats, direction, orderBy]);
+
+  const groupedChats = useMemo(() => {
+    const groups: Array<{ label: string; items: TerminalChatSession[] }> = [];
+    sortedChats.forEach((chat) => {
+      const label = getTimeRange(chat.updatedAt);
+      const group = groups.find((item) => item.label === label);
+      if (group) group.items.push(chat);
+      else groups.push({ label, items: [chat] });
+    });
+    return groups;
+  }, [sortedChats]);
+
+  const toggleSort = (key: 'title' | 'updatedAt') => {
+    if (orderBy === key) {
+      setDirection((value) => value === 'asc' ? 'desc' : 'asc');
+      return;
+    }
+    setOrderBy(key);
+    setDirection('asc');
+  };
+
+  const submitPrompt = () => {
+    const value = prompt.trim();
+    if (!value) return;
+    const selectedSources = Object.entries(sourceModes).map(([fileId, sourceMode]) => ({ fileId, mode: sourceMode }));
+    onSubmitPrompt(value, { mode, selectedSources });
+    setPrompt('');
+  };
+
+  useEffect(() => {
+    onModeChange(mode);
+  }, [mode, onModeChange]);
+
+  useEffect(() => {
+    onSelectedSourcesChange(Object.entries(sourceModes).map(([fileId, sourceMode]) => ({ fileId, mode: sourceMode })));
+  }, [onSelectedSourcesChange, sourceModes]);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (sourceMenuRef.current?.contains(target)) return;
+      setSourceMenuOpen(false);
+    };
+
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => window.removeEventListener('pointerdown', onPointerDown);
+  }, []);
+
+  const SortIcon = ({ active }: { active: boolean }) => (
+    <ChevronDown
+      className={`size-2 transition ${active ? 'opacity-100' : 'opacity-0'} ${active && direction === 'asc' ? 'rotate-180' : ''}`}
+      strokeWidth={2.5}
+    />
+  );
+
+  return (
+    <section className="font-primary h-full min-h-0 overflow-y-auto bg-white text-gray-900">
+      <div className="mx-auto flex min-h-full w-full flex-col px-4 pb-14 pt-[clamp(44px,7vh,96px)]">
+        <div className="mx-auto w-full md:max-w-3xl">
+          <div className="mb-3 flex w-full items-center justify-between px-6">
+            <div className="flex min-w-0 items-center gap-3.5 text-center">
+              <button
+                type="button"
+                className="flex size-11 shrink-0 items-center justify-center rounded-full bg-gray-50 text-gray-800 transition hover:bg-gray-100"
+                title="Workspace chat folder"
+              >
+                <Folder className="size-4.5" strokeWidth={2} />
+              </button>
+              <h1 className="min-w-0 truncate text-3xl font-normal leading-tight text-gray-800">
+                {workspaceName}
+              </h1>
+            </div>
+            <button
+              type="button"
+              className="flex shrink-0 translate-x-2.5 items-center justify-center rounded-full p-1.5 text-gray-700 transition hover:bg-gray-100"
+              title="Folder options"
+            >
+              <MoreHorizontal className="size-4" strokeWidth={2.5} />
+            </button>
+          </div>
+
+          <form
+            className="w-full py-3 text-base font-normal"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitPrompt();
+            }}
+          >
+            <div className="flex flex-1 flex-col rounded-3xl border border-gray-100/30 bg-white/5 px-1 shadow-lg backdrop-blur-sm transition hover:border-gray-200 focus-within:border-gray-100">
+              <div className="px-2.5">
+                <textarea
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      submitPrompt();
+                    }
+                  }}
+                  placeholder="How can I help you today?"
+                  rows={1}
+                  className="scrollbar-hidden min-h-[48px] max-h-96 w-full resize-none bg-transparent px-1 pb-1 pt-2.5 text-sm leading-6 text-gray-900 outline-none placeholder:text-gray-500"
+                />
+              </div>
+              <div className="mx-0.5 mb-2.5 mt-0.5 flex max-w-full justify-between" dir="ltr">
+                <div className="ml-1 flex max-w-[80%] flex-1 items-center self-end">
+                  <button
+                    type="button"
+                    onClick={onUploadMaterials}
+                    className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-700 outline-none transition hover:bg-gray-100"
+                    title="Add"
+                  >
+                    <Plus className="size-5" strokeWidth={2} />
+                  </button>
+                  <div className="mx-1 h-4 w-px self-center bg-gray-200/50" />
+                  <div ref={sourceMenuRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setSourceMenuOpen((current) => !current)}
+                      className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-700 outline-none transition hover:bg-gray-100"
+                      title="Chat mode"
+                    >
+                      <Sparkles className="size-[1.125rem]" strokeWidth={1.5} />
+                    </button>
+                    {sourceMenuOpen ? (
+                      <div className="absolute bottom-10 left-0 z-50 max-h-72 min-w-[17.5rem] max-w-[17.5rem] overflow-y-auto overflow-x-hidden rounded-2xl border border-gray-100 bg-white px-1 py-1 text-sm text-gray-900 shadow-lg">
+                        <div className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-1.5 text-sm">
+                          <Wrench className="size-4" strokeWidth={1.75} />
+                          <div className="flex w-full items-center justify-between">
+                            <div className="line-clamp-1">
+                              Mode <span className="ml-0.5 text-gray-500">{modeLabel}</span>
+                            </div>
+                          </div>
+                        </div>
+                        {([
+                          { value: 'chat' as const, label: 'Chat' },
+                          { value: 'agentic' as const, label: 'Agentic' }
+                        ]).map((item) => (
+                          <button
+                            key={item.value}
+                            type="button"
+                            onClick={() => setMode(item.value)}
+                            className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-3 py-1.5 text-sm transition hover:bg-gray-50"
+                          >
+                            <div className="flex flex-1 items-center gap-2 truncate">
+                              <Sparkles className="size-4" strokeWidth={1.75} />
+                              <div className="truncate">{item.label}</div>
+                            </div>
+                            {mode === item.value ? <Check className="size-4 shrink-0 text-gray-900" /> : null}
+                          </button>
+                        ))}
+                        <div className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-1.5 text-sm">
+                          <BookOpen className="size-4" strokeWidth={1.75} />
+                          <div className="flex w-full items-center justify-between">
+                            <div className="line-clamp-1">Workspace scope</div>
+                          </div>
+                          {selectedSourceCount > 0 ? <span>{selectedSourceCount}</span> : null}
+                        </div>
+                        <div>
+                          {sourceFiles.length > 0 ? sourceFiles.map((source) => {
+                            const active = Boolean(sourceModes[source.id]);
+                            return (
+                              <div key={source.id} className="flex items-center justify-between gap-2 rounded-xl px-3 py-1.5 text-sm transition hover:bg-gray-50">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSourceModes((current) => {
+                                      const next = { ...current };
+                                      if (next[source.id]) delete next[source.id];
+                                      else next[source.id] = 'focused';
+                                      return next;
+                                    });
+                                  }}
+                                  className="min-w-0 flex-1 text-left"
+                                >
+                                  <div className="truncate text-gray-900">{source.name}</div>
+                                  <div className="truncate text-xs text-gray-500">{source.path}</div>
+                                  <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${knowledgeIndexToneClass(source.indexStatusTone)}`}>
+                                      {source.indexStatusLabel || 'Unknown'}
+                                    </span>
+                                    <span className="truncate text-[10px] text-gray-400">
+                                      {source.indexStatusDetail || 'Index status unavailable'}
+                                    </span>
+                                  </div>
+                                  {active && Number(source.chunkCount || 0) === 0 ? (
+                                    <div className="mt-1 text-[10px] text-red-500">No chunks yet; focused retrieval may not find evidence.</div>
+                                  ) : null}
+                                </button>
+                                {active ? <Check className="size-4 shrink-0 text-black" /> : null}
+                              </div>
+                            );
+                          }) : (
+                            <div className="px-3 py-1.5 text-sm text-gray-500">No workspace sources available.</div>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="mr-1 flex shrink-0 items-center gap-[0.5px] self-end">
+                  <button
+                    type="submit"
+                    className={`self-center rounded-full p-1.5 transition ${
+                      prompt.trim()
+                        ? 'bg-black text-white hover:bg-gray-900'
+                        : 'cursor-not-allowed bg-gray-200 text-white'
+                    }`}
+                    disabled={!prompt.trim()}
+                    title="New Chat"
+                  >
+                    <ArrowUp className="size-5" strokeWidth={2.5} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </form>
+
+          <div className="min-h-[15.5rem] px-4 md:px-6">
+            <div className="mb-1 flex items-center -mr-0.5 text-xs font-medium text-gray-900">
+              <button
+                type="button"
+                onClick={() => toggleSort('title')}
+                className="basis-3/5 cursor-pointer select-none px-1.5 py-1 text-left"
+              >
+                <span className="flex items-center gap-1.5">
+                  Title
+                  <SortIcon active={orderBy === 'title'} />
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleSort('updatedAt')}
+                className="hidden basis-2/5 cursor-pointer select-none justify-end px-1.5 py-1 text-right sm:flex"
+              >
+                <span className="flex items-center gap-1.5">
+                  Updated at
+                  <SortIcon active={orderBy === 'updatedAt'} />
+                </span>
+              </button>
+            </div>
+
+            {groupedChats.length ? (
+              <div className="mb-3 w-full text-left text-sm">
+                {groupedChats.map((group, groupIndex) => (
+                  <div key={group.label}>
+                    <div className={`w-full px-2 pb-2 text-xs font-medium text-gray-500 ${groupIndex === 0 ? '' : 'pt-5'}`}>
+                      {group.label}
+                    </div>
+                    {group.items.map((chat) => (
+                      <button
+                        key={chat.id}
+                        type="button"
+                        onClick={() => onOpenChat(chat.id)}
+                        className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition hover:bg-gray-50"
+                      >
+                        <span className="line-clamp-1 w-full min-w-0 text-ellipsis text-left sm:basis-3/5">
+                          {chat.title || 'New Chat'}
+                        </span>
+                        <span className="hidden basis-2/5 items-center justify-end sm:flex">
+                          <span className="text-xs text-gray-500">{formatCalendarDate(chat.updatedAt)}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex min-h-20 items-center justify-center px-5 text-center text-xs text-gray-500">
+                No chats found
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={onNewChat}
+              className="mt-2 rounded-lg px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 hover:text-gray-900"
+            >
+              New Chat
+            </button>
+          </div>
+        </div>
       </div>
     </section>
   );

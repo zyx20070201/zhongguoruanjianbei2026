@@ -5164,6 +5164,8 @@ export function AiEditorView({
     onUpdateViewState?.(editor.id, { messages: nextMessages, chatSessionAttachments: [] });
     setInput('');
     setError(null);
+    setTimeline([]);
+    setThinkingTraceOpen(true);
     setIsSending(true);
 
     try {
@@ -5181,6 +5183,18 @@ export function AiEditorView({
       const assistantCreatedAt = new Date().toISOString();
       const targetNoteFileId = aiContext?.activeFile?.id || activePanelContext?.fileId;
       const droppedSelectionContext = buildDroppedSelectionContext();
+      const activeContextChipsForRequest = contextChips.map((chip) => ({
+        id: chip.id,
+        kind: chip.kind,
+        enabled: true
+      }));
+      if (droppedSelectionContext?.content?.trim() && !activeContextChipsForRequest.some((chip) => chip.kind === 'selection')) {
+        activeContextChipsForRequest.unshift({
+          id: droppedSelectionContext.id || 'dropped-context-selection',
+          kind: 'selection' as const,
+          enabled: true
+        });
+      }
       const droppedSelectionCitations = droppedContextSelections.map((selection, index) => ({
         sourceId: `D${index + 1}`,
         fileId: selection.fileId || selection.panelId || `dropped-${index + 1}`,
@@ -5232,11 +5246,7 @@ export function AiEditorView({
         contextMode: effectiveContextMode,
         lockedSelection: droppedSelectionContext || lockedSelection,
         persistentCitations: [...droppedSelectionCitations, ...persistentCitations],
-        activeContextChips: contextChips.map((chip) => ({
-          id: chip.id,
-          kind: chip.kind,
-          enabled: true
-        })),
+        activeContextChips: activeContextChipsForRequest,
         activePanelId: aiContext?.activePanelId,
         activeFileId: aiContext?.activeFileId || aiContext?.activeFile?.id || null,
         preferredProvider: selectedModelEntry?.provider || undefined,
@@ -5249,6 +5259,7 @@ export function AiEditorView({
           : null,
         activeExternal: aiContext?.activeExternal || null,
         openPanels: aiContext?.openPanels || [],
+        visiblePanels: aiContext?.visiblePanels || [],
         chatSessionAttachments,
         selectedText:
           window.getSelection()?.toString().trim() ||

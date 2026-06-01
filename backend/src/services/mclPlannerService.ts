@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { aiModelProviderService } from './aiModelProviderService';
 import { learningRunService } from './learningRunService';
 import { BuiltMclLearningState } from './learningStateBuilder';
+import { knowledgeSearchService, KnowledgeSearchResult } from './knowledgeSearchService';
 import { filterKnowledgeConcepts } from './learnerSignalSanitizer';
 import { goalSkillMapperService } from './planning/goalSkillMapperService';
 import { kgConstraintProviderService } from './planning/kgConstraintProviderService';
@@ -223,6 +224,79 @@ type CorePlannerResponse = {
   }>;
 };
 
+type PlanningRetrievalIntentKind =
+  | 'explanation'
+  | 'example'
+  | 'practice'
+  | 'assessment'
+  | 'project'
+  | 'reference';
+
+type PlanningQueryCompilerOutput = {
+  objective: string;
+  constraints: string[];
+  concepts: string[];
+  stageSignals: Array<{
+    label: string;
+    focus: string;
+    concepts?: string[];
+  }>;
+  retrievalIntents: Array<{
+    query: string;
+    kind: PlanningRetrievalIntentKind;
+    stage?: string;
+  }>;
+};
+
+type PlanningKgAlignmentResult = {
+  kgHints: KgPlanningHints;
+  audit: KgConstraintAudit;
+  matchedConcepts: string[];
+  missingConcepts: string[];
+  summary: string;
+};
+
+type PlanningResourceGroundingSearchResult = {
+  grounding: ResourceGroundingResult;
+  resourceInventory: LearningPlanResource[];
+  resourceLearningUnitCount: number;
+  intentSearchCount: number;
+  summary: string;
+};
+
+type LearnerProfileAdapterPlaceholder = {
+  status: 'reserved';
+  summary: string;
+  hints: string[];
+};
+
+type PlanningEnhancementBundle = {
+  kgAlignment: PlanningKgAlignmentResult;
+  resourceGrounding: PlanningResourceGroundingSearchResult;
+  learnerProfileAdapter: LearnerProfileAdapterPlaceholder;
+};
+
+type PlanningEnhancementComposerAnnotations = {
+  objective: string;
+  constraints: string[];
+  concepts: string[];
+  stageSignals: Array<{
+    label: string;
+    focus: string;
+    concepts: string[];
+    prerequisiteNotes: string[];
+    resources: Array<{
+      title: string;
+      unit?: string;
+      entryPoint?: string;
+      reason: string;
+      modality?: string;
+    }>;
+    resourceGap?: string;
+  }>;
+  globalNotes: string[];
+};
+
 type FinalTutorPlanComposerStepResponse = {
   title?: string;
   learningGoal?: string;
@@ -244,10 +318,378 @@ type FinalTutorPlanComposerResponse = {
   steps?: FinalTutorPlanComposerStepResponse[];
 };
 
-const buildLlmOnlyPlannerPrompt = (objective: string, previousPlan?: LearningPlan | null) => [
+const previousPlanBrief = (previousPlan?: LearningPlan | null) => {
+  if (!previousPlan) return '';
+  return [
+    `前一版目标：${clip(previousPlan.objective, 260)}`,
+    previousPlan.rationale ? `前一版计划摘要：${clip(previousPlan.rationale, 1800)}` : '',
+    previousPlan.nextStepId ? `前一版下一步：${previousPlan.nextStepId}` : ''
+  ].filter(Boolean).join('\n');
+};
+
+const buildLlmOnlyPlannerPrompt = (objective: string, previousPlan?: LearningPlan | null) => {
+  const revisionContext = previousPlanBrief(previousPlan);
+  return [
+    {
+      role: 'system' as const,
+      content: [
+        '你是一位经验很强的学习路径规划导师。你的第一任务是写出一份真正有教学判断、读起来有帮助的自然语言学习计划。',
+        '这一步是 LLM-only curriculum draft：主要依赖你自己的学科知识、教学经验和对用户目标的理解。不要等待 workspace 资料、知识图谱或学习画像；那些只会在后续步骤用于校准、资源匹配和结构化。',
+        '不要输出 JSON，不要写成字段填空表。用清晰的 Markdown，像给真实学习者写一份可执行路线。',
+        '请保持自由度，但务必做到：校准目标是否现实；拆出关键能力和前置知识；按时间或阶段安排；每阶段给学习动作、练习/检测方式和完成标准；资料缺失时给补充或自生成练习建议，而不是删掉该学的内容。',
+        '如果用户给出很短时间或很大目标，诚实说明能达到的版本：优先安排高收益路径，并标出无法在当前时间内完全掌握的部分。'
+      ].join('\n')
+    },
+    {
+      role: 'user' as const,
+      content: [
+        '请根据下面的学习目标生成一份 Markdown 学习计划。',
+        '',
+        `学习目标：${objective}`,
+        revisionContext ? `\n已有计划供参考，若用户是在修订计划，请保留有价值部分并改进：\n${revisionContext}` : '',
+        '',
+        '建议的自然结构可以包括：目标理解、学习路径、阶段安排、练习与检测、时间分配、风险与调整建议。你可以根据目标自由增删小节。'
+      ].filter(Boolean).join('\n')
+    }
+  ];
+};
+
+const planningRetrievalIntentKinds: PlanningRetrievalIntentKind[] = [
+  'explanation',
+  'example',
+  'practice',
+  'assessment',
+  'project',
+  'reference'
+];
+
+const buildPlanningQueryCompilerPrompt = () => ({
+  instruction: [
+    'You are a Planning Query Compiler for a learning-planner pipeline.',
+    'Read the user objective and the natural Markdown learning plan, then extract only the coarse signals needed for later KG matching and resource search.',
+    'This is not the final plan, not a UI schema, and not a step-by-step decomposition. Keep it intentionally sparse.',
+    'Prefer broad concepts over tiny subtopics. Prefer stage-level signals over per-step fields.',
+    'Resource gaps must not remove concepts from the plan. If no resource is known, still preserve the learning need as a retrieval intent.',
+    'Return compact JSON only.'
+  ].join('\n'),
+  schema: {
+    objective: 'one concise sentence, <= 180 chars',
+    constraints: 'string[], max 5; time, level, preference, scope, learning conditions only',
+    concepts: 'string[], max 12; broad KG/resource anchors, not a full syllabus',
+    stageSignals: [
+      {
+        label: 'short stage name',
+        focus: 'one coarse sentence about what this stage is for',
+        concepts: 'optional string[], max 4'
+      }
+    ],
+    retrievalIntents: [
+      {
+        query: 'direct search query for workspace resources',
+        kind: 'one of explanation, example, practice, assessment, project, reference',
+        stage: 'optional stage label'
+      }
+    ]
+  }
+});
+
+const fallbackPlanningQueryCompiler = (objective: string, markdown: string): PlanningQueryCompilerOutput => {
+  const headings = markdown
+    .split('\n')
+    .map((line) => line.match(/^\s{0,3}#{2,4}\s+(.+)$/)?.[1])
+    .filter((item): item is string => Boolean(item))
+    .map((item) => clip(item.replace(/^\d+[.、]\s*/, ''), 60))
+    .slice(0, 5);
+  const concepts = filterKnowledgeConcepts([
+    objective,
+    ...headings,
+    ...String(markdown || '')
+      .split(/[，。；、,.!?！？\n]/)
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 2 && item.length <= 24)
+      .slice(0, 18)
+  ], 10);
+  const stageSignals = (headings.length ? headings : ['核心路径']).slice(0, 5).map((label, index) => ({
+    label,
+    focus: index === 0 ? '建立学习目标和核心基础。' : `推进 ${label} 相关能力。`,
+    concepts: concepts.slice(index, index + 3)
+  }));
+  const retrievalIntents = [
+    {
+      query: `${objective} 基础讲解`,
+      kind: 'explanation' as const,
+      stage: stageSignals[0]?.label
+    },
+    {
+      query: `${objective} 练习 题目`,
+      kind: 'practice' as const,
+      stage: stageSignals[Math.min(1, stageSignals.length - 1)]?.label
+    },
+    {
+      query: `${objective} 综合项目 案例`,
+      kind: 'project' as const,
+      stage: stageSignals[stageSignals.length - 1]?.label
+    }
+  ];
+  return {
+    objective: clip(objective, 180),
+    constraints: [],
+    concepts,
+    stageSignals,
+    retrievalIntents
+  };
+};
+
+const normalizePlanningQueryCompiler = (
+  raw: Partial<PlanningQueryCompilerOutput> | null | undefined,
+  fallback: PlanningQueryCompilerOutput
+): PlanningQueryCompilerOutput => {
+  const objective = clip(raw?.objective, 180) || fallback.objective;
+  const constraints = uniqueStrings(asStringArray(raw?.constraints, fallback.constraints), 5);
+  const concepts = filterKnowledgeConcepts(asStringArray(raw?.concepts, fallback.concepts), 12);
+  const stageSignals = Array.isArray(raw?.stageSignals)
+    ? raw.stageSignals
+        .map((stage) => ({
+          label: clip(stage?.label, 60),
+          focus: clip(stage?.focus, 180),
+          concepts: filterKnowledgeConcepts(asStringArray(stage?.concepts, []), 4)
+        }))
+        .filter((stage) => stage.label || stage.focus)
+        .slice(0, 6)
+    : fallback.stageSignals;
+  const stageLabels = new Set(stageSignals.map((stage) => stage.label).filter(Boolean));
+  const retrievalIntents = Array.isArray(raw?.retrievalIntents)
+    ? raw.retrievalIntents
+        .map((intent) => {
+          const kind = planningRetrievalIntentKinds.includes(intent?.kind as PlanningRetrievalIntentKind)
+            ? intent.kind as PlanningRetrievalIntentKind
+            : 'explanation';
+          const stage = clip(intent?.stage, 60);
+          return {
+            query: clip(intent?.query, 140),
+            kind,
+            stage: stage && stageLabels.has(stage) ? stage : stage || undefined
+          };
+        })
+        .filter((intent) => intent.query)
+        .slice(0, 8)
+    : fallback.retrievalIntents;
+  return {
+    objective,
+    constraints,
+    concepts: concepts.length ? concepts : fallback.concepts,
+    stageSignals: stageSignals.length ? stageSignals : fallback.stageSignals,
+    retrievalIntents: retrievalIntents.length ? retrievalIntents : fallback.retrievalIntents
+  };
+};
+
+const compilerOutputToSkeleton = (compiler: PlanningQueryCompilerOutput): CurriculumSkeleton => {
+  const fallbackStage = {
+    label: '核心学习路径',
+    focus: compiler.objective,
+    concepts: compiler.concepts.slice(0, 4)
+  };
+  const stages = (compiler.stageSignals.length ? compiler.stageSignals : [fallbackStage]).slice(0, 6);
+  return {
+    objective: compiler.objective,
+    learnerLevel: 'unknown',
+    rationale: '由 LLM-only 自然计划抽取粗粒度阶段信号；仅用于 KG 和资源检索，不作为最终 UI 结构。',
+    broadConstraints: compiler.constraints,
+    targetSkills: compiler.concepts.slice(0, 12),
+    weakSignals: [],
+    assumptions: ['stageSignals 是检索信号，不是完整步骤表单。'],
+    stages: stages.map((stage, index): CurriculumSkeletonStage => {
+      const stageConcepts = filterKnowledgeConcepts([
+        ...(stage.concepts || []),
+        ...compiler.concepts.slice(index, index + 3)
+      ], 4);
+      const stageRetrievalIntents = compiler.retrievalIntents.filter((intent) => intent.stage === stage.label);
+      return {
+        id: stageIdFor(stage.label || `stage-${index + 1}`, index),
+        title: clip(stage.label || `阶段 ${index + 1}`, 120),
+        learningGoal: clip(stage.focus || compiler.objective, 260),
+        whyThisStage: clip(stage.focus || '该阶段来自自然计划的粗粒度阶段信号。', 280),
+        targetSkills: stageConcepts.length ? stageConcepts : compiler.concepts.slice(0, 3),
+        prerequisites: index > 0 ? stages[index - 1]?.concepts?.slice(0, 2) || [] : [],
+        recommendedOrder: index + 1,
+        estimatedDifficulty: Math.min(5, Math.max(1, 2 + Math.floor(index / 2))),
+        estimatedLoad: index === 0 ? 'light' : 'medium',
+        idealActivities: stageRetrievalIntents.length
+          ? stageRetrievalIntents.map((intent) => `${intent.kind}: ${intent.query}`).slice(0, 3)
+          : ['围绕该阶段核心概念寻找讲解、示例或练习资源。'],
+        checks: ['找到能支撑该阶段的资料或明确标记 resource gap。'],
+        riskNotes: [],
+        teachingPhase: index === stages.length - 1 ? 'formative_assessment' : index <= 1 ? 'concept_model' : 'guided_practice'
+      };
+    })
+  };
+};
+
+const conceptMatchesAny = (concept: string, candidates: string[]) => {
+  const normalized = concept.toLowerCase();
+  return candidates.some((candidate) => {
+    const value = candidate.toLowerCase();
+    return value.includes(normalized) || normalized.includes(value);
+  });
+};
+
+const resourceTypeForIntentKind = (kind: PlanningRetrievalIntentKind): LearningPlanResource['type'] => {
+  if (kind === 'assessment') return 'quiz';
+  if (kind === 'practice') return 'exercise';
+  if (kind === 'project') return 'project';
+  if (kind === 'reference') return 'context';
+  return 'document';
+};
+
+const modalityForIntentKind = (kind: PlanningRetrievalIntentKind): ResourceLearningUnit['modality'] => {
+  if (kind === 'assessment') return 'quiz';
+  if (kind === 'practice') return 'practice';
+  if (kind === 'project') return 'project';
+  if (kind === 'reference') return 'mixed';
+  return 'read';
+};
+
+const searchResultToResourceLearningUnit = (
+  item: KnowledgeSearchResult,
+  intent: PlanningQueryCompilerOutput['retrievalIntents'][number],
+  intentIndex: number,
+  resultIndex: number
+): ResourceLearningUnit => {
+  const locator = (item.supportSnippets || []).find((snippet) => snippet.locator)?.locator
+    || (item.metadata?.locator && typeof item.metadata.locator === 'object' ? item.metadata.locator as Record<string, unknown> : undefined);
+  return {
+    id: `intent-unit-${intentIndex + 1}-${item.chunkId || resultIndex + 1}`,
+    resourceId: item.fileObjectId,
+    resourceTitle: item.fileName,
+    resourceType: resourceTypeForIntentKind(intent.kind),
+    sourceFileName: item.fileName,
+    sourceFilePath: item.path,
+    title: clip(`${intent.stage ? `${intent.stage}：` : ''}${item.summary || item.fileName}`, 160),
+    summary: clip(item.summary || item.retrievalReason || item.chunkText, 620),
+    locator,
+    entryPoint: Array.isArray((locator as any)?.headingPath)
+      ? (locator as any).headingPath.join(' / ')
+      : undefined,
+    teaches: filterKnowledgeConcepts([intent.query, ...(item.matchedTerms || [])], 6),
+    prerequisites: [],
+    difficulty: intent.kind === 'project' ? 4 : intent.kind === 'assessment' || intent.kind === 'practice' ? 3 : 2,
+    estimatedMinutes: intent.kind === 'project' ? 35 : intent.kind === 'assessment' ? 15 : 12,
+    modality: modalityForIntentKind(intent.kind),
+    coverage: 'chunk',
+    evidenceSnippets: [
+      clip((item.supportSnippets || [])[0]?.text || item.chunkText, 260)
+    ].filter(Boolean),
+    resourceSignals: [
+      `retrievalIntent:${intent.kind}`,
+      intent.stage ? `stage:${intent.stage}` : '',
+      item.retrievalReason || ''
+    ].filter(Boolean),
+    relevanceScore: Math.min(1, Math.max(0.45, Number(item.score || 0) / 100 || 0.65)),
+    source: 'knowledge_chunk'
+  };
+};
+
+const dedupeResourceLearningUnits = (units: ResourceLearningUnit[], limit = 48) => {
+  const byKey = new Map<string, ResourceLearningUnit>();
+  units.forEach((unit) => {
+    const key = `${unit.resourceId}:${unit.title}:${JSON.stringify(unit.locator || {})}`;
+    const existing = byKey.get(key);
+    if (!existing || unit.relevanceScore > existing.relevanceScore) byKey.set(key, unit);
+  });
+  return Array.from(byKey.values())
+    .sort((left, right) => right.relevanceScore - left.relevanceScore)
+    .slice(0, limit);
+};
+
+const reservedLearnerProfileAdapter = (): LearnerProfileAdapterPlaceholder => ({
+  status: 'reserved',
+  summary: 'Learner Profile Adapter is reserved for a later pass; current planning enhancement only annotates KG alignment and resource grounding.',
+  hints: []
+});
+
+const buildComposerAnnotations = (
+  compiler: PlanningQueryCompilerOutput,
+  skeleton: CurriculumSkeleton,
+  enhancements: PlanningEnhancementBundle
+): PlanningEnhancementComposerAnnotations => {
+  const stageById = new Map(skeleton.stages.map((stage) => [stage.id, stage] as const));
+  const kgWarningsByStage = new Map<string, string[]>();
+  enhancements.kgAlignment.audit.warnings.forEach((warning) => {
+    if (!warning.stageId) return;
+    const list = kgWarningsByStage.get(warning.stageId) || [];
+    list.push(warning.message);
+    kgWarningsByStage.set(warning.stageId, list);
+  });
+  const groundingByStage = new Map(
+    enhancements.resourceGrounding.grounding.stageGroundings.map((grounding) => [grounding.stageId, grounding] as const)
+  );
+
+  return {
+    objective: compiler.objective,
+    constraints: compiler.constraints.slice(0, 5),
+    concepts: compiler.concepts.slice(0, 12),
+    stageSignals: skeleton.stages.slice(0, 6).map((stage) => {
+      const grounding = groundingByStage.get(stage.id);
+      const originalSignal = compiler.stageSignals.find((signal) => signal.label === stage.title);
+      return {
+        label: originalSignal?.label || stage.title,
+        focus: originalSignal?.focus || stage.learningGoal,
+        concepts: (originalSignal?.concepts?.length ? originalSignal.concepts : stage.targetSkills).slice(0, 4),
+        prerequisiteNotes: (kgWarningsByStage.get(stage.id) || []).slice(0, 2),
+        resources: (grounding?.matches || []).slice(0, 2).map((match) => ({
+          title: clip(match.resourceTitle, 120),
+          unit: clip(match.resourceUnitTitle, 120),
+          entryPoint: clip(match.resourceEntryPoint, 120),
+          reason: clip(match.reason, 220),
+          modality: match.modality
+        })),
+        resourceGap: grounding?.status === 'resource_gap'
+          ? clip(grounding.gapReason || grounding.neededResource, 220)
+          : grounding?.status === 'partial'
+            ? clip(grounding.gapReason || '现有资料只能部分支撑该阶段。', 220)
+            : undefined
+      };
+    }),
+    globalNotes: [
+      enhancements.kgAlignment.missingConcepts.length
+        ? `Some planned concepts are not yet clearly represented in the workspace KG: ${enhancements.kgAlignment.missingConcepts.slice(0, 6).join(', ')}.`
+        : '',
+      enhancements.resourceGrounding.grounding.summary,
+      enhancements.learnerProfileAdapter.summary
+    ].filter(Boolean).slice(0, 4)
+  };
+};
+
+const buildPlanningEnhancementComposerPrompt = (input: {
+  baseMarkdown: string;
+  annotations: PlanningEnhancementComposerAnnotations;
+}) => [
+  {
+    role: 'system' as const,
+    content: [
+      'You are a Planning Enhancement Composer for a learning workspace.',
+      'Your job is to turn a good natural-language learning plan into a better tutor-style plan by smoothly integrating prerequisite notes and available workspace resources.',
+      'Preserve the original plan intent, sequence, and voice. Do not rewrite it into a rigid schema.',
+      'Write in fluent Markdown. Do not output JSON. Do not use dense tables.',
+      'Do not expose internal terms such as KG, groundingStatus, retrievalIntents, stageSignals, score, metadata, annotation, or compiler.',
+      'Use resource information only when it helps the learner act. If resources are missing, mark the gap naturally and suggest what support material or practice should be added; never delete a learning topic just because workspace resources are missing.',
+      'Keep the plan domain-general. Do not assume any particular course subject beyond what the user requested.',
+      'A good stage usually explains what problem this stage solves, what the learner should do, how to tell they passed, and which workspace resource or gap matters. Vary the wording naturally; do not force the same mini-template everywhere.'
+    ].join('\n')
+  },
   {
     role: 'user' as const,
-    content: `请根据这个目标生成一份学习计划，使用 Markdown：\n\n${objective}`
+    content: [
+      'Enhance this learning plan for the user.',
+      '',
+      'Base plan Markdown:',
+      input.baseMarkdown,
+      '',
+      'Sparse annotations for enhancement, not for direct display:',
+      JSON.stringify(input.annotations, null, 2),
+      '',
+      'Return only the enhanced Markdown plan. Keep it readable and natural.'
+    ].join('\n')
   }
 ];
 
@@ -3468,6 +3910,252 @@ export class MclPlannerService {
     });
   }
 
+  private async runPlanningQueryCompiler(input: {
+    objective: string;
+    markdown: string;
+  }, options?: MclPlannerRunOptions) {
+    const fallback = fallbackPlanningQueryCompiler(input.objective, input.markdown);
+    return this.runStage('PlanningQueryCompiler', {
+      summary: 'Extract sparse planning signals for later KG/resource scanning.',
+      provider: aiModelProviderService.provider({ useCase: 'planner' }),
+      model: aiModelProviderService.model(aiModelProviderService.provider({ useCase: 'planner' }), undefined, 'planner'),
+      maxConstraints: 5,
+      maxConcepts: 12,
+      maxStageSignals: 6,
+      maxRetrievalIntents: 8,
+      timeoutMs: Number(process.env.MCL_PLANNING_QUERY_COMPILER_TIMEOUT_MS || 45000)
+    }, options, async () => {
+      if (!aiModelProviderService.isConfigured({ useCase: 'planner' })) {
+        return {
+          value: fallback,
+          fallback: true,
+          summary: 'AI planner provider is not configured; used local sparse compiler fallback.'
+        };
+      }
+
+      try {
+        const response = await aiModelProviderService.json<Partial<PlanningQueryCompilerOutput>>({
+          ...buildPlanningQueryCompilerPrompt(),
+          input: {
+            userObjective: input.objective,
+            naturalPlanMarkdown: clip(input.markdown, 12000)
+          },
+          useCase: 'planner',
+          timeoutMs: Number(process.env.MCL_PLANNING_QUERY_COMPILER_TIMEOUT_MS || 45000)
+        });
+        const value = normalizePlanningQueryCompiler(response.data, fallback);
+        return {
+          value,
+          summary: `concepts=${value.concepts.length}, stageSignals=${value.stageSignals.length}, retrievalIntents=${value.retrievalIntents.length}`
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          value: fallback,
+          fallback: true,
+          summary: `Sparse compiler fallback after model error: ${message}`
+        };
+      }
+    });
+  }
+
+  private async runKgAlignmentPrerequisiteScan(input: {
+    stateBundle: BuiltMclLearningState;
+    compiler: PlanningQueryCompilerOutput;
+    skeleton: CurriculumSkeleton;
+  }, options?: MclPlannerRunOptions) {
+    const fallbackHints = planningContextBundleService.build({
+      stateBundle: input.stateBundle,
+      objective: input.compiler.objective,
+      resources: []
+    }).kgHints;
+    const fallbackAudit = buildFallbackKgAudit(input.skeleton, fallbackHints);
+
+    return this.runStage('KgAlignmentPrerequisiteScan', {
+      summary: 'Align compiler concepts with course KG and scan prerequisite risks.',
+      conceptCount: input.compiler.concepts.length,
+      stageSignalCount: input.compiler.stageSignals.length
+    }, options, async () => {
+      try {
+        const kgHints = await kgConstraintProviderService.build({
+          workspaceId: input.stateBundle.state.workspace.id,
+          workbenchId: input.stateBundle.state.workbench?.id || null,
+          goalId: input.stateBundle.state.activeGoal?.id || null,
+          objective: input.compiler.objective,
+          targetConcepts: input.compiler.concepts,
+          maxConcepts: Math.min(Math.max(input.compiler.concepts.length || 6, 4), 12)
+        });
+        const audit = buildFallbackKgAudit(input.skeleton, kgHints);
+        const kgCandidates = [
+          ...kgHints.masteredConcepts,
+          ...kgHints.weakConcepts,
+          ...kgHints.targetConcepts,
+          ...kgHints.recommendedOrderHints
+        ];
+        const matchedConcepts = input.compiler.concepts.filter((concept) => conceptMatchesAny(concept, kgCandidates));
+        const missingConcepts = input.compiler.concepts.filter((concept) => !conceptMatchesAny(concept, kgCandidates)).slice(0, 8);
+        const value: PlanningKgAlignmentResult = {
+          kgHints,
+          audit,
+          matchedConcepts: matchedConcepts.slice(0, 12),
+          missingConcepts,
+          summary: `matched=${matchedConcepts.length}, missing=${missingConcepts.length}, prerequisiteWarnings=${audit.warnings.length}`
+        };
+        return {
+          value,
+          summary: value.summary
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const fallback: PlanningKgAlignmentResult = {
+          kgHints: fallbackHints,
+          audit: fallbackAudit,
+          matchedConcepts: [],
+          missingConcepts: input.compiler.concepts.slice(0, 8),
+          summary: `KG alignment fallback after error: ${message}`
+        };
+        return {
+          value: fallback,
+          fallback: true,
+          summary: fallback.summary
+        };
+      }
+    });
+  }
+
+  private async searchIntentResourceUnits(input: {
+    workspaceId: string;
+    intents: PlanningQueryCompilerOutput['retrievalIntents'];
+  }) {
+    const intentResults: ResourceLearningUnit[] = [];
+    for (const [intentIndex, intent] of input.intents.slice(0, 4).entries()) {
+      const results = await knowledgeSearchService.search({
+        workspaceId: input.workspaceId,
+        query: intent.query,
+        limit: 3,
+        requireDiversity: true,
+        candidateLimit: 80
+      }).catch(() => []);
+      intentResults.push(...results.slice(0, 2).map((item, resultIndex) =>
+        searchResultToResourceLearningUnit(item, intent, intentIndex, resultIndex)
+      ));
+    }
+    return intentResults;
+  }
+
+  private async runResourceGroundingSearch(input: {
+    stateBundle: BuiltMclLearningState;
+    compiler: PlanningQueryCompilerOutput;
+    skeleton: CurriculumSkeleton;
+    kgAlignment: PlanningKgAlignmentResult;
+  }, options?: MclPlannerRunOptions) {
+    return this.runStage('ResourceGroundingSearch', {
+      summary: 'Search workspace resources from retrieval intents and ground stage-level signals.',
+      retrievalIntentCount: input.compiler.retrievalIntents.length,
+      stageCount: input.skeleton.stages.length
+    }, options, async () => {
+      const resources = buildCandidateResources(input.stateBundle);
+      const [baseUnits, intentUnits] = await Promise.all([
+        resourceLearningUnitService.build({
+          workspaceId: input.stateBundle.state.workspace.id,
+          workbenchId: input.stateBundle.state.workbench?.id || null,
+          resources,
+          maxFiles: 8,
+          maxUnits: 18
+        }).catch(() => []),
+        this.searchIntentResourceUnits({
+          workspaceId: input.stateBundle.state.workspace.id,
+          intents: input.compiler.retrievalIntents
+        }).catch(() => [])
+      ]);
+      const resourceLearningUnits = dedupeResourceLearningUnits([...intentUnits, ...baseUnits], 24);
+      const planningContext = planningContextBundleService.build({
+        stateBundle: input.stateBundle,
+        objective: input.compiler.objective,
+        resources,
+        resourceLearningUnits,
+        kgHints: input.kgAlignment.kgHints
+      });
+      const sourceCatalog = buildCoreSourceCatalog(input.stateBundle);
+      const diagnostic = buildPhaseOneDiagnostic(input.compiler.objective, sourceCatalog);
+      const auditedSkeleton = applyKgAuditToSkeleton(input.skeleton, input.kgAlignment.audit);
+      const grounding = buildResourceGroundingResult(
+        auditedSkeleton,
+        planningContext.resourceLearningUnits,
+        resources,
+        diagnostic
+      );
+      const value: PlanningResourceGroundingSearchResult = {
+        grounding,
+        resourceInventory: resources,
+        resourceLearningUnitCount: planningContext.resourceLearningUnits.length,
+        intentSearchCount: intentUnits.length,
+        summary: `${grounding.summary}, intentUnits=${intentUnits.length}, resourceUnits=${planningContext.resourceLearningUnits.length}`
+      };
+      return {
+        value,
+        summary: value.summary
+      };
+    });
+  }
+
+  private async runPlanningEnhancementComposer(input: {
+    baseMarkdown: string;
+    compiler: PlanningQueryCompilerOutput;
+    skeleton: CurriculumSkeleton;
+    enhancements: PlanningEnhancementBundle;
+  }, options?: MclPlannerRunOptions) {
+    const annotations = buildComposerAnnotations(input.compiler, input.skeleton, input.enhancements);
+    return this.runStage('PlanningEnhancementComposer', {
+      summary: 'Compose final user-facing Markdown with KG/resource annotations folded in naturally.',
+      stageCount: annotations.stageSignals.length,
+      resourceStageCount: annotations.stageSignals.filter((stage) => stage.resources.length > 0).length,
+      resourceGapCount: annotations.stageSignals.filter((stage) => stage.resourceGap).length,
+      prerequisiteNoteCount: annotations.stageSignals.reduce((sum, stage) => sum + stage.prerequisiteNotes.length, 0),
+      timeoutMs: Number(process.env.MCL_PLANNING_ENHANCEMENT_COMPOSER_TIMEOUT_MS || 60000)
+    }, options, async () => {
+      if (!aiModelProviderService.isConfigured({ useCase: 'planner' })) {
+        return {
+          value: input.baseMarkdown,
+          fallback: true,
+          summary: 'AI planner provider is not configured; kept base Markdown plan.'
+        };
+      }
+
+      try {
+        const response = await aiModelProviderService.chat(
+          buildPlanningEnhancementComposerPrompt({
+            baseMarkdown: clip(input.baseMarkdown, 18000),
+            annotations
+          }),
+          {
+            useCase: 'planner',
+            timeoutMs: Number(process.env.MCL_PLANNING_ENHANCEMENT_COMPOSER_TIMEOUT_MS || 60000)
+          }
+        );
+        const value = clip(response.reply, 24000);
+        if (!value) {
+          return {
+            value: input.baseMarkdown,
+            fallback: true,
+            summary: 'Composer returned empty Markdown; kept base plan.'
+          };
+        }
+        return {
+          value,
+          summary: `Enhanced Markdown length=${value.length}, resourceStages=${annotations.stageSignals.filter((stage) => stage.resources.length > 0).length}`
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          value: input.baseMarkdown,
+          fallback: true,
+          summary: `Composer fallback after model error: ${message}`
+        };
+      }
+    });
+  }
+
   async planOrRevise(input: {
     stateBundle: BuiltMclLearningState;
     userInput: string;
@@ -3509,39 +4197,72 @@ export class MclPlannerService {
     });
 
     const objective = clip(input.userInput || titleFromMarkdown(markdown, input.userInput), 180);
+    const planningQueryCompiler = await this.runPlanningQueryCompiler({ objective, markdown }, input.options);
+    const compilerSkeleton = compilerOutputToSkeleton(planningQueryCompiler);
+    const kgAlignment = await this.runKgAlignmentPrerequisiteScan({
+      stateBundle: input.stateBundle,
+      compiler: planningQueryCompiler,
+      skeleton: compilerSkeleton
+    }, input.options);
+    const resourceGrounding = await this.runResourceGroundingSearch({
+      stateBundle: input.stateBundle,
+      compiler: planningQueryCompiler,
+      skeleton: compilerSkeleton,
+      kgAlignment
+    }, input.options);
+    const planningEnhancements: PlanningEnhancementBundle = {
+      kgAlignment,
+      resourceGrounding,
+      learnerProfileAdapter: reservedLearnerProfileAdapter()
+    };
+    const enhancedMarkdown = await this.runPlanningEnhancementComposer({
+      baseMarkdown: markdown,
+      compiler: planningQueryCompiler,
+      skeleton: compilerSkeleton,
+      enhancements: planningEnhancements
+    }, input.options);
     const structuredPlan = await this.runStage('PlanStructurer', {
-      summary: 'Structure the natural Markdown plan for card display without replanning.',
+      summary: 'Structure the enhanced Markdown plan for card display without replanning.',
       provider: aiModelProviderService.provider({ useCase: 'planner' }),
       model: aiModelProviderService.model(aiModelProviderService.provider({ useCase: 'planner' }), undefined, 'planner'),
       timeoutMs: Number(process.env.MCL_PLAN_STRUCTURER_TIMEOUT_MS || 90000)
     }, input.options, async () => {
       const value = await planStructurerService.structure({
         objective,
-        planMarkdown: markdown
+        planMarkdown: enhancedMarkdown
       });
       return {
         value,
         fallback: Boolean(value.parseFailed),
         summary: value.parseFailed
-          ? `PlanStructurer parse failed; raw Markdown preserved. ${value.parseError || ''}`.trim()
-          : `Structured ${value.stages.length} stages for display.`
+          ? `PlanStructurer parse failed; enhanced Markdown preserved. ${value.parseError || ''}`.trim()
+          : `Structured ${value.stages.length} enhanced stages for display.`
       };
     });
-    const diagnostic = buildPhaseOneDiagnostic(objective, []);
+    const diagnostic = buildPhaseOneDiagnostic(objective, buildCoreSourceCatalog(input.stateBundle));
     const steps: LearningPlanStep[] = [];
     const milestones: LearningPlanMilestone[] = [];
+    const groundedStages = resourceGrounding.grounding.stageGroundings.filter((item) => item.status === 'grounded').length;
+    const partialStages = resourceGrounding.grounding.stageGroundings.filter((item) => item.status === 'partial').length;
+    const totalGroundedStages = resourceGrounding.grounding.stageGroundings.length || 1;
+    const resourceGroundingScore = Number(((groundedStages + partialStages * 0.5) / totalGroundedStages).toFixed(2));
     const constraintScores = {
       cltScore: 0.8,
       zpdScore: 0.8,
       alignmentScore: 0.9,
       pedagogyScore: 0.85,
-      resourceGroundingScore: 0,
+      resourceGroundingScore,
       sequencingScore: 0.85,
       assessmentScore: 0.75,
       confidence: 0.78,
-      summary: 'LLM-only planner: natural-language plan generated from user objective; legacy grounding and profile stages are paused.'
+      summary: 'LLM-only natural plan enhanced with sparse KG/resource annotations; learner profile adapter is reserved.'
     };
-    const knowledgeGraphSnapshot = { nodes: [], edges: [] as KnowledgeGraphSnapshot['edges'] };
+    const knowledgeGraphSnapshot = {
+      nodes: [],
+      edges: [] as KnowledgeGraphSnapshot['edges'],
+      planningQueryCompiler,
+      planningEnhancements
+    };
 
     return {
       id: crypto.randomUUID(),
@@ -3552,10 +4273,19 @@ export class MclPlannerService {
       version: previousVersion + 1,
       status: 'active',
       objective,
-      rationale: markdown,
-      assumptions: ['该计划仅基于用户当前输入的学习目标生成。'],
-      constraints: ['暂不接入 grounding、上传资料、知识图谱、学习画像、资源推荐、revision agent 或 fallback domain template。'],
-      targetSkills: filterKnowledgeConcepts([objective], 6),
+      rationale: enhancedMarkdown,
+      assumptions: [
+        '课程骨架由 LLM-only 自然计划主导。',
+        'KG 与 workspace 资源只作为后置增强和缺口提示，不删除原计划中的学习内容。',
+        'Learner Profile Adapter 暂时预留，尚未参与计划修订。'
+      ],
+      constraints: [
+        '第一层自然计划仍由 LLM-only 生成；KG 与资源搜索只做后置 annotation，不重写课程骨架。',
+        ...planningQueryCompiler.constraints
+      ].slice(0, 8),
+      targetSkills: planningQueryCompiler.concepts.length
+        ? planningQueryCompiler.concepts.slice(0, 8)
+        : filterKnowledgeConcepts([objective], 6),
       weakSkills: [],
       milestones,
       steps,
@@ -3565,18 +4295,23 @@ export class MclPlannerService {
         fallbackActions: ['缩小目标范围', '把当前阶段拆成更小任务', '要求 LLM 重新生成更短或更具体的计划']
       },
       evidence: {
-        citations: [],
+        citations: resourceGrounding.resourceInventory.map((resource) => resource.citationLabel || resource.title).slice(0, 8),
         activeGoalTitle: input.stateBundle.state.activeGoal?.title || null,
         currentTaskIntent: input.stateBundle.state.currentTask.intent,
-        readinessSummary: 'LLM-only planner; external context stages paused.'
+        readinessSummary: [
+          `LLM-only planner; planning query compiler extracted ${planningQueryCompiler.concepts.length} concepts and ${planningQueryCompiler.retrievalIntents.length} retrieval intents.`,
+            `KG alignment: ${kgAlignment.summary}`,
+            `Resource grounding: ${resourceGrounding.summary}`,
+            'Learner profile adapter is reserved.'
+        ].join(' ')
       },
       diagnosticReport: {
         ...diagnostic,
         targetGoal: objective,
-        currentStateSummary: '当前计划由 LLM 直接根据用户目标生成，未使用学习画像、资料 grounding 或知识图谱。',
-        evidence: ['plannerMode=llm_only']
+        currentStateSummary: '当前计划先由 LLM 根据用户目标生成自然学习路径，再用 Planning Query Compiler、KG alignment 和 resource grounding 做后置增强；学习画像适配暂未启用。',
+        evidence: ['plannerMode=llm_only_with_sparse_enhancements']
       } as unknown as LearnerDiagnosticReport,
-      candidateResources: [],
+      candidateResources: resourceGrounding.resourceInventory,
       knowledgeGraphSnapshot,
       reflectionHistory: [],
       constraintScores,
@@ -3585,7 +4320,7 @@ export class MclPlannerService {
       previousPlanId: input.previousPlan?.id || null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
-      naturalPlanMarkdown: markdown,
+      naturalPlanMarkdown: enhancedMarkdown,
       structuredPlan,
       skipPlanningSideEffects: true
     } as LearningPlan & { naturalPlanMarkdown: string; skipPlanningSideEffects: boolean };

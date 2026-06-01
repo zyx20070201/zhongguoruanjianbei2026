@@ -1,4 +1,4 @@
-import { aiModelProviderService } from '../aiModelProviderService';
+import { AiModelProviderId, ProviderChatMessage, aiModelProviderService } from '../aiModelProviderService';
 import { quizQualityService } from '../quizQualityService';
 import { ContextCapsule } from '../../types/contextSystem';
 import {
@@ -18,6 +18,7 @@ import {
 } from './practiceRequest';
 
 const STUDIO_MODEL_TIMEOUT_MS = Number(process.env.STUDIO_MODEL_TIMEOUT_MS || 240000);
+const DEFAULT_STUDIO_FALLBACK_PROVIDERS: AiModelProviderId[] = ['deepseek', 'claude', 'openai', 'gemini'];
 
 const clip = (value: string | null | undefined, maxLength = 1200) => {
   const text = String(value || '').trim();
@@ -62,6 +63,124 @@ const topicFromContext = (context: StudioGenerationContext) => {
 
 const latestPrompt = (context: StudioGenerationContext) =>
   clip(context.input.prompt || context.template.promptFrame || context.template.title, 700);
+
+const parseProviderList = (value?: string | null): AiModelProviderId[] =>
+  String(value || '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item): item is AiModelProviderId =>
+      item === 'openai' || item === 'gemini' || item === 'claude' || item === 'deepseek'
+    );
+
+const isRecoverableModelError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return /fetch failed|network|socket|econnreset|econnrefused|etimedout|terminated|timeout|abort|und_err|no available channel|status 429|status 5\d\d/i.test(message);
+};
+
+const studioFallbackProviders = (primary: AiModelProviderId) => {
+  const configured = parseProviderList(process.env.AI_STUDIO_FALLBACK_PROVIDERS);
+  const candidates = configured.length ? configured : DEFAULT_STUDIO_FALLBACK_PROVIDERS;
+  return candidates.filter((provider, index, list) => provider !== primary && list.indexOf(provider) === index);
+};
+
+const describeModelError = (provider: AiModelProviderId, error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return `${provider}: ${message}`;
+};
+
+const chatWithStudioFallback = async (
+  messages: ProviderChatMessage[],
+  context: StudioGenerationContext
+) => {
+  const primary = aiModelProviderService.provider({ useCase: 'studio' });
+  const errors: string[] = [];
+
+  try {
+    return await aiModelProviderService.chat(messages, undefined, {
+      timeoutMs: STUDIO_MODEL_TIMEOUT_MS,
+      useCase: 'studio',
+      visualEvidence: context.capsule.visualEvidence
+    });
+  } catch (error) {
+    errors.push(describeModelError(primary, error));
+    if (!isRecoverableModelError(error)) throw error;
+  }
+
+  for (const provider of studioFallbackProviders(primary)) {
+    if (!aiModelProviderService.isConfigured({ provider, useCase: 'studio' })) continue;
+    try {
+      const result = await aiModelProviderService.chat(messages, undefined, {
+        provider,
+        timeoutMs: STUDIO_MODEL_TIMEOUT_MS,
+        useCase: 'studio',
+        visualEvidence: context.capsule.visualEvidence
+      });
+      return {
+        ...result,
+        usage: {
+          ...(result.usage || {}),
+          fallbackFrom: primary,
+          fallbackErrors: errors
+        }
+      };
+    } catch (error) {
+      errors.push(describeModelError(provider, error));
+      if (!isRecoverableModelError(error)) break;
+    }
+  }
+
+  throw new Error(`AI Studio model generation failed (${errors.join(' | ')})`);
+};
+
+const jsonWithStudioFallback = async <T>(
+  context: StudioGenerationContext,
+  params: {
+    instruction: string;
+    schema: Record<string, unknown>;
+    input: Record<string, unknown>;
+  }
+) => {
+  const primary = aiModelProviderService.provider({ useCase: 'studio' });
+  const errors: string[] = [];
+
+  try {
+    return await aiModelProviderService.json<T>({
+      ...params,
+      context: { visualEvidence: context.capsule.visualEvidence },
+      timeoutMs: STUDIO_MODEL_TIMEOUT_MS,
+      useCase: 'studio'
+    });
+  } catch (error) {
+    errors.push(describeModelError(primary, error));
+    if (!isRecoverableModelError(error)) throw error;
+  }
+
+  for (const provider of studioFallbackProviders(primary)) {
+    if (!aiModelProviderService.isConfigured({ provider, useCase: 'studio' })) continue;
+    try {
+      const result = await aiModelProviderService.json<T>({
+        ...params,
+        provider,
+        context: { visualEvidence: context.capsule.visualEvidence },
+        timeoutMs: STUDIO_MODEL_TIMEOUT_MS,
+        useCase: 'studio'
+      });
+      return {
+        ...result,
+        usage: {
+          ...(result.usage || {}),
+          fallbackFrom: primary,
+          fallbackErrors: errors
+        }
+      };
+    } catch (error) {
+      errors.push(describeModelError(provider, error));
+      if (!isRecoverableModelError(error)) break;
+    }
+  }
+
+  throw new Error(`AI Studio JSON generation failed (${errors.join(' | ')})`);
+};
 
 const commonPrompt = (context: StudioGenerationContext, extra: string) =>
   [
@@ -778,8 +897,7 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
   }
 
   if (context.template.renderer === 'quiz') {
-    const response = await aiModelProviderService.json<{ title: string; questions: unknown[] }>({
-      useCase: 'studio',
+    const response = await jsonWithStudioFallback<{ title: string; questions: unknown[] }>(context, {
       instruction: commonPrompt(
         context,
         [
@@ -803,9 +921,7 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
         prompt: latestPrompt(context),
         contextPreview: context.capsule.promptContextPreview,
         sources: context.capsule.citations.slice(0, 12)
-      },
-      context: { visualEvidence: context.capsule.visualEvidence },
-      timeoutMs: STUDIO_MODEL_TIMEOUT_MS
+      }
     });
     const rawContent = JSON.stringify(response.data, null, 2);
     const structured = applyPracticeContract(context, normalizeStudioArtifact(context, rawContent));
@@ -818,8 +934,7 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
   }
 
   if (context.template.renderer === 'flashcards') {
-    const response = await aiModelProviderService.json<{ title: string; description?: string; cards: unknown[] }>({
-      useCase: 'studio',
+    const response = await jsonWithStudioFallback<{ title: string; description?: string; cards: unknown[] }>(context, {
       instruction: commonPrompt(
         context,
         [
@@ -839,9 +954,7 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
         flashcardOptions: context.input.options || null,
         contextPreview: context.capsule.promptContextPreview,
         sources: context.capsule.citations.slice(0, 12)
-      },
-      context: { visualEvidence: context.capsule.visualEvidence },
-      timeoutMs: STUDIO_MODEL_TIMEOUT_MS
+      }
     });
     const rawContent = JSON.stringify(response.data, null, 2);
     const structured = normalizeStudioArtifact(context, rawContent);
@@ -858,8 +971,7 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
     context.template.renderer === 'manim_script' ||
     context.template.renderer === 'remotion_source'
   ) {
-    const response = await aiModelProviderService.json<Record<string, unknown>>({
-      useCase: 'studio',
+    const response = await jsonWithStudioFallback<Record<string, unknown>>(context, {
       instruction: commonPrompt(
         context,
         [
@@ -875,9 +987,7 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
         prompt: latestPrompt(context),
         contextPreview: context.capsule.promptContextPreview,
         sources: context.capsule.citations.slice(0, 12)
-      },
-      context: { visualEvidence: context.capsule.visualEvidence },
-      timeoutMs: STUDIO_MODEL_TIMEOUT_MS
+      }
     });
     const rawContent = JSON.stringify(response.data, null, 2);
     const structured = normalizeStudioArtifact(context, rawContent);
@@ -889,7 +999,7 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
     };
   }
 
-  const response = await aiModelProviderService.chat(
+  const response = await chatWithStudioFallback(
     [
       {
         role: 'user',
@@ -931,8 +1041,7 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
         )
       }
     ],
-    undefined,
-    { timeoutMs: STUDIO_MODEL_TIMEOUT_MS, useCase: 'studio', visualEvidence: context.capsule.visualEvidence }
+    context
   );
 
   const structured = applyPracticeContract(context, normalizeStudioArtifact(context, response.reply.trim()));
@@ -949,12 +1058,19 @@ export const studioGeneratorRegistry = {
     try {
       return await generateWithModel(context);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        isRecoverableModelError(error) ||
+        /AI Studio (model|JSON) generation failed/i.test(message)
+      ) {
+        throw error;
+      }
       const fallbackContent = fallbackByGenerator[context.template.generator](context);
       const structured = applyPracticeContract(context, normalizeStudioArtifact(context, fallbackContent));
       return {
         content: renderStudioArtifact(structured),
         structured,
-        source: `fallback:${error instanceof Error ? error.message : String(error)}`,
+        source: `fallback:${message}`,
         warnings: ['Model generation failed; fallback content was used.']
       };
     }

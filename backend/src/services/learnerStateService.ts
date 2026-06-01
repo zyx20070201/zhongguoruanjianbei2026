@@ -482,11 +482,10 @@ export class LearnerStateService {
     for (const signal of stableSignals) {
       await tx.$executeRawUnsafe(
         `INSERT INTO "LearnerStateSignal" ("id","signalKey","layer","dimension","label","value","confidence","status","evidenceIdsJson","sourcesJson","rationale","firstObservedAt","lastObservedAt","workspaceId","learnerStateCoreId","updatedAt")
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+         VALUES (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
          ON CONFLICT("learnerStateCoreId","signalKey") DO UPDATE SET
            "layer"=excluded."layer","dimension"=excluded."dimension","label"=excluded."label","value"=excluded."value","confidence"=excluded."confidence","status"=excluded."status",
            "evidenceIdsJson"=excluded."evidenceIdsJson","sourcesJson"=excluded."sourcesJson","rationale"=excluded."rationale","firstObservedAt"=excluded."firstObservedAt","lastObservedAt"=excluded."lastObservedAt","updatedAt"=CURRENT_TIMESTAMP`,
-        signal.id,
         signal.id,
         signal.layer,
         signal.dimension,
@@ -506,11 +505,10 @@ export class LearnerStateService {
     for (const observation of state.observationMemory.observations) {
       await tx.$executeRawUnsafe(
         `INSERT INTO "LearnerObservation" ("id","observationKey","dimension","label","value","confidence","status","evidenceIdsJson","sourcesJson","rationale","observedAt","workspaceId","learnerStateCoreId","updatedAt")
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+         VALUES (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
          ON CONFLICT("learnerStateCoreId","observationKey") DO UPDATE SET
            "dimension"=excluded."dimension","label"=excluded."label","value"=excluded."value","confidence"=excluded."confidence","status"=excluded."status",
            "evidenceIdsJson"=excluded."evidenceIdsJson","sourcesJson"=excluded."sourcesJson","rationale"=excluded."rationale","observedAt"=excluded."observedAt","updatedAt"=CURRENT_TIMESTAMP`,
-        observation.id,
         observation.id,
         observation.id.includes(':knowledgeState:') ? 'knowledgeState' :
           observation.id.includes(':preferenceStyle:') ? 'preferenceStyle' :

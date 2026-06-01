@@ -67,6 +67,7 @@ model Workspace {
   knowledgeChunks    KnowledgeChunk[]
   knowledgeIndexJobs KnowledgeIndexJob[]
   courseKnowledgeConcepts CourseKnowledgeConcept[]
+  courseKnowledgeConceptTags CourseKnowledgeConceptTag[]
   courseKnowledgeRelations CourseKnowledgeRelation[]
   courseKnowledgeBindings CourseKnowledgeBinding[]
   courseKnowledgeExercises CourseKnowledgeExercise[]
@@ -838,6 +839,23 @@ model KnowledgeChunk {
   fileObject   FileSystemObject @relation(fields: [fileObjectId], references: [id])
 
   @@unique([fileObjectId, chunkIndex])
+  @@index([workspaceId, fileObjectId, updatedAt])
+  @@index([workspaceId, updatedAt])
+}
+
+model KnowledgeChunkTerm {
+  workspaceId    String
+  fileObjectId  String
+  chunkId       String
+  term          String
+  termFrequency Int      @default(0)
+  fieldWeight   Float    @default(1)
+  updatedAt     DateTime @default(now())
+
+  @@id([chunkId, term])
+  @@index([workspaceId, term])
+  @@index([workspaceId, fileObjectId, term])
+  @@index([workspaceId, fileObjectId])
 }
 
 model KnowledgeIndexJob {

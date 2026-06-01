@@ -4,6 +4,22 @@ const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'BAAI/bge-m3';
 const RERANKER_MODEL = process.env.RERANKER_MODEL || 'BAAI/bge-reranker-v2-m3';
 const EMBEDDING_TIMEOUT_MS = Number(process.env.EMBEDDING_TIMEOUT_MS || 30000);
 const RERANKER_TIMEOUT_MS = Number(process.env.RERANKER_TIMEOUT_MS || 30000);
+const RETRY_ATTEMPTS = Number(process.env.EMBEDDING_RETRY_ATTEMPTS || 2);
+const RETRY_DELAY_MS = Number(process.env.EMBEDDING_RETRY_DELAY_MS || 800);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const errorMessage = (error: unknown) => {
+  if (!(error instanceof Error)) return String(error);
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message) return `${error.message}: ${cause.message}`;
+  return error.message;
+};
+
+const isRetryableError = (error: unknown) => {
+  const message = errorMessage(error).toLowerCase();
+  return /fetch failed|socket|econnreset|econnrefused|etimedout|terminated|timeout|und_err/i.test(message);
+};
 
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
   const controller = new AbortController();
@@ -21,25 +37,33 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label: str
 };
 
 const postJson = async <T>(baseUrl: string, path: string, body: unknown, timeoutMs: number): Promise<T> => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= RETRY_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${baseUrl.replace(/\/$/, '')}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
+      }
+
+      return (await response.json()) as T;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= RETRY_ATTEMPTS || !isRetryableError(error)) throw error;
+      await sleep(RETRY_DELAY_MS * (attempt + 1));
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return (await response.json()) as T;
-  } finally {
-    clearTimeout(timeout);
   }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 };
 
 const normalizeEmbeddingResponse = (value: any): number[] => {
@@ -164,6 +188,7 @@ export class EmbeddingService {
         '/rerank',
         {
           query,
+          texts: documents,
           documents,
           model: RERANKER_MODEL,
           normalize: true

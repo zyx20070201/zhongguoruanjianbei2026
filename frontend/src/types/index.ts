@@ -38,6 +38,20 @@ export interface FileSystemObject {
   workspaceId: string;
   parentId?: string;
   children?: FileSystemObject[];
+  knowledgeIndexJobs?: Array<{
+    id: string;
+    status: string;
+    extractor?: string | null;
+    errorMessage?: string | null;
+    chunkCount?: number;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  }>;
+  _count?: {
+    knowledgeChunks?: number;
+  };
   
   // Keep type for backwards compatibility during migration
   type?: string; 
@@ -244,7 +258,55 @@ export interface LearningGoalDraft {
 export interface LearningTerminalMessage {
   role: 'user' | 'assistant';
   content: string;
+  files?: TerminalChatFile[];
+  mode?: 'chat' | 'agentic';
+  statusHistory?: Array<{
+    done: boolean;
+    action: string;
+    description?: string;
+    hidden?: boolean;
+    query?: string;
+    queries?: string[];
+    count?: number;
+  }>;
   goalDraft?: LearningGoalDraft;
+  proposedActions?: Array<{
+    id: string;
+    type: string;
+    title: string;
+    description: string;
+    risk: 'low' | 'medium' | 'high';
+    requiresConfirmation: boolean;
+    payload?: Record<string, unknown>;
+  }>;
+  executedActions?: Array<{
+    id: string;
+    proposalId: string;
+    type: string;
+    title: string;
+    success: boolean;
+    summary: string;
+    result?: Record<string, unknown>;
+    error?: string;
+  }>;
+  agentTrace?: Array<{
+    id: string;
+    at: string;
+    node: string;
+    summary: string;
+    details?: Record<string, unknown>;
+  }>;
+  evidence?: Array<{
+    id: string;
+    kind: string;
+    title: string;
+    summary: string;
+    content?: string;
+    source?: string;
+    score?: number;
+    metadata?: Record<string, unknown>;
+  }>;
+  followUps?: string[];
   askUserToSave?: {
     text: string;
     candidate?: {
@@ -254,6 +316,25 @@ export interface LearningTerminalMessage {
       reason: string;
     } | null;
   } | null;
+}
+
+export interface TerminalChatFile {
+  id: string;
+  name: string;
+  path?: string;
+  mimeType?: string;
+  size?: number;
+  extension?: string;
+  fileCategory?: string;
+  resourceType?: string;
+  scope?: string;
+  origin?: string;
+  downloadUrl?: string;
+  status?: 'uploading' | 'ready' | 'error';
+  error?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface PersonalizedWorkspaceIntegration {
@@ -349,9 +430,62 @@ export interface LearningTerminalAction {
 
 export interface LearningTerminalResponse {
   reply: string;
+  mode?: 'chat' | 'agentic';
   goalDraft?: LearningGoalDraft;
   suggestedActions?: LearningTerminalAction[];
   sessionId?: string;
+  runId?: string;
+  checkpointThreadId?: string;
+  status?: 'completed' | 'approval_required';
+  proposedActions?: Array<{
+    id: string;
+    type: string;
+    title: string;
+    description: string;
+    risk: 'low' | 'medium' | 'high';
+    requiresConfirmation: boolean;
+    payload?: Record<string, unknown>;
+  }>;
+  approvalRequest?: {
+    proposals: Array<{
+      id: string;
+      type: string;
+      title: string;
+      description: string;
+      risk: 'low' | 'medium' | 'high';
+      requiresConfirmation: boolean;
+      payload?: Record<string, unknown>;
+    }>;
+    message: string;
+  };
+  executedActions?: Array<{
+    id: string;
+    proposalId: string;
+    type: string;
+    title: string;
+    success: boolean;
+    summary: string;
+    result?: Record<string, unknown>;
+    error?: string;
+  }>;
+  agentTrace?: Array<{
+    id: string;
+    at: string;
+    node: string;
+    summary: string;
+    details?: Record<string, unknown>;
+  }>;
+  evidence?: Array<{
+    id: string;
+    kind: string;
+    title: string;
+    summary: string;
+    content?: string;
+    source?: string;
+    score?: number;
+    metadata?: Record<string, unknown>;
+  }>;
+  followUps?: string[];
   memoryContext?: {
     askUserToSave?: {
       text: string;

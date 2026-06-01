@@ -5,6 +5,7 @@ export interface CreateFolderDTO {
   parentPath?: string;
   workbenchId?: string;
   resourceRole?: string;
+  metadata?: Record<string, unknown>;
   scope?: 'workspace' | 'workbench' | string;
 }
 
@@ -58,6 +59,7 @@ export interface SaveGeneratedContentDTO {
   scope?: 'workspace' | 'workbench' | string;
   origin?: string;
   metadata?: Record<string, unknown>;
+  indexInBackground?: boolean;
 }
 
 export interface UpdateNodeTagsDTO {

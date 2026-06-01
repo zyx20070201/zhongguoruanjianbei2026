@@ -7,6 +7,7 @@ import {
   documentTextExtractionService
 } from './documentTextExtractionService';
 import { knowledgeIndexingService } from './knowledgeIndexingService';
+import { knowledgeIndexQueueService } from './knowledgeIndexQueueService';
 import { knowledgeSearchService } from './knowledgeSearchService';
 import { documentChunkStore } from './documentChunkStore';
 import { findWorkbenchResourceFiles } from './workbenchResourceScope';
@@ -97,6 +98,7 @@ export interface ClientWorkbenchContext {
     content?: string;
   } | null;
   openPanels?: ClientPanelContext[];
+  visiblePanels?: ClientPanelContext[];
   lockedSelection?: {
     id?: string;
     panelId?: string;
@@ -131,11 +133,21 @@ interface ContextRouteDecision {
   confidence?: number;
 }
 
+interface CapsuleTraceItem {
+  step: string;
+  status: 'completed' | 'failed';
+  durationMs: number;
+  summary?: string;
+}
+
 const DEFAULT_TOKEN_BUDGET = Number(process.env.CONTEXT_TOKEN_BUDGET || 12000);
 const FULL_TEXT_LIMIT = Number(process.env.CONTEXT_ACTIVE_FILE_FULL_TEXT_TOKENS || 20000);
 const SUMMARY_LIMIT = Number(process.env.CONTEXT_ACTIVE_FILE_SUMMARY_TOKENS || 100000);
 const CHAT_ATTACHMENT_CACHE_TTL_MS = Number(process.env.CHAT_ATTACHMENT_CACHE_TTL_MS || 1000 * 60 * 60 * 6);
 const CHAT_ATTACHMENT_CACHE_MAX = Number(process.env.CHAT_ATTACHMENT_CACHE_MAX || 80);
+const WORKBENCH_RESOURCE_RECORD_CACHE_TTL_MS = Number(process.env.WORKBENCH_RESOURCE_RECORD_CACHE_TTL_MS || 30_000);
+
+const workbenchResourceRecordCache = new Map<string, { expiresAt: number; records: any[] }>();
 
 const clip = (value: string | null | undefined, maxLength = 500) => {
   const text = String(value || '').trim();
@@ -622,26 +634,60 @@ export class WorkbenchContextService {
     messages: ChatMessage[];
     profileSummary?: string;
     tokenBudget?: number;
-  }): Promise<{ capsule: ContextCapsule; policy: ContextPolicyDecision; promptPreview: string }> {
-    const workspace = await prisma.workspace.findUnique({ where: { id: input.context.workspaceId } });
+  }): Promise<{ capsule: ContextCapsule; policy: ContextPolicyDecision; promptPreview: string; trace: CapsuleTraceItem[] }> {
+    const traceItems: CapsuleTraceItem[] = [];
+    const trace = async <T>(step: string, action: () => Promise<T>, summarize?: (value: T) => string): Promise<T> => {
+      const startedAt = Date.now();
+      try {
+        const value = await action();
+        traceItems.push({
+          step,
+          status: 'completed',
+          durationMs: Date.now() - startedAt,
+          summary: summarize ? summarize(value) : undefined
+        });
+        return value;
+      } catch (error) {
+        traceItems.push({
+          step,
+          status: 'failed',
+          durationMs: Date.now() - startedAt,
+          summary: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
+      }
+    };
+
+    const workspace = await trace('workspace.load', () => prisma.workspace.findUnique({ where: { id: input.context.workspaceId } }), (value) => `found=${value ? 'yes' : 'no'}`);
     if (!workspace) throw new Error('Workspace not found');
 
     const tokenBudget = input.tokenBudget || DEFAULT_TOKEN_BUDGET;
     const openPanels = input.context.openPanels || [];
+    const submittedVisiblePanels = input.context.visiblePanels || [];
     const activePanelId = input.context.activePanelId || null;
-    const activePanel = openPanels.find((panel) => panel.panelId === activePanelId) || openPanels[0] || null;
+    const activePanel =
+      openPanels.find((panel) => panel.panelId === activePanelId) ||
+      submittedVisiblePanels.find((panel) => panel.panelId === activePanelId) ||
+      submittedVisiblePanels[0] ||
+      openPanels[0] ||
+      null;
+    const visiblePanels = this.resolveVisiblePanels(openPanels, submittedVisiblePanels, activePanel);
     const lockedSelectionPanel = this.panelFromLockedSelection(input.context.lockedSelection);
     const activeFileId = input.context.activeFileId || activePanel?.fileId || input.context.activeFile?.id || null;
     const requestedMode = input.context.contextMode || 'auto';
     const latestUserQuery = [...input.messages].reverse().find((message) => message.role === 'user')?.content || '';
-    const routeDecision = await this.resolveContextRoute({
-      requestedMode,
-      latestUserQuery,
-      recentMessages: input.context.recentMessages || input.messages,
-      workbenchTitle: input.context.workbenchTitle,
-      activePanelTitle: openPanels.find((panel) => panel.panelId === activePanelId)?.fileName || openPanels.find((panel) => panel.panelId === activePanelId)?.title
-    });
-    const mode = routeDecision.mode;
+    const routeDecisionPromise = trace(
+      'route.resolve',
+      () =>
+        this.resolveContextRoute({
+          requestedMode,
+          latestUserQuery,
+          recentMessages: input.context.recentMessages || input.messages,
+          workbenchTitle: input.context.workbenchTitle,
+          activePanelTitle: activePanel?.fileName || activePanel?.title
+      }),
+      (value) => `mode=${value.mode}, reason=${clip(value.reason, 120)}`
+    );
     const enabledChips = new Set(
       (input.context.activeContextChips || []).filter((chip) => chip.enabled !== false).map((chip) => chip.kind)
     );
@@ -651,6 +697,7 @@ export class WorkbenchContextService {
       input.context.lockedSelection?.content || input.context.selectedText || activePanel?.selectedText || '',
       12000
     );
+    const hasExplicitLockedSelection = Boolean(input.context.lockedSelection?.content?.trim());
     const selectedResourceIds = [
       ...new Set((input.context.selectedResourceIds || []).filter((value): value is string => typeof value === 'string' && Boolean(value)))
     ];
@@ -659,19 +706,45 @@ export class WorkbenchContextService {
       .map(sanitizeChatSessionAttachment)
       .filter((attachment): attachment is ChatSessionAttachmentContext => Boolean(attachment))
       .slice(-8);
-    chatSessionAttachments = await this.enrichChatSessionAttachments(chatSessionAttachments, input.context.sessionId);
+    chatSessionAttachments = await trace(
+      'attachments.enrich',
+      () => this.enrichChatSessionAttachments(chatSessionAttachments, input.context.sessionId),
+      (value) => `attachments=${value.length}`
+    );
 
-    let fileRecords = await this.loadResourceRecords(input.context, openPanels, activeFileId);
-    fileRecords = await this.ensureIndexedRecords(input.context.workspaceId, fileRecords);
+    let fileRecords = await trace(
+      'resource_records.load',
+      () => this.loadResourceRecords(input.context, visiblePanels, activeFileId),
+      (value) => `records=${value.length}, visiblePanels=${visiblePanels.length}, openPanels=${openPanels.length}`
+    );
+    fileRecords = await trace(
+      'resource_records.ensure_indexed',
+      () => this.ensureIndexedRecords(input.context.workspaceId, fileRecords),
+      (value) => `records=${value.length}`
+    );
     const recordsById = new Map(fileRecords.map((file) => [file.id, file] as const));
-    const visualEvidence = await this.buildVisualEvidence(input.context.workspaceId, fileRecords);
+    const visualEvidenceRecords = this.filterRecordsByPanelScope(fileRecords, [
+      ...visiblePanels,
+      ...(lockedSelectionPanel ? [lockedSelectionPanel] : [])
+    ], activeFileId);
+    const visualEvidence = await trace(
+      'visual_evidence.build',
+      () => this.buildVisualEvidence(input.context.workspaceId, visualEvidenceRecords),
+      (value) => `items=${value.length}, scopedRecords=${visualEvidenceRecords.length}`
+    );
     const activeRecord = activeFileId ? recordsById.get(activeFileId) : undefined;
-    const activeFileContent =
-      typeof input.context.activeFile?.content === 'string'
-        ? input.context.activeFile.content
-        : activeFileId
-          ? await this.readFileTextForContext(input.context.workspaceId, activeFileId, activeRecord).catch(() => '')
-          : '';
+    const activeFileContent = await trace(
+      'active_file.read',
+      () =>
+        Promise.resolve(
+          typeof input.context.activeFile?.content === 'string'
+            ? input.context.activeFile.content
+            : activeFileId
+              ? this.readFileTextForContext(input.context.workspaceId, activeFileId, activeRecord).catch(() => '')
+              : ''
+        ),
+      (value) => `chars=${value.length}`
+    );
     const activeTokens = estimateTokens(activeFileContent);
 
     const fallbackReasons: string[] = [];
@@ -682,13 +755,17 @@ export class WorkbenchContextService {
         ? recordsById.get(lockedSelectionPanel.fileId)
         : activeRecord;
     const selection =
-      selectedText && selectionPanel && chipEnabled('selection')
+      selectedText && selectionPanel && (chipEnabled('selection') || hasExplicitLockedSelection)
         ? this.buildSelection(selectionPanel, selectedText, selectionRecord)
         : undefined;
-    const viewport =
-      activePanel && chipEnabled('viewport')
-        ? await this.buildViewport(input.context.workspaceId, activePanel, activeRecord, fallbackReasons)
-        : undefined;
+    const viewport = await trace(
+      'viewport.build',
+      async () => {
+        if (!chipEnabled('viewport')) return undefined;
+        return this.buildViewportContext(input.context.workspaceId, visiblePanels, recordsById, activePanel, activeRecord, fallbackReasons);
+      },
+      (value) => `panels=${visiblePanels.length}, chars=${value?.content?.length || 0}`
+    );
     const retrievalQuery = this.buildRetrievalQuery({
       userQuery: latestUserQuery,
       selection: selection?.content,
@@ -697,20 +774,29 @@ export class WorkbenchContextService {
       activeFileName: activeRecord?.name || input.context.activeFile?.name
     });
 
-    const policy = this.policyEngine.decide({
-      userQuery: latestUserQuery,
-      contextMode: mode,
-      hasSelection: Boolean(selection),
-      hasViewport: Boolean(viewport?.content || viewport?.locator),
-      activeFileTokenCount: activeTokens,
-      resourceCount: fileRecords.length,
-      tokenBudget
-    });
+    const routeDecision = await routeDecisionPromise;
+    const mode = routeDecision.mode;
+    const policy = await trace(
+      'policy.decide',
+      () =>
+        Promise.resolve(
+          this.policyEngine.decide({
+            userQuery: latestUserQuery,
+            contextMode: mode,
+            hasSelection: Boolean(selection),
+            hasViewport: Boolean(viewport?.content || viewport?.locator),
+            activeFileTokenCount: activeTokens,
+            resourceCount: fileRecords.length,
+            tokenBudget
+          })
+        ),
+      (value) => `ragScope=${value.ragScope}, maxRetrieved=${value.maxRetrievedChunks}`
+    );
     if (routeDecision.reason && requestedMode === 'auto') {
       policy.reasons.push(`semantic route: ${routeDecision.reason}${typeof routeDecision.confidence === 'number' ? ` (${routeDecision.confidence})` : ''}`);
     }
 
-    if (!chipEnabled('selection') || selectedResourceFocus) policy.includeSelection = false;
+    if ((!chipEnabled('selection') && !hasExplicitLockedSelection) || selectedResourceFocus) policy.includeSelection = false;
     if (!chipEnabled('viewport') || selectedResourceFocus) policy.includeViewport = false;
     if (!chipEnabled('active_file') || selectedResourceFocus) {
       policy.includeActiveFileFullText = false;
@@ -720,22 +806,39 @@ export class WorkbenchContextService {
       policy.includeResourceSummaries = false;
       if (policy.ragScope === 'workbench') policy.ragScope = 'active_file';
     }
+    if (hasExplicitLockedSelection && !policy.reasons.includes('存在显式锁定/拖入选区，强制保留 selection layer')) {
+      policy.includeSelection = true;
+      if (!policy.requiredLayers?.includes('selection')) policy.requiredLayers?.push('selection');
+      policy.reasons.push('存在显式锁定/拖入选区，强制保留 selection layer');
+    }
 
-    const resources = this.buildResources(fileRecords, activeFileId, selectedResourceFocus ? selectedResourceIds : undefined);
+    const priorityResourceIds = selectedResourceFocus
+      ? selectedResourceIds
+      : this.prioritizedResourceIds(visiblePanels, activeFileId, lockedSelectionPanel);
+    const resources = await trace(
+      'resources.build',
+      () => Promise.resolve(this.buildResources(fileRecords, activeFileId, priorityResourceIds)),
+      (value) => `resources=${value.length}, priority=${priorityResourceIds.length}`
+    );
     const activeFile =
       activeFileId && activeRecord && chipEnabled('active_file')
         ? this.buildActiveFile(activeRecord, activeFileContent, activeTokens, policy)
         : undefined;
 
-    let retrievedChunks = await this.retrieve({
-      query: retrievalQuery,
-      workspaceId: input.context.workspaceId,
-      activeFileId: selectedResourceFocus ? null : activeFileId,
-      resourceFileIds: resources.map((resource) => resource.fileId),
-      videoResourceFileIds: resources.filter((resource) => resource.type === 'video').map((resource) => resource.fileId),
-      policy,
-      selectedResourceFocus
-    });
+    let retrievedChunks = await trace(
+      'knowledge.retrieve',
+      () =>
+        this.retrieve({
+          query: retrievalQuery,
+          workspaceId: input.context.workspaceId,
+          activeFileId: selectedResourceFocus ? null : activeFileId,
+          resourceFileIds: resources.map((resource) => resource.fileId),
+          videoResourceFileIds: resources.filter((resource) => resource.type === 'video').map((resource) => resource.fileId),
+          policy,
+          selectedResourceFocus
+        }),
+      (value) => `chunks=${value.length}, resourceFileIds=${resources.length}`
+    );
 
     retrievedChunks = [
       ...this.retrieveAttachmentChunks(chatSessionAttachments, retrievalQuery, tokenBudget, policy),
@@ -786,7 +889,11 @@ export class WorkbenchContextService {
         })
       )
     );
-    const sourceMap = this.buildSourceMap(this.dedupeCitations(citations));
+    const sourceMap = await trace(
+      'citations.build',
+      () => Promise.resolve(this.buildSourceMap(this.dedupeCitations(citations))),
+      (value) => `sources=${value.length}`
+    );
     retrievedChunks = retrievedChunks.map((chunk) => {
       const matchedSource = sourceMap.find(
         (source) =>
@@ -843,21 +950,112 @@ export class WorkbenchContextService {
       createdAt: new Date().toISOString()
     };
 
-    capsule.estimatedTokens = this.estimateCapsuleTokens(capsule);
-    capsule.estimatedTokensByLayer = this.estimateTokensByLayer(capsule);
-    this.enforceBudget(capsule);
-    capsule.promptContextPreview = this.buildPromptPreview(capsule);
+    await trace(
+      'budget.enforce',
+      () =>
+        Promise.resolve().then(() => {
+          capsule.estimatedTokens = this.estimateCapsuleTokens(capsule);
+          capsule.estimatedTokensByLayer = this.estimateTokensByLayer(capsule);
+          this.enforceBudget(capsule);
+          capsule.promptContextPreview = this.buildPromptPreview(capsule);
+          return capsule.estimatedTokens;
+        }),
+      (value) => `estimatedTokens=${value}`
+    );
+    capsule.buildTrace = traceItems;
 
     return {
       capsule,
       policy,
-      promptPreview: capsule.promptContextPreview || ''
+      promptPreview: capsule.promptContextPreview || '',
+      trace: traceItems
+    };
+  }
+
+  private resolveVisiblePanels(openPanels: ClientPanelContext[], visiblePanels: ClientPanelContext[], activePanel: ClientPanelContext | null) {
+    const byId = new Map(openPanels.map((panel) => [panel.panelId, panel] as const));
+    const resolved = [
+      ...(activePanel ? [activePanel] : []),
+      ...visiblePanels
+    ]
+      .map((panel) => byId.get(panel.panelId) || panel)
+      .filter((panel) => Boolean(panel?.panelId));
+    const seen = new Set<string>();
+    return resolved.filter((panel) => {
+      if (seen.has(panel.panelId)) return false;
+      seen.add(panel.panelId);
+      return true;
+    });
+  }
+
+  private prioritizedResourceIds(
+    visiblePanels: ClientPanelContext[],
+    activeFileId: string | null,
+    lockedSelectionPanel: ClientPanelContext | null
+  ) {
+    return [
+      lockedSelectionPanel?.fileId,
+      activeFileId,
+      ...visiblePanels.map((panel) => panel.fileId)
+    ].filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index);
+  }
+
+  private filterRecordsByPanelScope(fileRecords: any[], panels: ClientPanelContext[], activeFileId: string | null) {
+    const scopedIds = new Set(
+      [
+        activeFileId,
+        ...panels.map((panel) => panel.fileId)
+      ].filter((value): value is string => Boolean(value))
+    );
+    if (scopedIds.size === 0) return [];
+    return fileRecords.filter((file) => scopedIds.has(file.id));
+  }
+
+  private async buildViewportContext(
+    workspaceId: string,
+    visiblePanels: ClientPanelContext[],
+    recordsById: Map<string, any>,
+    activePanel: ClientPanelContext | null,
+    activeRecord: any,
+    fallbackReasons: string[]
+  ) {
+    const orderedPanels = [
+      ...(activePanel ? [activePanel] : []),
+      ...visiblePanels.filter((panel) => panel.panelId !== activePanel?.panelId)
+    ].slice(0, 4);
+    if (!orderedPanels.length) return undefined;
+
+    const viewports = await Promise.all(
+      orderedPanels.map((panel) =>
+        this.buildViewport(
+          workspaceId,
+          panel,
+          panel.panelId === activePanel?.panelId ? activeRecord : panel.fileId ? recordsById.get(panel.fileId) : undefined,
+          fallbackReasons
+        )
+      )
+    );
+    const primary = viewports[0];
+    if (viewports.length <= 1) return primary;
+    return {
+      ...primary,
+      content: viewports
+        .map((viewport, index) => {
+          const label = index === 0 ? 'Active visible panel' : `Visible panel ${index + 1}`;
+          return `[${label}: ${viewport.fileName}]\n${viewport.content || ''}`;
+        })
+        .filter(Boolean)
+        .join('\n\n'),
+      locator: {
+        ...primary.locator,
+        visiblePanelCount: viewports.length
+      } as ViewportContext['locator']
     };
   }
 
   private async loadResourceRecords(
     context: ClientWorkbenchContext,
-    openPanels: ClientPanelContext[],
+    visiblePanels: ClientPanelContext[],
     activeFileId: string | null
   ) {
     const selectedResourceIds = [
@@ -867,7 +1065,7 @@ export class WorkbenchContextService {
     const hasExplicitResourceSelection = selectedResourceIds.length > 0;
     const explicitIds = [
       ...new Set(
-        openPanels
+        visiblePanels
           .map((panel) => panel.fileId)
           .concat(activeFileId)
           .concat(context.lockedSelection?.fileId || null)
@@ -880,27 +1078,31 @@ export class WorkbenchContextService {
     }
 
     if (context.workbenchId) {
-      const records = await findWorkbenchResourceFiles({
-        workspaceId: context.workspaceId,
-        workbenchId: context.workbenchId,
-        include: {
-          knowledgeChunks: { select: { id: true, summary: true, tokenEstimate: true, metadataJson: true }, take: 1 }
-        },
-        orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }]
-      });
+      const cacheKey = `${context.workspaceId}:${context.workbenchId}:records`;
+      const cached = workbenchResourceRecordCache.get(cacheKey);
+      const records =
+        cached && cached.expiresAt > Date.now()
+          ? cached.records
+          : await findWorkbenchResourceFiles({
+              workspaceId: context.workspaceId,
+              workbenchId: context.workbenchId,
+              include: {
+                knowledgeChunks: { select: { id: true, summary: true, tokenEstimate: true, metadataJson: true }, take: 1 }
+              },
+              orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }]
+            });
+      if (!cached || cached.expiresAt <= Date.now()) {
+        workbenchResourceRecordCache.set(cacheKey, {
+          expiresAt: Date.now() + WORKBENCH_RESOURCE_RECORD_CACHE_TTL_MS,
+          records
+        });
+      }
 
       if (selectedResourceOnly) {
         const selectedSet = new Set(selectedResourceIds);
         return records.filter((record) => selectedSet.has(record.id));
       }
-
-      if (explicitIds.length === 0) {
-        return records;
-      }
-
-      const explicitSet = new Set(explicitIds);
-      const explicitRecords = records.filter((record) => explicitSet.has(record.id));
-      return explicitRecords.length ? explicitRecords : records;
+      return records;
     }
 
     if (explicitIds.length) {
@@ -1025,20 +1227,19 @@ export class WorkbenchContextService {
 
     if (missingIndexedRecords.length === 0) return fileRecords;
 
-    await Promise.all(
-      missingIndexedRecords.map((file) => {
-        if (fileTypeFromName(file) === 'video' && hasIndexableVideoAnalysis(file)) {
-          return videoAnalysisService.indexStoredAnalysis(workspaceId, file.id, 'context-system-on-demand-video').catch(() => null);
-        }
-        return knowledgeIndexingService
-          .indexFile({
-            workspaceId,
-            fileObjectId: file.id,
-            reason: 'context-system-on-demand'
-          })
-          .catch(() => null);
-      })
-    );
+    missingIndexedRecords.forEach((file) => {
+      if (fileTypeFromName(file) === 'video' && hasIndexableVideoAnalysis(file)) {
+        videoAnalysisService.indexStoredAnalysis(workspaceId, file.id, 'context-system-background-video').catch(() => null);
+        return;
+      }
+      knowledgeIndexQueueService
+        .enqueueFile({
+          workspaceId,
+          fileObjectId: file.id,
+          reason: 'context-system-background'
+        })
+        .catch(() => null);
+    });
 
     return prisma.fileSystemObject.findMany({
       where: { workspaceId, id: { in: fileRecords.map((file) => file.id) }, nodeType: 'file' },

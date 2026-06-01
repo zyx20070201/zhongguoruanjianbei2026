@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { aiStudioService, StudioResourceType } from '../services/aiStudioService';
 import { studioV2Service } from '../services/studio/studioV2Service';
 import { studioRenderJobService } from '../services/studio/renderJobService';
+import { codeExecutionService } from '../services/studio/codeExecutionService';
 import { StudioGoalCategory } from '../services/studio/types';
 import { STUDIO_VISUALIZATION_IR_JSON_SCHEMA } from '../services/studio/visualizationIr';
 
@@ -38,6 +39,34 @@ router.get('/visualization-ir/schema', (_req: Request, res: Response) => {
     schemaVersion: 'studio_visualization_schema_endpoint.v1',
     schema: STUDIO_VISUALIZATION_IR_JSON_SCHEMA
   });
+});
+
+router.get('/code-lab/languages', (_req: Request, res: Response) => {
+  return res.json({ languages: codeExecutionService.supportedLanguages() });
+});
+
+router.post('/code-lab/run', async (req: Request, res: Response) => {
+  const { language, sourceCode, stdin } = req.body ?? {};
+
+  if (typeof language !== 'string' || !language.trim()) {
+    return res.status(400).json({ error: 'language is required' });
+  }
+
+  if (typeof sourceCode !== 'string' || !sourceCode.trim()) {
+    return res.status(400).json({ error: 'sourceCode is required' });
+  }
+
+  try {
+    const result = await codeExecutionService.run({
+      language,
+      sourceCode,
+      stdin: typeof stdin === 'string' ? stdin : ''
+    });
+    return res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Code Lab execution failed';
+    return res.status(502).json({ error: message });
+  }
 });
 
 router.post('/recommend', async (req: Request, res: Response) => {

@@ -154,6 +154,37 @@ const openaiApiMode = () => {
   return value === 'chat_completions' || value === 'chat-completions' || value === 'chat' ? 'chat_completions' : 'responses';
 };
 
+const textFromOpenAiContentPart = (part: any): string => {
+  if (!part) return '';
+  if (typeof part === 'string') return part;
+  if (typeof part.text === 'string') return part.text;
+  if (typeof part.output_text === 'string') return part.output_text;
+  if (typeof part.content === 'string') return part.content;
+  if (Array.isArray(part.content)) return part.content.map(textFromOpenAiContentPart).join('');
+  return '';
+};
+
+const extractOpenAiChatReply = (data: any) => {
+  const message = data?.choices?.[0]?.message;
+  const content = message?.content;
+  const text = Array.isArray(content)
+    ? content.map(textFromOpenAiContentPart).join('')
+    : textFromOpenAiContentPart(content);
+  return text.trim();
+};
+
+const extractOpenAiResponseReply = (data: any) => {
+  const outputText = textFromOpenAiContentPart(data?.output_text).trim();
+  if (outputText) return outputText;
+
+  const output = Array.isArray(data?.output) ? data.output : [];
+  return output
+    .flatMap((item: any) => Array.isArray(item?.content) ? item.content : [item?.content])
+    .map(textFromOpenAiContentPart)
+    .join('')
+    .trim();
+};
+
 async function* streamJsonLines(response: Response): AsyncGenerator<any> {
   if (!response.body) return;
   const decoder = new TextDecoder();
@@ -396,8 +427,11 @@ class AiModelProviderService {
       });
       const data = await response.json().catch(() => null) as any;
       if (!response.ok) throw new Error(data?.error?.message || `OpenAI request failed with status ${response.status}`);
-      const reply = data?.choices?.[0]?.message?.content?.trim();
-      if (!reply) throw new Error('OpenAI returned an empty response');
+      const reply = extractOpenAiChatReply(data);
+      if (!reply) {
+        const finishReason = data?.choices?.[0]?.finish_reason;
+        throw new Error(`OpenAI returned an empty response${finishReason ? ` (finish_reason: ${finishReason})` : ''}`);
+      }
       return { reply, model, provider: 'openai', usage: data?.usage || null };
     }
 
@@ -416,10 +450,12 @@ class AiModelProviderService {
     });
     const data = await response.json().catch(() => null) as any;
     if (!response.ok) throw new Error(data?.error?.message || `OpenAI request failed with status ${response.status}`);
-    const reply =
-      data?.output_text ||
-      data?.output?.flatMap((item: any) => item?.content || []).map((part: any) => part?.text || '').join('').trim();
-    if (!reply) throw new Error('OpenAI returned an empty response');
+    const reply = extractOpenAiResponseReply(data);
+    if (!reply) {
+      const status = data?.status;
+      const reason = data?.incomplete_details?.reason || data?.error?.message;
+      throw new Error(`OpenAI returned an empty response${status ? ` (status: ${status})` : ''}${reason ? `: ${reason}` : ''}`);
+    }
     return { reply, model, provider: 'openai', usage: data?.usage || null };
   }
 
@@ -489,6 +525,22 @@ class AiModelProviderService {
       const projection = index === messages.length - 1 && message.role === 'user'
         ? [attachmentTextProjection(options.attachments), visualEvidenceTextProjection(options.visualEvidence)].filter(Boolean).join('\n\n')
         : '';
+      if (message.role === 'user') {
+        const parts: any[] = [{ type: 'text', text: projection ? `${message.content}\n\n${projection}` : message.content }];
+        (options.attachments || []).forEach((attachment) => {
+          if (attachment.kind !== 'image') return;
+          const imageUrl = dataUrlForAttachment(attachment);
+          if (imageUrl) parts.push({ type: 'image_url', image_url: { url: imageUrl } });
+        });
+        (options.visualEvidence || []).forEach((item) => {
+          const imageUrl = dataUrlForVisualEvidence(item);
+          if (imageUrl) parts.push({ type: 'image_url', image_url: { url: imageUrl } });
+        });
+        return {
+          role: message.role,
+          content: parts.length > 1 ? parts : parts[0].text
+        };
+      }
       return {
         role: message.role,
         content: projection ? `${message.content}\n\n${projection}` : message.content

@@ -8,6 +8,8 @@ type ChatMessage = {
   content: string;
 };
 
+type TerminalPersistedMessage = ChatMessage & Record<string, unknown>;
+
 export interface RetrievedConversationMemory {
   id: string;
   sessionId: string;
@@ -23,6 +25,7 @@ export interface ConversationSessionListItem {
   id: string;
   title: string;
   source: string;
+  metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -97,6 +100,56 @@ type RetrievalCandidate = RetrievedConversationMemory & {
 const CONVERSATION_EMBEDDING_VERSION = 'conversation-search-v2';
 
 const searchTextFor = (role: string, content: string) => clip(`${role}: ${content}`, 1800);
+
+const terminalMessageMetadata = (message: TerminalPersistedMessage) => {
+  const { role, content, ...metadata } = message;
+  return metadata;
+};
+
+const toTerminalMessage = (message: any): TerminalPersistedMessage => {
+  const metadata = parseJson<Record<string, unknown>>(message.metadataJson, {});
+  const terminal = metadata.terminalMessage && typeof metadata.terminalMessage === 'object'
+    ? metadata.terminalMessage as Record<string, unknown>
+    : {};
+  return {
+    role: message.role === 'user' ? 'user' : 'assistant',
+    content: message.content,
+    ...terminal
+  };
+};
+
+const sameTerminalMessage = (left: TerminalPersistedMessage, right: TerminalPersistedMessage) =>
+  left.role === right.role && String(left.content || '') === String(right.content || '');
+
+const mergeTerminalMessages = (
+  existing: TerminalPersistedMessage[],
+  incoming: TerminalPersistedMessage[]
+) => {
+  if (!existing.length) return incoming;
+  if (!incoming.length) return existing;
+
+  let bestStart = -1;
+  let bestLength = 0;
+  for (let start = 0; start < existing.length; start += 1) {
+    let length = 0;
+    while (
+      start + length < existing.length &&
+      length < incoming.length &&
+      sameTerminalMessage(existing[start + length], incoming[length])
+    ) {
+      length += 1;
+    }
+    if (length > bestLength) {
+      bestLength = length;
+      bestStart = start;
+    }
+  }
+
+  if (bestStart >= 0 && bestLength > 0) {
+    return [...existing.slice(0, bestStart), ...incoming];
+  }
+  return [...existing, ...incoming];
+};
 
 export class ConversationHistoryService {
   async saveMessages(input: {
@@ -255,6 +308,93 @@ export class ConversationHistoryService {
     });
   }
 
+  async saveTerminalConversation(input: {
+    workspaceId: string;
+    workbenchId?: string | null;
+    userId: string;
+    sessionId?: string | null;
+    title?: string;
+    source: string;
+    messages: TerminalPersistedMessage[];
+    sessionMetadata?: Record<string, unknown>;
+  }) {
+    const sessionId = input.sessionId || crypto.randomUUID();
+    const title = clip(input.title || input.messages.find((message) => message.role === 'user')?.content || 'New chat', 80);
+    const sessionMetadata = {
+      ...(input.sessionMetadata || {}),
+      terminalPersisted: true,
+      updatedFrom: 'terminal_chat_persistence'
+    };
+    await prisma.conversationSession.upsert({
+      where: { id: sessionId },
+      create: {
+        id: sessionId,
+        workspaceId: input.workspaceId,
+        workbenchId: input.workbenchId || null,
+        userId: input.userId,
+        title,
+        source: input.source,
+        metadataJson: stringify(sessionMetadata)
+      },
+      update: {
+        title,
+        workbenchId: input.workbenchId || null,
+        source: input.source,
+        metadataJson: stringify(sessionMetadata),
+        updatedAt: new Date()
+      }
+    });
+
+    const existingRows = await prisma.conversationMessage.findMany({
+      where: { sessionId, workspaceId: input.workspaceId },
+      orderBy: { createdAt: 'asc' }
+    });
+    const existingMessages = existingRows.map(toTerminalMessage);
+    const nextMessages = mergeTerminalMessages(existingMessages, input.messages);
+
+    if (existingRows.length) {
+      await prisma.conversationMessage.deleteMany({
+        where: {
+          sessionId,
+          workspaceId: input.workspaceId
+        }
+      });
+    }
+
+    const savedIds: string[] = [];
+    for (const [index, message] of nextMessages.entries()) {
+      const role = message.role === 'user' ? 'user' : 'assistant';
+      const content = String(message.content || '').slice(0, 50000);
+      if (!content.trim()) continue;
+      const contentHash = hashMessage(sessionId, role, content, index);
+      const metadata = {
+        summary: clip(content, 420),
+        searchText: searchTextFor(role, content),
+        semanticReady: false,
+        embeddingQueued: true,
+        embeddingVersion: CONVERSATION_EMBEDDING_VERSION,
+        terminalMessage: terminalMessageMetadata(message)
+      };
+      const saved = await prisma.conversationMessage.create({
+        data: {
+          id: crypto.randomUUID(),
+          sessionId,
+          workspaceId: input.workspaceId,
+          workbenchId: input.workbenchId || null,
+          userId: input.userId,
+          role,
+          content,
+          contentHash,
+          metadataJson: stringify(metadata)
+        }
+      });
+      savedIds.push(saved.id);
+      this.enqueueEmbedding(saved.id);
+    }
+
+    return { sessionId, savedIds };
+  }
+
   async retrieve(input: {
     workspaceId: string;
     workbenchId?: string | null;
@@ -377,6 +517,7 @@ export class ConversationHistoryService {
       createdAt: session.createdAt.toISOString(),
       updatedAt: session.updatedAt.toISOString(),
       messageCount: Array.isArray(session.messages) ? session.messages.length : 0,
+      metadata: parseJson<Record<string, unknown>>(session.metadataJson, {}),
       messages: Array.isArray(session.messages)
         ? session.messages.map((message: any) => ({
             role: message.role === 'user' ? 'user' : 'assistant',
@@ -384,6 +525,75 @@ export class ConversationHistoryService {
           }))
         : []
     }));
+  }
+
+  async listTerminalSessions(input: {
+    workspaceId: string;
+    workbenchId?: string | null;
+    limit?: number;
+  }) {
+    const sessions = await prisma.conversationSession.findMany({
+      where: {
+        workspaceId: input.workspaceId,
+        ...(input.workbenchId ? { workbenchId: input.workbenchId } : {}),
+        source: { in: ['terminal', 'terminal_chat'] }
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: Math.min(Math.max(input.limit || 30, 1), 100),
+      include: {
+        _count: {
+          select: { messages: true }
+        },
+        messages: {
+          orderBy: { createdAt: 'desc' },
+          take: 1
+        }
+      }
+    });
+    return sessions.map((session) => {
+      const metadata = parseJson<Record<string, unknown>>(session.metadataJson, {});
+      const latest = session.messages[0];
+      return {
+        id: session.id,
+        title: session.title || latest?.content?.slice(0, 80) || 'New chat',
+        source: session.source,
+        mode: session.source === 'terminal_chat' ? 'chat' : 'agentic',
+        selectedSources: Array.isArray(metadata.selectedSources) ? metadata.selectedSources : [],
+        chatFiles: Array.isArray(metadata.chatFiles) ? metadata.chatFiles : [],
+        checkpointThreadId: typeof metadata.checkpointThreadId === 'string' ? metadata.checkpointThreadId : undefined,
+        createdAt: session.createdAt.toISOString(),
+        updatedAt: session.updatedAt.toISOString(),
+        messageCount: session._count.messages,
+        lastMessagePreview: latest ? clip(latest.content, 180) : ''
+      };
+    });
+  }
+
+  async getTerminalMessages(input: {
+    workspaceId: string;
+    sessionId: string;
+    before?: string | null;
+    limit?: number;
+  }) {
+    const limit = Math.min(Math.max(input.limit || 30, 1), 80);
+    const beforeDate = input.before ? new Date(input.before) : null;
+    const rows = await prisma.conversationMessage.findMany({
+      where: {
+        workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
+        ...(beforeDate && !Number.isNaN(beforeDate.getTime()) ? { createdAt: { lt: beforeDate } } : {})
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1
+    });
+    const page = rows.slice(0, limit);
+    const hasMore = rows.length > limit;
+    const oldest = page[page.length - 1];
+    return {
+      messages: page.reverse().map(toTerminalMessage),
+      hasMore,
+      nextBefore: hasMore && oldest ? oldest.createdAt.toISOString() : null
+    };
   }
 
   formatRetrieved(items: RetrievedConversationMemory[]) {

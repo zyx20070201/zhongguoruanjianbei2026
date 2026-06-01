@@ -2,7 +2,11 @@ node_modules/
 dist/
 .codex-logs/
 .DS_Store
+__pycache__/
+*.pyc
 *.db
+*.db-shm
+*.db-wal
 
 backend/node_modules/
 backend/uploads/

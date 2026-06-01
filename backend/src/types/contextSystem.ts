@@ -56,6 +56,7 @@ export interface ContextLocator {
   segmentIds?: string[];
   sourceType?: string;
   url?: string;
+  visiblePanelCount?: number;
 }
 
 export interface SelectionContext {
@@ -251,6 +252,12 @@ export interface ContextCapsule {
   estimatedTokens: number;
   estimatedTokensByLayer?: Record<string, number>;
   promptContextPreview?: string;
+  buildTrace?: Array<{
+    step: string;
+    status: 'completed' | 'failed';
+    durationMs: number;
+    summary?: string;
+  }>;
   fallbackReasons?: string[];
   clippedItems?: Array<{ layer: string; reason: string }>;
   citations: Citation[];

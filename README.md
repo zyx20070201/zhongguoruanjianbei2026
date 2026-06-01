@@ -79,3 +79,18 @@ Backend defaults:
 - `RERANKER_BASE_URL=http://localhost:8082` using `BAAI/bge-reranker-v2-m3`
 
 After starting these services, re-index workspace files so existing SQLite chunks are embedded and upserted into Qdrant.
+
+### 6. Code Lab Execution Stack
+
+Code Lab uses Judge0 CE as the sandboxed code execution service.
+
+```bash
+docker compose -f docker-compose.judge0.yml up -d
+curl http://localhost:2358/languages
+```
+
+Backend default:
+
+- `JUDGE0_BASE_URL=http://localhost:2358`
+
+If Judge0 is running on another host or inside another Docker network, set `JUDGE0_BASE_URL` to the address reachable from the backend process, then restart the backend.
