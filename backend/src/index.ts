@@ -10,6 +10,7 @@ import { ensureWorkbenchNoteRevisionSchema } from './config/ensureWorkbenchNoteR
 import { ensureCourseKnowledgeGraphSchema } from './config/ensureCourseKnowledgeGraphSchema';
 import { ensureStudioArtifactSchema } from './config/ensureStudioArtifactSchema';
 import { ensureSqlitePerformanceSchema } from './config/ensureSqlitePerformanceSchema';
+import { configureHttpProxy } from './config/httpProxy';
 import { conversationHistoryService } from './services/conversationHistoryService';
 import { videoAnalysisService } from './services/videoAnalysisService';
 import { audioNoteService } from './services/audioNoteService';
@@ -17,6 +18,8 @@ import { knowledgeIndexQueueService } from './services/knowledgeIndexQueueServic
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { securityHeaders } from './middleware/securityHeaders';
 import { configureSqliteConnection } from './config/db';
+
+configureHttpProxy();
 
 const app = express();
 const parsePort = (value: string | undefined) => {

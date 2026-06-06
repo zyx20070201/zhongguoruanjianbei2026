@@ -5,6 +5,10 @@ import {
   normalizeTeachingVisualizationIR,
   validateTeachingVisualizationIR
 } from './visualizationIr';
+import {
+  normalizeVisualExplainerPayload,
+  VISUAL_EXPLAINER_SCHEMA_HINT
+} from './visualExplainer';
 
 const clip = (value: string | null | undefined, maxLength = 1200) => {
   const text = String(value || '').trim();
@@ -17,6 +21,7 @@ export const inferArtifactKind = (context: StudioGenerationContext): StudioArtif
   if (context.template.renderer === 'flashcards') return 'flashcards';
   if (context.template.renderer === 'code_lab') return 'code_lab';
   if (context.template.renderer === 'slides') return 'slides';
+  if (context.template.renderer === 'visual_explainer') return 'visual_explainer';
   if (context.template.renderer === 'interactive_html') return 'interactive_demo';
   if (context.template.renderer === 'manim_script') return 'animation_script';
   if (context.template.renderer === 'remotion_source') return 'ui_video';
@@ -266,6 +271,21 @@ const normalizeSlides = (context: StudioGenerationContext, content: string) => {
   );
 };
 
+const normalizeVisualExplainer = (context: StudioGenerationContext, content: string) => {
+  const parsed = parseJson(content);
+  const payload = normalizeVisualExplainerPayload(context, parsed, content);
+  return createArtifactEnvelope(
+    context,
+    'visual_explainer',
+    {
+      ...payload,
+      schemaHint: VISUAL_EXPLAINER_SCHEMA_HINT
+    },
+    payload.title || context.input.prompt || context.template.title,
+    payload.summary || 'Markdown-first 的分镜式视觉讲解。'
+  );
+};
+
 const normalizeVideoScript = (context: StudioGenerationContext, content: string) => {
   const scenes = content
     .split('\n')
@@ -451,12 +471,13 @@ export const normalizeStudioArtifact = (
   if (kind === 'flashcards') return normalizeFlashcards(context, content);
   if (kind === 'code_lab') return normalizeCodeLab(context, content);
   if (kind === 'slides') return normalizeSlides(context, content);
+  if (kind === 'visual_explainer') return normalizeVisualExplainer(context, content);
   if (kind === 'video_script') return normalizeVideoScript(context, content);
   if (kind === 'interactive_demo') return normalizeInteractiveDemo(context, content);
   if (kind === 'animation_script') return normalizeAnimationScript(context, content);
   if (kind === 'ui_video') return normalizeUiVideo(context, content);
   if (kind === 'study_plan') return normalizeStudyPlan(context, content);
-  if (context.template.id === 'resource_to_notes') {
+  if (context.template.id === 'resource_to_notes' || context.template.id === 'pagelm_cornell_notes' || context.template.id === 'pure_markdown_notes') {
     return createArtifactEnvelope(
       context,
       kind,
@@ -464,8 +485,19 @@ export const normalizeStudioArtifact = (
         sections: sectionsFromMarkdown(content),
         rawContent: content
       },
-      titleFromSourceContext(context, 'Resource Notes'),
-      '可保存为 BlockSuite Note 的资源学习笔记。'
+      titleFromSourceContext(
+        context,
+        context.template.id === 'pagelm_cornell_notes'
+          ? 'PageLM Notes'
+          : context.template.id === 'pure_markdown_notes'
+            ? 'Pure Markdown Notes'
+            : 'Resource Notes'
+      ),
+      context.template.id === 'pagelm_cornell_notes'
+        ? '可保存为 BlockSuite Note 的 Cornell-style 资源学习笔记。'
+        : context.template.id === 'pure_markdown_notes'
+          ? '可保存为 BlockSuite Note 的纯 Markdown 资源学习笔记。'
+          : '可保存为 BlockSuite Note 的资源学习笔记。'
     );
   }
   if (context.template.id === 'resource_compare') {

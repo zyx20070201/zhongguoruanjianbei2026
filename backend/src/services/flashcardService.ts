@@ -200,6 +200,15 @@ const mapDeck = (deck: any) => ({
 });
 
 export class FlashcardService {
+  async findDeckByGenerationRun(workspaceId: string, generationRunId?: string | null) {
+    if (!generationRunId) return null;
+    const deck = await prisma.flashcardDeck.findFirst({
+      where: { workspaceId, generationRunId },
+      include: { cards: { orderBy: { orderIndex: 'asc' } } }
+    });
+    return deck ? mapDeck(deck) : null;
+  }
+
   async createDeck(input: StructuredDeckInput) {
     const cards = input.cards
       .map((card, index) => ({
@@ -258,6 +267,8 @@ export class FlashcardService {
         source: deck.source,
         generationRunId: input.generationRunId || null
       }
+    }).catch((error) => {
+      console.warn('Flashcard deck_created memory event failed:', error);
     });
 
     return mapDeck(deck);

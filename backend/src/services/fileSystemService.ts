@@ -152,6 +152,19 @@ const chatAttachmentPathSegment = (value: unknown) =>
     .replace(/^-+|-+$/g, '')
     .slice(0, 80) || 'chat';
 
+const sanitizeRelativePathSegments = (value: unknown) =>
+  String(value || '')
+    .split(/[\\/]+/)
+    .map((segment) =>
+      normalizePossiblyMojibakeName(segment)
+        .trim()
+        .replace(/[\\/:*?"<>|#{}[\]`]/g, '-')
+        .replace(/\s+/g, ' ')
+        .slice(0, 120)
+        .trim()
+    )
+    .filter((segment) => segment && segment !== '.' && segment !== '..');
+
 const INDEXABLE_EXTENSIONS = new Set([
   'pdf',
   'docx',
@@ -587,7 +600,28 @@ export class FileSystemService {
       scope: options.scope,
       metadata: options.metadata
     });
-    const path = generateNewPath(target.parentPath, normalizedName);
+    const relativeSegments = sanitizeRelativePathSegments(file.relativePath);
+    const relativeDirSegments = relativeSegments.length > 1 ? relativeSegments.slice(0, -1) : [];
+    let targetParentId = target.parentId;
+    let targetParentPath = target.parentPath;
+
+    if (!targetParentPath && targetParentId) {
+      const parent = await prisma.fileSystemObject.findFirst({
+        where: { id: targetParentId, workspaceId, nodeType: 'folder' }
+      });
+      targetParentPath = parent?.path;
+    }
+
+    if (targetParentPath && relativeDirSegments.length) {
+      const folder = await FileSystemService.ensureFolderPath(
+        workspaceId,
+        generateNewPath(targetParentPath, relativeDirSegments.join('/'))
+      );
+      targetParentId = folder?.id;
+      targetParentPath = folder?.path || targetParentPath;
+    }
+
+    const path = generateNewPath(targetParentPath, normalizedName);
 
     const existing = await prisma.fileSystemObject.findUnique({
       where: { workspaceId_path: { workspaceId, path } }
@@ -619,7 +653,7 @@ export class FileSystemService {
         size,
         isBinary,
         workspaceId,
-        parentId: target.parentId,
+        parentId: targetParentId,
         ownerWorkbenchId: options.workbenchId || undefined
       } as any
     });

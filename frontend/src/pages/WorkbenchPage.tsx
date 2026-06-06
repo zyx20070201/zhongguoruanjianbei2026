@@ -5,12 +5,8 @@ import {
   MessagesSquare,
   FolderOpen,
   WandSparkles,
-  Maximize2,
   MessageCirclePlus,
-  Minimize2,
   PanelLeftOpen,
-  PanelRight,
-  PanelRightOpen,
   Search,
 } from 'lucide-react';
 import { aiApi, AiChatMessage } from '../services/aiApi';
@@ -35,7 +31,10 @@ import { useTheme } from '../theme';
 import ResourcePickerDialog from '../components/workbench/ResourcePickerDialog';
 import WorkbenchSidebar from '../components/workbench/WorkbenchSidebar';
 import WorkbenchEditor from '../components/workbench/WorkbenchEditor';
-import { AiEditorView } from '../components/workbench/WorkbenchEditorContent';
+import {
+  AiEditorView,
+  WorkbenchContextSelectionActionDetail
+} from '../components/workbench/WorkbenchEditorContent';
 import AIStudioPanel from '../components/workbench/AIStudioPanel';
 import WorkbenchSettingsDialog from '../components/workbench/WorkbenchSettingsDialog';
 import { AddSourcesDialog } from '../components/workspace/AddSourcesDialog';
@@ -73,6 +72,7 @@ interface ResourcePickerState {
   mode: 'replace' | 'add-tab';
   editorId?: string | null;
   paneId?: string | null;
+  anchorRect?: { left: number; top: number; bottom: number; width: number } | null;
 }
 
 interface CommandPaletteItem {
@@ -168,7 +168,6 @@ interface AIToolPanelShellProps {
   sidebarWidth: number;
   aiContext: React.ComponentProps<typeof AiEditorView>['aiContext'];
   resources: ResourceReference[];
-  onModeChange: (mode: AIAssistantMode) => void;
   onClose: () => void;
   onResizeSidebar: (width: number) => void;
   onSelectTool: (tool: AIToolPanelState['activeTool']) => void;
@@ -186,7 +185,6 @@ interface AIToolShellProps {
   title: string;
   mode: AIAssistantMode;
   sidebarWidth: number;
-  onModeChange: (mode: AIAssistantMode) => void;
   onClose: () => void;
   onResizeSidebar: (width: number) => void;
   children: React.ReactNode;
@@ -197,9 +195,7 @@ interface AIToolShellProps {
 
 function AIToolShell({
   title,
-  mode,
   sidebarWidth,
-  onModeChange,
   onClose,
   onResizeSidebar,
   children,
@@ -207,18 +203,7 @@ function AIToolShell({
   headerActions,
   closeTitle
 }: AIToolShellProps) {
-  const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
-  const modeMenuRef = useRef<HTMLDivElement | null>(null);
-  const modeOptions: Array<{ mode: AIAssistantMode; label: string; icon: typeof PanelRight }> = [
-    { mode: 'sidebar', label: '侧边栏', icon: PanelRight },
-    { mode: 'floating', label: '浮动', icon: PanelRightOpen },
-    { mode: 'fullscreen', label: '全屏', icon: Maximize2 }
-  ];
-  const isSidebar = mode === 'sidebar';
-  const isFullscreen = mode === 'fullscreen';
-
   const handleResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!isSidebar) return;
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = sidebarWidth;
@@ -234,35 +219,19 @@ function AIToolShell({
     window.addEventListener('pointerup', handlePointerUp);
   };
 
-  const handleShellPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    const target = event.target as Node;
-    if (isModeMenuOpen && !modeMenuRef.current?.contains(target)) {
-      setIsModeMenuOpen(false);
-    }
-  };
-
   return (
     <div
-      onPointerDown={handleShellPointerDown}
-      className={`ai-panel-surface z-40 ${
-        isSidebar
-          ? 'ai-sidebar-drift relative flex h-full shrink-0 border-l border-[#e6e5df] bg-white'
-          : isFullscreen
-            ? 'ai-fullscreen-rise absolute inset-3 flex rounded-[24px] border border-[#e6e5df] bg-white shadow-[0_28px_90px_rgba(15,23,42,0.22)]'
-            : 'ai-panel-pop absolute bottom-5 right-5 flex h-[min(620px,calc(100vh-56px))] w-[min(520px,calc(100vw-40px))] rounded-[24px] border border-[#e6e5df] bg-white shadow-[0_24px_70px_rgba(15,23,42,0.2)]'
-      }`}
-      style={isSidebar ? { width: sidebarWidth } : undefined}
+      className="openwebui-shell ai-sidebar-drift relative z-40 flex h-full shrink-0 overflow-hidden border-l-[0.5px] border-gray-50 bg-gray-50/70 text-sm text-gray-900"
+      style={{ width: sidebarWidth }}
     >
-      {isSidebar && (
-        <div
-          className="group/ai-resize absolute left-0 top-0 z-30 h-full w-2 -translate-x-1 cursor-col-resize"
-          onPointerDown={handleResizeStart}
-          title="调整 AI 侧边栏宽度"
-        >
-          <div className="absolute left-1 top-0 h-full w-px bg-[#e6e5df] transition-colors group-hover/ai-resize:bg-[#b8babf]" />
-        </div>
-      )}
-      <div className={`flex min-h-0 w-full flex-col overflow-hidden bg-white ${isSidebar ? '' : 'rounded-[inherit]'}`}>
+      <div
+        className="group/ai-resize absolute left-0 top-0 z-30 h-full w-2 -translate-x-1 cursor-col-resize"
+        onPointerDown={handleResizeStart}
+        title="调整 AI 侧边栏宽度"
+      >
+        <div className="absolute left-1 top-0 h-full w-px bg-gray-50 transition-colors group-hover/ai-resize:bg-gray-100" />
+      </div>
+      <div className="flex min-h-0 w-full flex-col overflow-hidden bg-transparent">
         <div className="relative z-20 flex h-14 shrink-0 items-center justify-between px-4">
           <div className="relative min-w-0">
             {headerLeft || (
@@ -274,49 +243,13 @@ function AIToolShell({
 
           <div className="flex items-center gap-1">
             {headerActions}
-            <div ref={modeMenuRef} className="relative">
-              <button
-                type="button"
-                onClick={() => setIsModeMenuOpen((value) => !value)}
-                className={`ai-soft-button inline-flex h-9 w-9 items-center justify-center rounded-full text-[#3f4247] ${
-                  isModeMenuOpen ? 'bg-[#f1f1ef]' : 'hover:bg-[#f1f1ef]'
-                }`}
-                title="切换显示方式"
-              >
-                {isSidebar ? <PanelRight className="h-5 w-5" /> : isFullscreen ? <Maximize2 className="h-5 w-5" /> : <PanelRightOpen className="h-5 w-5" />}
-              </button>
-              {isModeMenuOpen && (
-                <div className="ai-menu-pop absolute right-0 top-11 z-50 w-56 overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white p-1.5 text-sm text-[#25272b] shadow-[0_24px_70px_rgba(15,23,42,0.2)]">
-                  {modeOptions.map((option, index) => {
-                    const Icon = option.icon;
-                    return (
-                      <button
-                        key={option.mode}
-                        type="button"
-                        onClick={() => {
-                          onModeChange(option.mode);
-                          setIsModeMenuOpen(false);
-                        }}
-                        className={`ai-soft-button flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-[#f6f6f4] ${
-                          index === 2 ? 'mt-1 border-t border-[#eeeeeb]' : ''
-                        }`}
-                      >
-                        <Icon className="h-4.5 w-4.5 text-[#4b4f55]" />
-                        <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                        {mode === option.mode && <Check className="h-4 w-4 text-[#25272b]" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
             <button
               type="button"
               onClick={onClose}
               className="ai-soft-button inline-flex h-9 w-9 items-center justify-center rounded-full text-[#3f4247] hover:bg-[#f1f1ef]"
-              title={closeTitle || (isSidebar ? '隐藏面板' : '最小化')}
+              title={closeTitle || '隐藏面板'}
             >
-              {isSidebar ? <ChevronsRight className="h-5 w-5" /> : <Minimize2 className="h-5 w-5" />}
+              <ChevronsRight className="h-5 w-5" />
             </button>
           </div>
         </div>
@@ -338,7 +271,6 @@ function AIToolPanelShell({
   sidebarWidth,
   aiContext,
   resources,
-  onModeChange,
   onClose,
   onResizeSidebar,
   onSelectTool,
@@ -352,10 +284,14 @@ function AIToolPanelShell({
   initialStudioTemplateRequestId
 }: AIToolPanelShellProps) {
   const [isSessionMenuOpen, setIsSessionMenuOpen] = useState(false);
+  const [sessionQuery, setSessionQuery] = useState('');
   const sessionMenuRef = useRef<HTMLDivElement | null>(null);
   const activeSession = sessions.find((session) => session.id === activeSessionId) || sessions[0];
   const title = activeSession?.title || chatEditor.title || 'AI 对话';
   const isChatActive = activeTool === 'chat';
+  const visibleSessions = sessions.filter((session) =>
+    (session.title || 'AI 对话').toLowerCase().includes(sessionQuery.trim().toLowerCase())
+  );
   const tabs: Array<{ key: AIToolPanelState['activeTool']; label: string }> = [
     { key: 'chat', label: 'AI Chat' },
     { key: 'studio', label: 'AI Studio' }
@@ -366,29 +302,23 @@ function AIToolPanelShell({
       title={isChatActive ? title : 'AI Studio'}
       mode={mode}
       sidebarWidth={sidebarWidth}
-      onModeChange={onModeChange}
       onClose={onClose}
       onResizeSidebar={onResizeSidebar}
-      closeTitle={mode === 'sidebar' ? '隐藏 AI 面板' : '最小化'}
+      closeTitle="隐藏 AI 面板"
       headerLeft={
         <div className="flex min-w-0 items-center gap-3">
-          <div className="inline-flex shrink-0 items-center gap-5">
+          <div className="flex gap-1 scrollbar-none overflow-x-auto w-fit text-center text-sm font-medium rounded-full bg-transparent py-1 touch-auto pointer-events-auto">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 type="button"
                 onClick={() => onSelectTool(tab.key)}
-                className={`group relative inline-flex h-9 items-center justify-center px-0 text-[15px] font-semibold transition-colors duration-200 ${
-                  activeTool === tab.key ? 'text-[#202124]' : 'text-[#85898f] hover:text-[#3f4247]'
+                className={`min-w-fit p-1.5 ${
+                  activeTool === tab.key ? '' : 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'
                 }`}
                 aria-pressed={activeTool === tab.key}
               >
                 <span className="whitespace-nowrap">{tab.label}</span>
-                <span
-                  className={`absolute bottom-0 left-0 h-px bg-current transition-all duration-200 ${
-                    activeTool === tab.key ? 'w-full opacity-100' : 'w-0 opacity-0 group-hover:w-full group-hover:opacity-30'
-                  }`}
-                />
               </button>
             ))}
           </div>
@@ -409,32 +339,52 @@ function AIToolPanelShell({
     >
       {isChatActive ? (
         <>
-          <div className="relative z-10 shrink-0 border-b border-[#f0f0ec] bg-white px-5 py-2.5">
+          <div className="relative z-10 shrink-0 bg-white px-5 py-2.5">
             <div ref={sessionMenuRef} className="relative inline-flex min-w-0">
               <button
                 type="button"
-                onClick={() => setIsSessionMenuOpen((value) => !value)}
-                className="ai-soft-button inline-flex max-w-[260px] min-w-0 items-center gap-2 rounded-xl px-2.5 py-1.5 text-left text-[14px] font-medium text-[#4b4f55] hover:bg-[#f1f1ef]"
+                onClick={() => {
+                  setSessionQuery('');
+                  setIsSessionMenuOpen((value) => !value);
+                }}
+                className="min-w-fit p-1.5 text-sm font-medium transition select-none text-gray-900 hover:text-gray-700 dark:hover:text-white"
                 title="切换 AI 对话"
               >
                 <span className="truncate">{title}</span>
-                <ChevronDown className={`h-4 w-4 shrink-0 text-[#8f9399] transition-transform duration-200 ${isSessionMenuOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`size-4 shrink-0 text-gray-500 transition-transform duration-200 ${isSessionMenuOpen ? 'rotate-180' : ''}`} />
               </button>
               {isSessionMenuOpen && (
-                <div className="ai-menu-pop ai-session-menu-pop absolute left-0 top-10 z-50 w-72 overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white p-1.5 text-sm text-[#25272b] shadow-[0_24px_70px_rgba(15,23,42,0.18)]">
+                <div className="ai-menu-pop ai-session-menu-pop absolute left-0 top-10 z-[10000] text-black dark:text-white rounded-2xl shadow-lg border border-gray-200 dark:border-gray-800 flex flex-col bg-white dark:bg-gray-850 w-70 p-1.5">
+                  <div className=" flex w-full space-x-2 px-2 pb-0.5">
+                    <div className="flex flex-1">
+                      <div className=" self-center mr-2">
+                        <Search className="size-3.5" strokeWidth={2} />
+                      </div>
+                      <input
+                        className=" w-full text-sm pr-4 py-1 rounded-r-xl outline-hidden bg-transparent"
+                        value={sessionQuery}
+                        onChange={(event) => setSessionQuery(event.target.value)}
+                        placeholder="Search"
+                        autoFocus
+                      />
+                    </div>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
                       onCreateSession();
                       setIsSessionMenuOpen(false);
                     }}
-                    className="ai-soft-button mb-1 flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left font-medium hover:bg-[#f6f6f4]"
+                    className=" px-2.5 py-1 rounded-xl w-full text-left flex justify-between items-center text-sm hover:bg-gray-50 hover:dark:bg-gray-800 hover:dark:text-gray-100 selected-command-option-button"
                   >
-                    <MessageCirclePlus className="h-4 w-4 text-[#4b4f55]" />
+                    <MessageCirclePlus className="size-4 text-gray-500" />
                     新建 AI 对话
                   </button>
-                  <div className="max-h-72 overflow-y-auto border-t border-[#eeeeeb] pt-1">
-                    {sessions.map((session) => (
+                  <div className="max-h-56 overflow-y-scroll gap-0.5 flex flex-col">
+                    {visibleSessions.length === 0 ? (
+                      <div className="text-center text-xs text-gray-500 dark:text-gray-400 pt-4 pb-6">No chat found</div>
+                    ) : null}
+                    {visibleSessions.map((session) => (
                       <button
                         key={session.id}
                         type="button"
@@ -442,10 +392,10 @@ function AIToolPanelShell({
                           onSelectSession(session.id);
                           setIsSessionMenuOpen(false);
                         }}
-                        className="ai-soft-button flex w-full min-w-0 items-center gap-2 rounded-xl px-3 py-2.5 text-left hover:bg-[#f6f6f4]"
+                        className=" px-2.5 py-1 rounded-xl w-full text-left flex justify-between items-center text-sm hover:bg-gray-50 hover:dark:bg-gray-800 hover:dark:text-gray-100 selected-command-option-button"
                       >
                         <span className="min-w-0 flex-1 truncate">{session.title || 'AI 对话'}</span>
-                        {session.id === activeSessionId && <Check className="h-4 w-4 shrink-0 text-[#25272b]" />}
+                        {session.id === activeSessionId && <Check className="size-4 shrink-0 text-gray-900" />}
                       </button>
                     ))}
                   </div>
@@ -460,7 +410,7 @@ function AIToolPanelShell({
             onUpdateViewState={onUpdateChatViewState}
             onApplyNoteEdit={onApplyNoteEdit}
             hideHeader
-            compactWelcome={mode === 'sidebar'}
+            compactWelcome
           />
         </>
       ) : (
@@ -488,9 +438,7 @@ function WorkbenchPageContent() {
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
-  const [sidebarWidth, setSidebarWidth] = useState(320);
   const [isSidebarPinned, setIsSidebarPinned] = useState(false);
-  const [isSidebarPreviewOpen, setIsSidebarPreviewOpen] = useState(false);
   const [isAddSourcesOpen, setIsAddSourcesOpen] = useState(false);
   const [liveContextVersion, setLiveContextVersion] = useState(0);
   const [liveContextUpdatedAt, setLiveContextUpdatedAt] = useState<string | null>(null);
@@ -499,8 +447,6 @@ function WorkbenchPageContent() {
     requestId: 0
   });
   const liveContextLastEmitAtRef = useRef<Record<string, number>>({});
-  const sidebarPreviewCloseTimer = useRef<number | null>(null);
-  const [workspaceWorkbenches, setWorkspaceWorkbenches] = useState<Workbench[]>([]);
   const [workbenchPlans, setWorkbenchPlans] = useState<any[]>([]);
   const [documentStateByResourceId, setDocumentStateByResourceId] = useState<
     Record<string, { content: string; savedContent: string; loading?: boolean }>
@@ -605,7 +551,7 @@ function WorkbenchPageContent() {
         ...(latestState.aiAssistant || {
           id: `ai-assistant-${workbench.id}`,
           title: 'AI 对话',
-          mode: 'floating' as const,
+        mode: 'sidebar' as const,
           isOpen: false,
           sidebarWidth: 460,
           viewState: { messages: [], contextHint: 'workbench' }
@@ -656,32 +602,6 @@ function WorkbenchPageContent() {
     }
   };
 
-  const openSidebarPreview = () => {
-    if (sidebarPreviewCloseTimer.current) {
-      window.clearTimeout(sidebarPreviewCloseTimer.current);
-      sidebarPreviewCloseTimer.current = null;
-    }
-    setIsSidebarPreviewOpen(true);
-  };
-
-  const scheduleCloseSidebarPreview = () => {
-    if (sidebarPreviewCloseTimer.current) {
-      window.clearTimeout(sidebarPreviewCloseTimer.current);
-    }
-    sidebarPreviewCloseTimer.current = window.setTimeout(() => {
-      setIsSidebarPreviewOpen(false);
-      sidebarPreviewCloseTimer.current = null;
-    }, 180);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (sidebarPreviewCloseTimer.current) {
-        window.clearTimeout(sidebarPreviewCloseTimer.current);
-      }
-    };
-  }, []);
-
   useEffect(() => {
     const saveBeforeUnload = () => {
       void useWorkbenchStore.getState().saveNow();
@@ -710,18 +630,6 @@ function WorkbenchPageContent() {
         console.error('Failed to load workbench resources:', loadError);
       });
   }, [workbench?.id, setResources]);
-
-  useEffect(() => {
-    if (!workbench?.workspaceId) return;
-
-    void workbenchApi
-      .listByWorkspace(workbench.workspaceId)
-      .then(setWorkspaceWorkbenches)
-      .catch((loadError) => {
-        console.error('Failed to load workspace workbenches:', loadError);
-        setWorkspaceWorkbenches(workbench ? [workbench] : []);
-      });
-  }, [workbench]);
 
   const reloadWorkbenchPlans = useCallback(async () => {
     if (!workbench?.workspaceId || !workbench.id) return;
@@ -1632,7 +1540,11 @@ function WorkbenchPageContent() {
       extension: file.extension,
       mimeType: file.mimeType,
       fileCategory: file.fileCategory,
-      isBinary: file.isBinary
+      isBinary: file.isBinary,
+      size: file.size,
+      chunkCount: Number(file._count?.knowledgeChunks || file.knowledgeIndexJobs?.[0]?.chunkCount || 0),
+      knowledgeIndexJobs: file.knowledgeIndexJobs,
+      _count: file._count
     };
 
     handleOpenResourceReference(resource);
@@ -1832,7 +1744,7 @@ function WorkbenchPageContent() {
       aiToolPanel: {
         id: latestState?.aiToolPanel?.id || `ai-tool-panel-${workbench?.id || Date.now()}`,
         activeTool: 'chat',
-        mode: latestState?.aiToolPanel?.mode || 'floating',
+        mode: 'sidebar',
         isOpen: true,
         sidebarWidth: latestState?.aiToolPanel?.sidebarWidth || 520
       }
@@ -1851,7 +1763,7 @@ function WorkbenchPageContent() {
       aiToolPanel: {
         id: latestState?.aiToolPanel?.id || `ai-tool-panel-${workbench?.id || Date.now()}`,
         activeTool: 'studio',
-        mode: latestState?.aiToolPanel?.mode || 'floating',
+        mode: 'sidebar',
         isOpen: true,
         sidebarWidth: latestState?.aiToolPanel?.sidebarWidth || 520
       }
@@ -1870,7 +1782,7 @@ function WorkbenchPageContent() {
       aiToolPanel: {
         id: latestState?.aiToolPanel?.id || `ai-tool-panel-${workbench?.id || Date.now()}`,
         activeTool: 'studio',
-        mode: latestState?.aiToolPanel?.mode || 'floating',
+        mode: 'sidebar',
         isOpen: true,
         sidebarWidth: latestState?.aiToolPanel?.sidebarWidth || 520
       }
@@ -1883,7 +1795,7 @@ function WorkbenchPageContent() {
     const currentPanel = latestState.aiToolPanel || {
       id: `ai-tool-panel-${workbench?.id || Date.now()}`,
       activeTool: 'chat' as const,
-      mode: 'floating' as const,
+      mode: 'sidebar' as const,
       isOpen: false,
       sidebarWidth: 520
     };
@@ -1891,6 +1803,7 @@ function WorkbenchPageContent() {
       aiToolPanel: {
         ...currentPanel,
         ...patch,
+        mode: 'sidebar',
         sidebarWidth: typeof patch.sidebarWidth === 'number' ? patch.sidebarWidth : currentPanel.sidebarWidth || 520
       }
     });
@@ -1988,6 +1901,31 @@ function WorkbenchPageContent() {
     if ('lastModel' in patch || 'lastContextDebug' in patch) {
       void useWorkbenchStore.getState().saveNow();
     }
+  };
+
+  const handleAddSelectionAskToAssistant = (
+    messages: AiChatMessage[],
+    _detail: WorkbenchContextSelectionActionDetail
+  ) => {
+    const latestState = useWorkbenchStore.getState().state;
+    if (!latestState) return;
+    const sessions = getAiSessions(latestState.aiAssistant, 'AI 对话');
+    const activeSessionId =
+      latestState.aiAssistant?.activeSessionId && sessions.some((session) => session.id === latestState.aiAssistant?.activeSessionId)
+        ? latestState.aiAssistant.activeSessionId
+        : sessions[0].id;
+    const previousSession = sessions.find((session) => session.id === activeSessionId) || sessions[0];
+    const previousMessages = Array.isArray(previousSession.viewState?.messages)
+      ? (previousSession.viewState.messages as AiChatMessage[])
+      : [];
+    handleUpdateAiAssistantViewState('selection-ask-popover', {
+      messages: [
+        ...previousMessages,
+        ...messages
+      ],
+      contextHint: previousSession.viewState?.contextHint || 'workbench'
+    });
+    updateAiToolPanelState({ isOpen: true, activeTool: 'chat' });
   };
 
   const updateAiStudioState = (patch: Partial<AIStudioState> = {}) => {
@@ -2268,24 +2206,6 @@ function WorkbenchPageContent() {
     await saveNow();
   };
 
-  const handleSidebarResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = sidebarWidth;
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      setSidebarWidth(Math.max(240, Math.min(520, startWidth + moveEvent.clientX - startX)));
-    };
-
-    const handlePointerUp = () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-    };
-
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-  };
-
   const handleRename = async () => {
     if (!workbench) return;
 
@@ -2378,11 +2298,11 @@ function WorkbenchPageContent() {
   const aiToolPanel = state.aiToolPanel || {
     id: `ai-tool-panel-${workbench.id}`,
     activeTool: 'chat' as const,
-    mode: 'floating' as const,
+    mode: 'sidebar' as const,
     isOpen: false,
     sidebarWidth: 520
   };
-  const aiToolPanelMode = aiToolPanel.mode || 'floating';
+  const aiToolPanelMode: AIAssistantMode = 'sidebar';
   const isAiToolPanelOpen = Boolean(aiToolPanel.isOpen);
   const aiToolPanelSidebarWidth = aiToolPanel.sidebarWidth || 520;
 
@@ -2439,97 +2359,34 @@ function WorkbenchPageContent() {
       )}
 
       <div className="workspace-main relative flex min-h-0 flex-1 overflow-hidden bg-white">
-        {isSidebarPinned ? (
-          <div className="min-h-0 shrink-0">
-            <WorkbenchSidebar
-              editors={state.editors}
-              resources={resourceOptions}
-              workbenches={workspaceWorkbenches}
-              plans={workbenchPlans}
-              currentWorkbenchId={workbench.id}
-              activeEditorId={state.activeEditorId}
-              currentWorkbenchTitle={workbench.title}
-              onActivateEditor={activateEditor}
-              onResourceOpen={handleOpenResourceReference}
-              onNewChat={handleCreateAiPanel}
-              onNewNote={() => void handleCreateNote()}
-              onNewPlan={handleCreatePlan}
-              onOpenAIStudio={handleCreateStudioPanel}
-              onUploadResources={handleUploadResources}
-              onSearch={() => {
-                setCommandQuery('');
-                setIsCommandPaletteOpen(true);
-              }}
-              onResourceDuplicate={(resource) => void handleDuplicateResource(resource)}
-              onResourceDelete={(resource) => void handleDeleteResource(resource)}
-              onResourceDropToPane={(resource) => {
-                const paneId = state.activeEditorPaneId ?? null;
-                requestOpenResource(resource, { kind: 'split', paneId, placement: 'center' });
-              }}
-              onResourceReorder={(orderedIds) => void handleReorderResources(orderedIds)}
-              onOpenWorkbench={(workbenchId) => navigate(`/workbenches/${workbenchId}`)}
-              onPlanStepStatusChange={(planId, stepId, status) => void handlePlanStepStatusChange(planId, stepId, status)}
-              onPlanAction={(planId, action, options) => void handlePlanAction(planId, action, options)}
-              onPlanStepUpdate={(planId, stepId, patch) => void handlePlanStepUpdate(planId, stepId, patch)}
-              onPlanFeedback={(planId, feedback) => void handlePlanFeedback(planId, feedback)}
-              width={sidebarWidth}
-              onResizeStart={handleSidebarResizeStart}
-              variant="pinned"
-            />
-          </div>
-        ) : (
-          <div
-            className="group/sidebar absolute bottom-0 left-0 top-0 z-20 w-4"
-            onMouseEnter={openSidebarPreview}
-            onMouseLeave={scheduleCloseSidebarPreview}
-          >
-            <div
-              className={`absolute left-2 top-1/2 h-[calc(100%-32px)] -translate-y-1/2 w-[min(400px,calc(100vw-32px))] transition-all duration-300 ease-out ${
-                isSidebarPreviewOpen
-                  ? 'pointer-events-auto translate-x-0 opacity-100'
-                  : 'pointer-events-none -translate-x-[calc(100%-12px)] opacity-0 group-hover/sidebar:pointer-events-auto group-hover/sidebar:translate-x-0 group-hover/sidebar:opacity-100 group-focus-within/sidebar:pointer-events-auto group-focus-within/sidebar:translate-x-0 group-focus-within/sidebar:opacity-100'
-              }`}
-              onMouseEnter={openSidebarPreview}
-              onMouseLeave={scheduleCloseSidebarPreview}
-            >
-              <WorkbenchSidebar
-                editors={state.editors}
-                resources={resourceOptions}
-                workbenches={workspaceWorkbenches}
-                plans={workbenchPlans}
-                currentWorkbenchId={workbench.id}
-                activeEditorId={state.activeEditorId}
-                currentWorkbenchTitle={workbench.title}
-                onActivateEditor={activateEditor}
-                onResourceOpen={handleOpenResourceReference}
-                onNewChat={handleCreateAiPanel}
-                onNewNote={() => void handleCreateNote()}
-                onNewPlan={handleCreatePlan}
-                onOpenAIStudio={handleCreateStudioPanel}
-                onUploadResources={handleUploadResources}
-                onSearch={() => {
-                  setCommandQuery('');
-                  setIsCommandPaletteOpen(true);
-                }}
-                onResourceDuplicate={(resource) => void handleDuplicateResource(resource)}
-                onResourceDelete={(resource) => void handleDeleteResource(resource)}
-                onResourceDropToPane={(resource) => {
-                  const paneId = state.activeEditorPaneId ?? null;
-                  requestOpenResource(resource, { kind: 'split', paneId, placement: 'center' });
-                }}
-                onResourceReorder={(orderedIds) => void handleReorderResources(orderedIds)}
-                onOpenWorkbench={(workbenchId) => navigate(`/workbenches/${workbenchId}`)}
-                onPlanStepStatusChange={(planId, stepId, status) => void handlePlanStepStatusChange(planId, stepId, status)}
-                onPlanAction={(planId, action, options) => void handlePlanAction(planId, action, options)}
-                onPlanStepUpdate={(planId, stepId, patch) => void handlePlanStepUpdate(planId, stepId, patch)}
-                onPlanFeedback={(planId, feedback) => void handlePlanFeedback(planId, feedback)}
-                width={sidebarWidth}
-                onResizeStart={handleSidebarResizeStart}
-                variant="preview"
-              />
-            </div>
-          </div>
-        )}
+        <WorkbenchSidebar
+          editors={state.editors}
+          resources={resourceOptions}
+          plans={workbenchPlans}
+          currentWorkbenchId={workbench.id}
+          activeEditorId={state.activeEditorId}
+          currentWorkbenchTitle={workbench.title}
+          isExpanded={isSidebarPinned}
+          onToggleSidebar={() => setIsSidebarPinned((value) => !value)}
+          onActivateEditor={activateEditor}
+          onResourceOpen={handleOpenResourceReference}
+          onNewChat={handleCreateAiPanel}
+          onNewNote={() => void handleCreateNote()}
+          onNewPlan={handleCreatePlan}
+          onOpenAIStudio={handleCreateStudioPanel}
+          onUploadResources={handleUploadResources}
+          onSearch={() => {
+            setCommandQuery('');
+            setIsCommandPaletteOpen(true);
+          }}
+          onResourceDuplicate={(resource) => void handleDuplicateResource(resource)}
+          onResourceDelete={(resource) => void handleDeleteResource(resource)}
+          onResourceReorder={(orderedIds) => void handleReorderResources(orderedIds)}
+          onPlanStepStatusChange={(planId, stepId, status) => void handlePlanStepStatusChange(planId, stepId, status)}
+          onPlanAction={(planId, action, options) => void handlePlanAction(planId, action, options)}
+          onPlanStepUpdate={(planId, stepId, patch) => void handlePlanStepUpdate(planId, stepId, patch)}
+          onPlanFeedback={(planId, feedback) => void handlePlanFeedback(planId, feedback)}
+        />
 
         <div className="min-w-0 flex-1 overflow-hidden">
           <WorkbenchEditor
@@ -2543,7 +2400,15 @@ function WorkbenchPageContent() {
             documentSaveStateByResourceId={documentSaveStateByResourceId}
             onActivateEditor={(editorId, paneId) => activateEditor(editorId, paneId)}
             onCloseEditor={closeEditor}
-            onBindResource={(editorId) => setResourcePickerState({ mode: 'replace', editorId })}
+            onBindResource={(editorId, anchorRect) =>
+              setResourcePickerState({
+                mode: 'replace',
+                editorId,
+                anchorRect: anchorRect
+                  ? { left: anchorRect.left, top: anchorRect.top, bottom: anchorRect.bottom, width: anchorRect.width }
+                  : null
+              })
+            }
             onChangeDocumentContent={handleChangeDocumentContent}
             onSaveDocumentContent={(resourceId, content, options) =>
               void saveDocumentContent(resourceId, { force: true, contentOverride: content, ...options })
@@ -2558,7 +2423,15 @@ function WorkbenchPageContent() {
             }
             onDropEditorTab={handleDropEditorTab}
             onDropResourceToPane={handleDropResourceToPane}
-            onAddEditor={(paneId) => setResourcePickerState({ mode: 'add-tab', paneId: paneId ?? state.activeEditorPaneId ?? null })}
+            onAddEditor={(paneId, anchorRect) =>
+              setResourcePickerState({
+                mode: 'add-tab',
+                paneId: paneId ?? state.activeEditorPaneId ?? null,
+                anchorRect: anchorRect
+                  ? { left: anchorRect.left, top: anchorRect.top, bottom: anchorRect.bottom, width: anchorRect.width }
+                  : null
+              })
+            }
             onClosePane={(paneId) => {
               const targetLeaf = findLeafById(state.editorLayout, paneId);
               if (!targetLeaf) return;
@@ -2580,12 +2453,11 @@ function WorkbenchPageContent() {
                 editorLayout: updateRatio(state.editorLayout)
               });
             }}
-            onToggleSidebar={() => setIsSidebarPinned((value) => !value)}
-            isSidebarPinned={isSidebarPinned}
+            onAddSelectionAskToAssistant={handleAddSelectionAskToAssistant}
             aiContext={aiAssistantContext}
           />
         </div>
-        {isAiToolPanelOpen && aiToolPanelMode === 'sidebar' && (
+        {isAiToolPanelOpen && (
           <AIToolPanelShell
             activeTool={aiToolPanel.activeTool}
             chatEditor={aiAssistantEditor}
@@ -2596,7 +2468,6 @@ function WorkbenchPageContent() {
             activeSessionId={activeAiSessionId}
             sidebarWidth={aiToolPanelSidebarWidth}
             aiContext={aiAssistantContext}
-            onModeChange={(mode) => updateAiToolPanelState({ mode, isOpen: true })}
             onClose={() => updateAiToolPanelState({ isOpen: false })}
             onResizeSidebar={(width) => updateAiToolPanelState({ sidebarWidth: width })}
             onSelectTool={(activeTool) => updateAiToolPanelState({ activeTool, isOpen: true })}
@@ -2613,36 +2484,10 @@ function WorkbenchPageContent() {
         )}
       </div>
 
-      {isAiToolPanelOpen && aiToolPanelMode !== 'sidebar' && (
-        <AIToolPanelShell
-          activeTool={aiToolPanel.activeTool}
-          chatEditor={aiAssistantEditor}
-          studioEditor={aiStudioEditor}
-          workspaceId={workbench.workspaceId}
-          mode={aiToolPanelMode}
-          sessions={aiSessions}
-          activeSessionId={activeAiSessionId}
-          sidebarWidth={aiToolPanelSidebarWidth}
-          aiContext={aiAssistantContext}
-          onModeChange={(mode) => updateAiToolPanelState({ mode, isOpen: true })}
-          onClose={() => updateAiToolPanelState({ isOpen: false })}
-          onResizeSidebar={(width) => updateAiToolPanelState({ sidebarWidth: width })}
-          onSelectTool={(activeTool) => updateAiToolPanelState({ activeTool, isOpen: true })}
-          onSelectSession={handleSelectAiSession}
-          onCreateSession={handleCreateAiSession}
-          onUpdateChatViewState={handleUpdateAiAssistantViewState}
-          onUpdateStudioViewState={handleUpdateAiStudioViewState}
-          onApplyNoteEdit={(resourceId, content) => saveDocumentContent(resourceId, { force: true, contentOverride: content })}
-          onOpenResource={handleOpenResourceReference}
-          resources={resourceOptions}
-          initialStudioTemplateId={studioTemplateLaunch.templateId}
-          initialStudioTemplateRequestId={studioTemplateLaunch.requestId}
-        />
-      )}
-
       <ResourcePickerDialog
         open={Boolean(resourcePickerState)}
         resources={resourceOptions}
+        anchorRect={resourcePickerState?.anchorRect ?? null}
         onClose={() => setResourcePickerState(null)}
         onSelect={(resource) => {
           if (resourcePickerState?.mode === 'replace' && resourcePickerState.editorId) {

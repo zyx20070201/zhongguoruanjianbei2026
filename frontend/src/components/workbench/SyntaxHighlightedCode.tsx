@@ -29,11 +29,11 @@ const highlight = (code: string) => {
     stash(match, 'text-slate-500')
   );
   html = html.replace(/("[^"\n]*"|'[^'\n]*'|`[^`]*`)/g, (match) =>
-    stash(match, 'text-blue-200')
+    stash(match, 'text-blue-700')
   );
   html = escapeHtml(html);
-  html = html.replace(/\b(\d+(\.\d+)?)\b/g, '<span class="text-blue-300">$1</span>');
-  html = html.replace(KEYWORDS, '<span class="text-blue-400">$1</span>');
+  html = html.replace(/\b(\d+(\.\d+)?)\b/g, '<span class="text-violet-700">$1</span>');
+  html = html.replace(KEYWORDS, '<span class="font-semibold text-blue-700">$1</span>');
   html = html.replace(/__TOKEN_(\d+)__/g, (_, index) => placeholders[Number(index)] || '');
   return html;
 };
@@ -88,13 +88,13 @@ export default function SyntaxHighlightedCode({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--wb-editor)]">
-      <div className="border-b border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-2 text-xs uppercase tracking-[0.16em] text-[var(--wb-text-dim)]">
+    <div className="flex h-full min-h-0 flex-col bg-white">
+      <div className="border-b border-[#eeeeeb] bg-white px-4 py-2 text-xs uppercase tracking-[0.16em] text-[#777a80]">
         {language || 'Code Preview'}
       </div>
       <pre
         ref={preRef}
-        className="min-h-0 flex-1 overflow-auto bg-[var(--wb-editor)] p-5 font-mono text-sm leading-6 text-[#d7e7ff]"
+        className="min-h-0 flex-1 overflow-auto bg-white p-5 font-mono text-sm leading-6 text-[#25272b]"
         onScroll={(event) => reportViewport(event.currentTarget)}
         onMouseEnter={(event) => reportViewport(event.currentTarget)}
         onMouseUp={(event) => reportViewport(event.currentTarget)}

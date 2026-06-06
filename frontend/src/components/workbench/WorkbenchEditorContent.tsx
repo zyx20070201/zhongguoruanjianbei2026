@@ -19,20 +19,15 @@ import {
   Image,
   Info,
   Layers3,
-  Languages,
-  ListChecks,
   Lock,
   Loader2,
-  Maximize2,
-  MoreHorizontal,
-  PanelLeft,
-  PanelRight,
+  Lightbulb,
+  MessageCircle,
+  Pin,
   PencilLine,
-  Plus,
   RefreshCcw,
   RotateCcw,
   Search,
-  SlidersHorizontal,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
@@ -40,23 +35,17 @@ import {
   Unlock,
   Volume2,
   X,
-  ZoomIn,
-  ZoomOut,
   Video,
-  CircleHelp,
-  ClipboardList,
-  GitCompare,
-  Route,
   WandSparkles,
   Hand,
   ShieldCheck,
   Shield,
-  Gauge,
   ArrowUp
 } from 'lucide-react';
-import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import * as pdfjsLib from 'pdfjs-dist';
-import { TextLayer } from 'pdfjs-dist';
+import { EventBus, PDFLinkService, PDFViewer } from 'pdfjs-dist/web/pdf_viewer.mjs';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import { EditorState, ResourceReference } from '../../types';
@@ -81,13 +70,27 @@ import {
   AiChatContext,
   AiChatMessage,
   AiContextMode,
-  AiWelcomeContent,
-  AiWelcomeSuggestion,
   AgentTimelineItem,
   AiLockedSelectionContext
 } from '../../services/aiApi';
+import { learningApi } from '../../services/learningApi';
 import MarkdownPreview from './MarkdownPreview';
 import SyntaxHighlightedCode from './SyntaxHighlightedCode';
+import {
+  OWClipIcon,
+  OWChatBubbleIcon,
+  OWClockRotateRightIcon,
+  OWComponentIcon,
+  OWDatabaseIcon,
+  OWDocumentPageIcon,
+  OWAdjustmentsHorizontalIcon,
+  OWDownloadIcon,
+  OWGlobeAltIcon,
+  OWPlusAltIcon,
+  OWPencilSquareIcon,
+  OWWrenchIcon,
+  OWXMarkIcon
+} from '../common/openWebUIIcons';
 import {
   getLanguageLabel,
   getResourceKind,
@@ -104,8 +107,9 @@ const previewInfoCache = new Map<string, FilePreviewInfo>();
 const documentStructureCache = new Map<string, RenderableDocument>();
 const webPreviewCache = new Map<string, WebPreviewData>();
 
-type WorkbenchContextSelectionActionDetail = {
+export type WorkbenchContextSelectionActionDetail = {
   prompt?: string;
+  submitImmediately?: boolean;
   fileId?: string;
   fileName?: string;
   page?: number;
@@ -128,7 +132,50 @@ type DroppedContextSelection = {
   createdAt: string;
 };
 
+type ComposerAttachMenu = 'root' | 'knowledge' | 'notes' | 'chats' | 'webpage';
+
+type QueuedChatRequest = {
+  id: string;
+  prompt: string;
+  attachments: AiChatAttachment[];
+  droppedSelections: DroppedContextSelection[];
+};
+
+type SelectionAskRequest = {
+  question: string;
+  prompt: string;
+  selectedText: string;
+  detail: WorkbenchContextSelectionActionDetail;
+};
+
+export type SelectionAskResult = {
+  userMessage: AiChatMessage;
+  assistantMessage: AiChatMessage;
+};
+
+type SelectionAskSubmitHandler = (
+  question: string,
+  history: AiChatMessage[],
+  handlers: { onDelta: (delta: string) => void; onReplace?: (content: string) => void }
+) => Promise<SelectionAskResult>;
+type SelectionExplainSubmitHandler = (
+  history: AiChatMessage[],
+  handlers: { onDelta: (delta: string) => void; onReplace?: (content: string) => void }
+) => Promise<SelectionAskResult>;
+type SelectionAskAddHandler = (messages: AiChatMessage[]) => void;
+
 const previewCacheKey = (workspaceId: string, resourceId: string) => `${workspaceId}:${resourceId}`;
+
+const normalizeComposerUrl = (value: string) => /^https?:\/\//i.test(value.trim()) ? value.trim() : `https://${value.trim()}`;
+
+const makeComposerTitleFromUrl = (value: string) => {
+  try {
+    const url = new URL(normalizeComposerUrl(value));
+    return url.hostname.replace(/^www\./, '') || 'web-source';
+  } catch {
+    return 'web-source';
+  }
+};
 
 interface WorkbenchEditorContentProps {
   editor: EditorState;
@@ -148,9 +195,11 @@ interface WorkbenchEditorContentProps {
     options?: { baseContentHash?: string | null; revisionSummary?: string; actionType?: string; actor?: string }
   ) => void | Promise<boolean | void>;
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
-  onBindResource: (editorId: string) => void;
+  onBindResource: (editorId: string, anchorRect?: DOMRect | null) => void;
+  onAddSelectionAskToAssistant?: (messages: AiChatMessage[], detail: WorkbenchContextSelectionActionDetail) => void;
   aiContext?: AiChatContext & { activeFileContent?: string | null };
   resources?: ResourceReference[];
+  minimalPreview?: boolean;
 }
 
 const notionListClass = 'w-full divide-y divide-[#e1e1de] border-y border-[#e1e1de] bg-[#f8f8f6]';
@@ -204,6 +253,270 @@ const getResourceSourceUrl = (resource?: ResourceReference | null) => {
   const metadataUrl = resource?.metadata?.sourceUrl;
   return typeof metadataUrl === 'string' && metadataUrl.trim() ? metadataUrl.trim() : undefined;
 };
+
+const getResourceSize = (resource?: ResourceReference | null) => {
+  const directSize = typeof resource?.size === 'number' ? resource.size : undefined;
+  const metadataSize = resource?.metadata?.size;
+  return directSize ?? (typeof metadataSize === 'number' ? metadataSize : undefined);
+};
+
+const parseKnowledgeIndexLifecycle = (value?: string | null): Record<string, any> => {
+  try {
+    const parsed = JSON.parse(value || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const getResourceIndexMeta = (resource?: ResourceReference | null) => {
+  const latestJob = resource?.knowledgeIndexJobs?.[0];
+  const chunkCount = Number(resource?._count?.knowledgeChunks || resource?.chunkCount || latestJob?.chunkCount || 0);
+  const lifecycle = parseKnowledgeIndexLifecycle(latestJob?.errorMessage);
+  const stage = String(lifecycle.stage || '').toLowerCase();
+  const status = String(latestJob?.status || '').toLowerCase();
+  const vectorIndexed = lifecycle.vectorIndexed === true;
+  const vectorError = typeof lifecycle.vectorError === 'string' ? lifecycle.vectorError : '';
+  const isProcessing = status === 'queued' || status === 'pending' || status === 'running' || ['pending', 'extracting', 'chunking', 'embedding', 'upserting', 'verifying'].includes(stage);
+
+  if (isProcessing) {
+    return {
+      chunks: chunkCount > 0 ? `${chunkCount} chunks` : 'Indexing',
+      status: 'Indexing'
+    };
+  }
+
+  if (chunkCount > 0) {
+    if (status === 'degraded' || stage === 'degraded' || vectorError || !vectorIndexed) {
+      return {
+        chunks: `${chunkCount} chunks`,
+        status: `Vector ${vectorIndexed ? 'ready' : 'not ready'}`
+      };
+    }
+
+    return {
+      chunks: `${chunkCount} chunks`,
+      status: 'Indexed'
+    };
+  }
+
+  if (status === 'failed' || stage === 'failed') {
+    return {
+      chunks: 'No chunks',
+      status: 'Index failed'
+    };
+  }
+
+  if (latestJob) {
+    return {
+      chunks: 'No chunks',
+      status: 'Not indexed'
+    };
+  }
+
+  return null;
+};
+
+const getResourceHeaderMeta = (resource?: ResourceReference | null) => {
+  const items: string[] = [];
+  const size = getResourceSize(resource);
+  if (typeof size === 'number' && size > 0) {
+    items.push(formatBytes(size));
+  }
+
+  const indexMeta = getResourceIndexMeta(resource);
+  if (indexMeta) {
+    items.push(indexMeta.chunks);
+    items.push(indexMeta.status);
+  }
+
+  return items;
+};
+
+type OpenWebUIGuideTab = string;
+
+const openWebUIGuideTabs: Array<{ key: OpenWebUIGuideTab; label: string }> = [
+  { key: 'controls', label: 'Control' },
+  { key: 'overview', label: 'Overview' }
+];
+
+const documentGuideTabs: Array<{ key: OpenWebUIGuideTab; label: string }> = [
+  { key: 'controls', label: 'Control' },
+  { key: 'outline', label: 'Outline' },
+  { key: 'slides', label: 'Slides' }
+];
+
+const videoGuideTabs: Array<{ key: OpenWebUIGuideTab; label: string }> = [
+  { key: 'controls', label: 'Control' },
+  { key: 'summary', label: 'Summary' },
+  { key: 'chapters', label: 'Chapters' },
+  { key: 'transcript', label: 'Transcript' },
+  { key: 'slides', label: 'Slides' },
+  { key: 'keypoints', label: 'Key Points' }
+];
+
+const getResourceFileSizeLabel = (resource?: ResourceReference | null) => {
+  const size = getResourceSize(resource);
+  return typeof size === 'number' && size > 0 ? formatBytes(size) : '';
+};
+
+function OpenWebUITabs({
+  activeTab,
+  onChange,
+  tabs = openWebUIGuideTabs
+}: {
+  activeTab: OpenWebUIGuideTab;
+  onChange: (tab: OpenWebUIGuideTab) => void;
+  tabs?: Array<{ key: OpenWebUIGuideTab; label: string }>;
+}) {
+  return (
+    <div className="flex min-w-0 gap-1 overflow-x-auto text-sm font-medium">
+      {tabs.map((tab) => (
+        <button
+          key={tab.key}
+          type="button"
+          onClick={() => onChange(tab.key)}
+          className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-sm transition ${
+            activeTab === tab.key ? 'bg-gray-100 font-medium text-gray-900' : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function OpenWebUICollapsible({
+  title,
+  children,
+  defaultOpen = true
+}: {
+  title: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div className="py-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full cursor-pointer items-center justify-between gap-2 text-left text-sm text-gray-700 transition hover:text-gray-900"
+      >
+        <span>{title}</span>
+        <ChevronUp strokeWidth={3.5} className={`size-3.5 shrink-0 transition-transform ${open ? '' : 'rotate-180'}`} />
+      </button>
+      {open ? <div className="mt-1.5 text-sm font-normal text-gray-700">{children}</div> : null}
+    </div>
+  );
+}
+
+function OpenWebUIResourceFileCard({ resource }: { resource: ResourceReference }) {
+  return (
+    <div className="flex items-center gap-2 rounded-xl border border-gray-100 px-3 py-2">
+      <FileText className="size-4 shrink-0 text-gray-500" />
+      <div className="min-w-0 flex-1 truncate text-sm font-medium text-gray-700">{resource.name}</div>
+      <div className="shrink-0 text-xs text-gray-500">{getResourceFileSizeLabel(resource) || 'File'}</div>
+    </div>
+  );
+}
+
+function OpenWebUIParamRows({
+  rows
+}: {
+  rows: Array<{
+    label: ReactNode;
+    value?: ReactNode;
+    onClick?: () => void;
+    onDragStart?: (event: React.DragEvent<HTMLButtonElement>) => void;
+    draggable?: boolean;
+    tone?: 'default' | 'danger' | 'accent';
+  }>;
+}) {
+  return (
+    <div className="space-y-0.5 py-0.5">
+      {rows.map((row, index) => (
+        <button
+          key={index}
+          type="button"
+          onClick={row.onClick}
+          onDragStart={row.onDragStart}
+          draggable={row.draggable}
+          disabled={!row.onClick}
+          className={`flex w-full items-center justify-between gap-3 py-0.5 text-left text-xs ${
+            row.onClick ? 'cursor-pointer hover:text-gray-900' : 'cursor-default'
+          }`}
+        >
+          <span className="min-w-0 text-gray-700">{row.label}</span>
+          <span
+            className={`shrink-0 text-right ${
+              row.tone === 'danger' ? 'text-red-600' : row.tone === 'accent' ? 'text-blue-600' : 'text-gray-700'
+            }`}
+          >
+            {row.value ?? 'Default'}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function OpenWebUISectionBreak() {
+  return <hr className="my-2 border-gray-50" />;
+}
+
+function OpenWebUIGuideShell({
+  resource,
+  activeTab,
+  onTabChange,
+  tabs,
+  onClose,
+  children
+}: {
+  resource: ResourceReference;
+  activeTab: OpenWebUIGuideTab;
+  onTabChange: (tab: OpenWebUIGuideTab) => void;
+  tabs?: Array<{ key: OpenWebUIGuideTab; label: string }>;
+  onClose?: () => void;
+  children: ReactNode;
+}) {
+  const headerMeta = getResourceHeaderMeta(resource);
+
+  return (
+    <section className="flex h-full min-h-0 flex-col bg-white text-gray-900">
+      <div className="shrink-0 px-2 pb-2 pt-2">
+        <div className="flex items-center justify-between gap-4">
+          <OpenWebUITabs activeTab={activeTab} onChange={onTabChange} tabs={tabs} />
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex shrink-0 items-center justify-center rounded-lg p-1 text-gray-500 transition hover:bg-gray-100 hover:text-gray-900"
+              title="Close"
+            >
+              <X className="size-4" />
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-3 min-w-0 px-1">
+          <div className="truncate text-sm font-medium text-gray-900">{resource.name}</div>
+          <div className="mt-1 flex min-w-0 items-center gap-x-1.5 text-xs font-medium text-gray-500">
+            <span className="min-w-0 truncate">{resource.path}</span>
+            {headerMeta.map((item, index) => (
+              <Fragment key={`${item}-${index}`}>
+                <span className="shrink-0 text-gray-300">•</span>
+                <span className="shrink-0">{item}</span>
+              </Fragment>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-1 text-sm text-gray-700">{children}</div>
+    </section>
+  );
+}
 
 type WebPreviewData = Awaited<ReturnType<typeof fileSystemApi.extractUrlPreview>>;
 
@@ -380,9 +693,7 @@ function ResourceIntelligencePanel({
   const [analysis, setAnalysis] = useState<ResourceIntelligence | null>(null);
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'outline' | 'slides'>('outline');
-  const [actionsOpen, setActionsOpen] = useState(false);
-  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const [activeGuideTab, setActiveGuideTab] = useState<OpenWebUIGuideTab>('outline');
   const outlineNodes = analysis?.structure?.outline?.length
     ? analysis.structure.outline
     : analysis?.sections?.length
@@ -439,17 +750,6 @@ function ResourceIntelligencePanel({
     };
   }, [analysis?.status, resource.id, workspaceId]);
 
-  useEffect(() => {
-    if (!actionsOpen) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!actionsRef.current?.contains(event.target as Node)) {
-        setActionsOpen(false);
-      }
-    };
-    window.addEventListener('pointerdown', handlePointerDown);
-    return () => window.removeEventListener('pointerdown', handlePointerDown);
-  }, [actionsOpen]);
-
   const startAnalysis = (force = false) => {
     setStarting(true);
     const apiKind: ResourceIntelligence['kind'] = kind === 'html' ? 'visualization' : kind;
@@ -483,6 +783,31 @@ function ResourceIntelligencePanel({
     );
   };
 
+  const startSlideDrag = (event: React.DragEvent<HTMLButtonElement>, segment: ResourceTranscriptSegmentUi) => {
+    const locator = segment.locator || {};
+    const label = segment.title || `Part ${segment.index + 1}`;
+    const detail: WorkbenchContextSelectionActionDetail = {
+      fileId: resource.id,
+      fileName: resource.name,
+      panelType: 'resource',
+      sourceLabel: '文档切片',
+      selectedRange: {
+        page: segment.pageStart ?? locator.page ?? locator.pageStart,
+        pageStart: segment.pageStart ?? locator.pageStart ?? locator.page,
+        pageEnd: segment.pageEnd ?? locator.pageEnd ?? locator.page ?? segment.pageStart,
+        lineStart: locator.lineStart,
+        lineEnd: locator.lineEnd,
+        textLength: segment.text.length,
+        sourceType: 'resource_slide'
+      },
+      text: `[${intelligenceRangeLabel(segment.locator, segment.pageStart ? `p${segment.pageStart}` : `Part ${segment.index + 1}`)}] ${label}\n${segment.text}`,
+      prompt: '请基于我拖入的资源内容回答：'
+    };
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('application/x-workbench-context-selection', JSON.stringify(detail));
+    event.dataTransfer.setData('text/plain', detail.text || segment.text);
+  };
+
   if (collapsed) {
     return (
       <button
@@ -496,7 +821,6 @@ function ResourceIntelligencePanel({
     );
   }
 
-  const showSemanticMap = Boolean(hasAnalysis);
   const intelligenceTitle = resourceIntelligenceLabel(kind);
   const qualityLabel = analysis?.quality
     ? `Extraction ${analysis.quality.extraction} · Structure ${analysis.quality.structure} · Grounding ${analysis.quality.grounding}`
@@ -507,269 +831,170 @@ function ResourceIntelligencePanel({
   const oneLineSummary = clipText(analysis?.overview || analysis?.readingAdvice || '', 140);
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[#f8f8f6] text-[#25272b]">
-      <div className="shrink-0 border-b border-[#e1e1de] bg-[#f8f8f6] px-4 py-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-sm font-semibold text-[#25272b]">
-              Source guide
-              {(loading || isProcessing) && <Loader2 className="h-4 w-4 animate-spin text-[#777a80]" />}
-            </div>
-            <div className="mt-1 text-xs leading-5 text-[#777a80]">
-              {analysis?.status === 'failed'
-                ? 'Source guide failed'
-                : oneLineSummary || resourceIntelligenceSubtitle(kind, loading || isProcessing, hasAnalysis)}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <div ref={actionsRef} className="relative">
-              <button
-                type="button"
-                onClick={() => setActionsOpen((value) => !value)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#6f7378] transition hover:bg-[#f1f1ee] hover:text-[#202124]"
-                title="More actions"
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </button>
-              {actionsOpen && (
-                <div className="absolute right-0 top-9 z-20 w-80 overflow-hidden rounded-xl border border-[#e5e5e1] bg-white py-1 text-sm shadow-lg shadow-black/10">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActionsOpen(false);
-                      startAnalysis(true);
-                    }}
-                    disabled={starting}
-                    className="flex w-full items-center justify-between px-3 py-2 text-left text-[#34373c] transition hover:bg-[#f7f7f5] disabled:opacity-60"
-                  >
-                    <span>{analysis?.status === 'failed' ? 'Retry source guide' : 'Regenerate'}</span>
-                    {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5 text-[#8b8f94]" />}
-                  </button>
-                  {analysis ? (
-                    <div className="border-t border-[#eeeeeb] px-3 py-3 text-xs leading-5 text-[#5f6368]">
-                      <div className="mb-2 flex items-center gap-2 font-semibold text-[#34373c]">
-                        <Info className="h-3.5 w-3.5 text-[#8b8f94]" />
-                        Source guide details
-                      </div>
-                      <div className="space-y-1">
-                        <div>Status: {analysis.status}</div>
-                        {analysis.progress?.stage ? <div>Stage: {analysis.progress.stage}</div> : null}
-                        {analysis.progress?.message ? <div>{analysis.progress.message}</div> : null}
-                        {qualityLabel ? <div>{qualityLabel}</div> : null}
-                        {typeof analysis.quality?.coverage === 'number' ? <div>Coverage {Math.round(analysis.quality.coverage * 100)}%</div> : null}
-                        {typeof analysis.quality?.transcriptCoverage === 'number' ? <div>Transcript {Math.round(analysis.quality.transcriptCoverage * 100)}%</div> : null}
-                        {analysis.diagnostics ? (
-                          <div>
-                            Pages {parsedPages ?? 0}/{totalPages ?? '-'} · Outline {analysis.diagnostics.outlineNodeCount} · Slides {analysis.diagnostics.transcriptSegmentCount}
-                          </div>
-                        ) : null}
-                        {analysis.model ? <div>Model: {analysis.model}</div> : null}
-                        {analysis.completedAt ? <div>Completed {new Date(analysis.completedAt).toLocaleString()}</div> : null}
-                        {analysis.error ? <div className="text-[#9f341c]">{analysis.error}</div> : null}
-                      </div>
-                      {analysis.warnings?.length ? (
-                        <div className="mt-3 border-t border-[#eeeeeb] pt-2">
-                          <div className="mb-1 font-semibold text-[#34373c]">Notes</div>
-                          <div className="space-y-1 text-amber-700">
-                            {analysis.warnings.slice(0, 5).map((warning, index) => (
-                              <div key={`${warning}-${index}`}>{warning}</div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      {analysis.progress?.stages?.length ? (
-                        <div className="mt-3 border-t border-[#eeeeeb] pt-2">
-                          <div className="mb-1 font-semibold text-[#34373c]">Run history</div>
-                          <div className="max-h-40 space-y-2 overflow-auto pr-1">
-                            {analysis.progress.stages.slice(-6).map((stage) => (
-                              <div key={`${stage.stage}-${stage.startedAt || stage.endedAt || ''}`} className="rounded-lg bg-[#fbfbfa] px-2 py-1.5">
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="font-semibold text-[#34373c]">{stage.label || stage.stage}</span>
-                                  <span className="text-[#8b8f94]">{stage.status}</span>
-                                </div>
-                                {stage.message || stage.warning || stage.error ? (
-                                  <div className="mt-0.5 text-[#777a80]">{stage.message || stage.warning || stage.error}</div>
-                                ) : null}
-                                <div className="mt-0.5 flex flex-wrap gap-2 text-[#8b8f94]">
-                                  {stage.durationMs != null ? <span>{formatDuration(stage.durationMs)}</span> : null}
-                                  {stage.outputCount != null ? <span>{stage.outputCount} outputs</span> : null}
-                                  {stage.tool ? <span>{stage.tool}</span> : null}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={onToggleCollapsed}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#6f7378] transition hover:bg-[#f1f1ee] hover:text-[#202124]"
-              title={`Collapse ${intelligenceTitle}`}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto bg-[#f8f8f6] py-4">
-        {analysis?.status === 'ready' || analysis?.status === 'degraded' ? (
-          <div className="mb-4 px-4 text-sm leading-6 text-[#3f4247]">
-            {analysis.status === 'degraded' ? (
-              <div className="mb-2 inline-flex rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">Partial source guide</div>
-            ) : null}
-            {oneLineSummary || analysis.overview}
-            {analysis.readingAdvice ? <span className="text-[#6f7378]"> {analysis.readingAdvice}</span> : null}
-            {qualityLabel ? (
-              <div className="mt-2 text-xs leading-5 text-[#777a80]">Details are available from the more menu.</div>
-            ) : null}
-          </div>
-        ) : (
-          <div className="mb-4 px-4">
-            <div className="text-sm font-semibold text-[#25272b]">
-              {isProcessing
-                ? 'Source guide in progress'
-                : analysis?.status === 'failed'
-                  ? 'Source guide unavailable'
-                  : 'No source guide generated yet'}
-            </div>
-            <div className="mt-1 text-xs leading-5 text-[#777a80]">
-              {isProcessing
-                ? 'The backend is extracting structure and building a cited map.'
-                : analysis?.error || 'Run source guide to build a cited map for this source.'}
-            </div>
-            {isProcessing ? null : (
-              <button
-                type="button"
-                onClick={() => startAnalysis(Boolean(analysis?.status === 'failed'))}
-                disabled={starting}
-                className="mt-3 inline-flex h-8 items-center gap-2 rounded-full bg-[#202124] px-3 text-xs font-medium text-white transition hover:bg-[#34373c] disabled:opacity-60"
-              >
-                {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                {analysis?.status === 'failed' ? 'Retry' : 'Generate'}
-              </button>
+    <OpenWebUIGuideShell
+      resource={resource}
+      activeTab={activeGuideTab}
+      onTabChange={setActiveGuideTab}
+      tabs={documentGuideTabs}
+      onClose={onToggleCollapsed}
+    >
+      {activeGuideTab === 'controls' ? (
+        <div className="space-y-1">
+          <OpenWebUICollapsible title="Files">
+            <OpenWebUIResourceFileCard resource={resource} />
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Index">
+            <OpenWebUIParamRows
+              rows={[
+                { label: 'Source Type', value: intelligenceTitle },
+                { label: 'Status', value: loading ? 'Loading' : analysis?.status || 'Not analyzed' },
+                { label: 'Chunks', value: getResourceIndexMeta(resource)?.chunks || 'Default' },
+                { label: 'Vector Index', value: getResourceIndexMeta(resource)?.status || 'Default' },
+                { label: 'Pages', value: totalPages != null ? `${parsedPages ?? 0}/${totalPages}` : 'Default' }
+              ]}
+            />
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Actions">
+            <OpenWebUIParamRows
+              rows={[
+                {
+                  label: analysis?.status === 'failed' ? 'Retry Source Guide' : hasAnalysis ? 'Regenerate Source Guide' : 'Generate Source Guide',
+                  value: starting ? <Loader2 className="ml-auto h-4 w-4 animate-spin" /> : 'Run',
+                  onClick: () => startAnalysis(Boolean(hasAnalysis || analysis?.status === 'failed')),
+                  tone: 'accent'
+                }
+              ]}
+            />
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Debug">
+            <OpenWebUIParamRows
+              rows={[
+                { label: 'Status', value: analysis?.status || 'Default', tone: analysis?.status === 'failed' ? 'danger' : 'default' },
+                { label: 'Stage', value: analysis?.progress?.stage || 'Default' },
+                { label: 'Model', value: analysis?.model || 'Default' },
+                { label: 'Quality', value: qualityLabel || 'Default' },
+                { label: 'Coverage', value: typeof analysis?.quality?.coverage === 'number' ? `${Math.round(analysis.quality.coverage * 100)}%` : 'Default' },
+                { label: 'Completed', value: analysis?.completedAt ? new Date(analysis.completedAt).toLocaleString() : 'Default' }
+              ]}
+            />
+            {analysis?.error ? <div className="mt-2 text-xs leading-5 text-red-600">{analysis.error}</div> : null}
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Warnings" defaultOpen={Boolean(analysis?.warnings?.length)}>
+            {analysis?.warnings?.length ? (
+              <OpenWebUIParamRows
+                rows={analysis.warnings.slice(0, 8).map((warning, index) => ({
+                  label: `Warning ${index + 1}`,
+                  value: <span className="max-w-[180px] whitespace-normal text-right leading-5">{warning}</span>,
+                  tone: 'danger' as const
+                }))}
+              />
+            ) : (
+              <div className="text-xs text-gray-500">Default</div>
             )}
-          </div>
-        )}
-        {showSemanticMap ? (
-          <div>
-            <div className="mb-3 px-4">
-            <div className="flex items-center gap-1">
-              {(['outline', 'slides'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setActiveTab(tab)}
-                  className={`flex h-9 items-center justify-center overflow-hidden rounded-xl transition-all duration-300 ease-out ${
-                    activeTab === tab
-                      ? 'w-[116px] bg-white px-3 text-[#202124] shadow-[0_8px_24px_rgba(0,0,0,0.07)]'
-                      : 'w-9 px-0 text-[#7a7e84] hover:bg-white/70 hover:text-[#202124]'
-                  }`}
-                  title={tab === 'outline' ? 'Outline' : 'Slides'}
-                >
-                  {tab === 'outline' ? (
-                    <FileText className="h-4 w-4 shrink-0" />
-                  ) : (
-                    <Image className="h-4 w-4 shrink-0" />
-                  )}
-                  <span
-                    className={`whitespace-nowrap text-sm font-semibold transition-all duration-300 ease-out ${
-                      activeTab === tab ? 'ml-2 max-w-[76px] opacity-100' : 'ml-0 max-w-0 opacity-0'
-                    }`}
-                  >
-                    {tab === 'outline' ? `Outline ${flatOutline.length || ''}` : `Slides ${slideSegments.length || ''}`}
-                  </span>
-                </button>
-              ))}
-            </div>
-            </div>
-            {activeTab === 'outline' ? (
-              <div className="w-full divide-y divide-[#e1e1de] border-y border-[#e1e1de]">
-                {flatOutline.map((node) => (
-                  <button
-                    key={node.id}
-                    type="button"
-                    onClick={() => jumpToLocator(node)}
-                    className="group grid w-full grid-cols-[24px_1fr] gap-3 bg-transparent px-4 py-3 text-left transition duration-200 ease-out hover:bg-white focus-visible:bg-white focus-visible:outline-none"
-                    style={{ paddingLeft: `${12 + Math.max(0, (node.level || 1) - 1) * 14}px` }}
-                  >
-                    <FileText className="mt-0.5 h-5 w-5 text-[#9b9a95] transition group-hover:text-[#777a80]" />
-                    <div className="min-w-0">
-                      <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className={notionMetaClass}>
-                          {intelligenceRangeLabel(node.locator, node.pageStart ? `p${node.pageStart}` : undefined)}
-                        </span>
-                        <span className="text-[11px] text-[#b0b2b6]">L{node.level || 1}</span>
-                      </div>
-                      <div className="text-sm font-semibold leading-5 text-[#25272b]">{node.title}</div>
-                      {node.summary ? <p className="mt-2 text-sm leading-6 text-[#5f6368]">{node.summary}</p> : null}
-                      {node.evidenceSnippets?.length ? (
-                        <div className="mt-2 text-xs leading-5 text-[#777a80]">
-                          {node.evidenceSnippets[0]?.page ? <span className="font-mono text-[rgb(46,113,236)]">p{node.evidenceSnippets[0].page}</span> : null}
-                          {node.evidenceSnippets[0]?.page ? ' · ' : ''}
-                          {node.evidenceSnippets[0]?.text}
-                        </div>
-                      ) : null}
-                      {node.pageTypes?.length || node.confidence ? (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {node.confidence ? (
-                            <span className="text-[11px] text-[#777a80]">{node.confidence}</span>
-                          ) : null}
-                          {node.pageTypes?.slice(0, 2).map((pageType) => (
-                            <span key={`${node.id}:${pageType}`} className="text-[11px] text-[#777a80]">{pageType}</span>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  </button>
-                ))}
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Run History" defaultOpen={Boolean(analysis?.progress?.stages?.length)}>
+            {analysis?.progress?.stages?.length ? (
+              <OpenWebUIParamRows
+                rows={analysis.progress.stages.slice(-8).map((stage) => ({
+                  label: stage.label || stage.stage,
+                  value: <span className="max-w-[180px] whitespace-normal text-right leading-5">{stage.status}{stage.message ? ` · ${stage.message}` : ''}</span>
+                }))}
+              />
+            ) : (
+              <div className="text-xs text-gray-500">Default</div>
+            )}
+          </OpenWebUICollapsible>
+        </div>
+      ) : activeGuideTab === 'outline' ? (
+        <div className="space-y-1">
+          <OpenWebUICollapsible title="Summary" defaultOpen={Boolean(analysis?.overview || analysis?.readingAdvice)}>
+            {analysis?.status === 'ready' || analysis?.status === 'degraded' ? (
+              <OpenWebUIParamRows
+                rows={[
+                  { label: 'Status', value: analysis.status === 'degraded' ? 'Partial' : 'Ready', tone: analysis.status === 'degraded' ? 'danger' : 'default' },
+                  { label: 'Overview', value: <span className="max-w-[190px] whitespace-normal text-right leading-5">{oneLineSummary || analysis.overview || 'Default'}</span> },
+                  ...(analysis.readingAdvice ? [{
+                    label: 'Reading Advice',
+                    value: <span className="max-w-[190px] whitespace-normal text-right leading-5">{analysis.readingAdvice}</span>
+                  }] : [])
+                ]}
+              />
+            ) : (
+              <OpenWebUIParamRows
+                rows={[
+                  {
+                    label: 'Status',
+                    value: <span className="max-w-[190px] whitespace-normal text-right leading-5">
+                      {isProcessing
+                        ? 'Extracting'
+                        : analysis?.error || 'Not generated'}
+                    </span>,
+                    tone: analysis?.error ? 'danger' : 'default'
+                  }
+                ]}
+              />
+            )}
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Outline">
+            {flatOutline.length ? (
+              <OpenWebUIParamRows
+                rows={flatOutline.map((node) => ({
+                  label: (
+                    <span className="block min-w-0">
+                      <span className="block truncate">{node.title}</span>
+                      {node.summary ? <span className="mt-0.5 block line-clamp-2 text-gray-500">{node.summary}</span> : null}
+                    </span>
+                  ),
+                  value: (
+                    <span className="whitespace-nowrap text-gray-500">
+                      {intelligenceRangeLabel(node.locator, node.pageStart ? `p${node.pageStart}` : undefined) || `L${node.level || 1}`}
+                    </span>
+                  ),
+                  onClick: () => jumpToLocator(node)
+                }))}
+              />
+            ) : loading || isProcessing ? (
+              <div className="space-y-2">
+                {[0, 1, 2].map((item) => <div key={item} className="h-3 animate-pulse rounded bg-gray-100" />)}
               </div>
             ) : (
-              <div className="w-full divide-y divide-[#e1e1de] border-y border-[#e1e1de]">
-                {slideSegments.map((segment: ResourceTranscriptSegmentUi) => (
-                  <button
-                    key={segment.id}
-                    type="button"
-                    onClick={() => jumpToLocator(segment)}
-                    className="group grid w-full grid-cols-[24px_1fr] gap-3 bg-transparent px-4 py-3 text-left transition duration-200 ease-out hover:bg-white focus-visible:bg-white focus-visible:outline-none"
-                  >
-                    <FileText className="mt-0.5 h-5 w-5 text-[#9b9a95] transition group-hover:text-[#777a80]" />
-                    <div className="min-w-0">
-                      <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className={notionMetaClass}>
-                          {intelligenceRangeLabel(segment.locator, segment.pageStart ? `p${segment.pageStart}` : `Part ${segment.index + 1}`)}
-                        </span>
-                        {segment.title ? <span className="truncate text-[11px] text-[#96999d]">{segment.title}</span> : null}
-                      </div>
-                      <p className="line-clamp-6 whitespace-pre-wrap text-sm leading-6 text-[#34373c]">{segment.text}</p>
-                      {segment.confidence ? (
-                        <div className="mt-2">
-                          <span className="text-[11px] text-[#777a80]">{segment.confidence}</span>
-                        </div>
-                      ) : null}
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <div className="text-xs text-gray-500">Default</div>
             )}
-          </div>
-        ) : loading || isProcessing ? (
-          <div className="space-y-0 divide-y divide-[#e1e1de] border-y border-[#e1e1de]">
-            {[0, 1, 2, 3, 4].map((item) => (
-              <div key={item} className="px-4 py-3">
-                <div className="h-3 w-24 animate-pulse rounded bg-[#ececea]" />
-                <div className="mt-3 h-3 w-3/4 animate-pulse rounded bg-[#f0f0ee]" />
-                <div className="mt-2 h-3 w-11/12 animate-pulse rounded bg-[#f0f0ee]" />
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </section>
+          </OpenWebUICollapsible>
+        </div>
+      ) : activeGuideTab === 'slides' ? (
+        <div className="space-y-1">
+          <OpenWebUICollapsible title="Slides">
+            {slideSegments.length ? (
+              <OpenWebUIParamRows
+                rows={slideSegments.map((segment: ResourceTranscriptSegmentUi) => ({
+                  label: (
+                    <span className="block min-w-0">
+                      <span className="block truncate">{segment.title || `Part ${segment.index + 1}`}</span>
+                      <span className="mt-0.5 block line-clamp-2 text-gray-500">{segment.text}</span>
+                    </span>
+                  ),
+                  value: intelligenceRangeLabel(segment.locator, segment.pageStart ? `p${segment.pageStart}` : `Part ${segment.index + 1}`),
+                  onClick: () => jumpToLocator(segment),
+                  onDragStart: (event) => startSlideDrag(event, segment),
+                  draggable: true
+                }))}
+              />
+            ) : (
+              <div className="text-xs text-gray-500">Default</div>
+            )}
+          </OpenWebUICollapsible>
+        </div>
+      ) : (
+        <div className="text-xs text-gray-500">Default</div>
+      )}
+    </OpenWebUIGuideShell>
   );
 }
 
@@ -793,78 +1018,127 @@ function ResourcePanelShell({
   children: ReactNode;
 }) {
   const [guideOpen, setGuideOpen] = useState(false);
+  const [guideWidth, setGuideWidth] = useState(() => {
+    if (typeof window === 'undefined') return 420;
+    const stored = Number(window.localStorage.getItem('workbench.resourceGuideWidth') || 420);
+    return Number.isFinite(stored) ? Math.max(320, Math.min(640, stored)) : 420;
+  });
+  const [isResizingGuide, setIsResizingGuide] = useState(false);
   const hasGuide = Boolean(guidePanel || guideKind);
+  const headerMeta = getResourceHeaderMeta(resource);
+  const shellRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isResizingGuide) return;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const handleMove = (event: MouseEvent) => {
+      if (!shellRef.current) return;
+      const bounds = shellRef.current.getBoundingClientRect();
+      const next = Math.max(320, Math.min(640, bounds.right - event.clientX));
+      setGuideWidth(next);
+    };
+    const handleUp = () => {
+      setIsResizingGuide(false);
+    };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [isResizingGuide]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('workbench.resourceGuideWidth', String(Math.round(guideWidth)));
+    }
+  }, [guideWidth]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white text-[#25272b]">
-      <div className="shrink-0 border-b border-[#eeeeeb] bg-white px-5 py-4">
+    <div ref={shellRef} className="flex h-full min-h-0 flex-col overflow-hidden bg-white text-[#25272b]">
+      <div className="shrink-0 bg-white px-5 py-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h1 className="truncate text-xl font-semibold text-[#202124]">
               {resource.name}
             </h1>
-            <div className="mt-1 truncate text-sm text-[#8b8f94]">{resource.path}</div>
+            <div className="mt-1 flex min-w-0 items-center gap-x-1.5 text-xs font-medium text-[#8b8f94]">
+              <span className="min-w-0 truncate">{resource.path}</span>
+              {headerMeta.map((item, index) => (
+                <Fragment key={`${item}-${index}`}>
+                  <span className="shrink-0 text-[#c6c9ce]">•</span>
+                  <span className="shrink-0">{item}</span>
+                </Fragment>
+              ))}
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {hasGuide && (
               <button
                 type="button"
                 onClick={() => setGuideOpen((value) => !value)}
-                className={`inline-flex h-9 items-center justify-center overflow-hidden rounded-xl transition-all duration-300 ease-out ${
-                  guideOpen
-                    ? 'w-[132px] bg-[#f3f2ee] px-3 text-[#202124] shadow-[0_8px_24px_rgba(0,0,0,0.07)]'
-                    : 'w-9 px-0 text-[#7a7e84] hover:bg-[#f6f6f4] hover:text-[#202124]'
-                }`}
-                title="Source guide"
+                className="flex cursor-pointer rounded-xl px-2 py-2 text-[#55585d] transition hover:bg-gray-50 hover:text-[#202124]"
+                title="Controls"
                 aria-pressed={guideOpen}
               >
-                <PanelRight className="h-4 w-4 shrink-0" />
-                <span
-                  className={`whitespace-nowrap text-sm font-semibold transition-all duration-300 ease-out ${
-                    guideOpen ? 'ml-2 max-w-[92px] opacity-100' : 'ml-0 max-w-0 opacity-0'
-                  }`}
-                >
-                  Source guide
-                </span>
+                <div className="m-auto self-center">
+                  <OWAdjustmentsHorizontalIcon className="size-5" strokeWidth={1} />
+                </div>
               </button>
             )}
             {sourceUrl && (
               <a
                 href={sourceUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#4b4f55] transition hover:bg-[#f1f1ef] hover:text-[#202124]"
-                title="Open source"
+                download
+                className="flex cursor-pointer rounded-xl px-2 py-2 text-[#55585d] transition hover:bg-gray-50 hover:text-[#202124]"
+                title="Download source"
               >
-                <ArrowUpRight className="h-5 w-5" />
+                <div className="m-auto self-center">
+                  <OWDownloadIcon className="size-5" strokeWidth={1.5} />
+                </div>
               </a>
             )}
           </div>
         </div>
       </div>
       <div
-        className={`grid min-h-0 flex-1 bg-white ${
-          guideOpen ? 'xl:grid-cols-[minmax(0,1fr)_420px]' : 'xl:grid-cols-[minmax(0,1fr)]'
-        }`}
+        className="flex min-h-0 flex-1 flex-col bg-white xl:flex-row"
+        style={{ '--resource-guide-width': `${guideWidth}px` } as React.CSSProperties}
       >
-        <div className="min-h-0 overflow-hidden">{children}</div>
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">{children}</div>
         {guideOpen && (
-        <aside className="min-h-0 border-t border-[#eeeeeb] bg-[#f8f8f6] xl:border-l xl:border-t-0">
-          {guidePanel ? (
-            guidePanel({
-              collapsed: false,
-              onToggleCollapsed: () => setGuideOpen(false)
-            })
-          ) : guideKind ? (
-            <ResourceIntelligencePanel
-              resource={resource}
-              workspaceId={workspaceId}
-              kind={guideKind}
-              collapsed={false}
-              onToggleCollapsed={() => setGuideOpen(false)}
-            />
-          ) : null}
-        </aside>
+          <>
+            <div
+              className="relative z-20 hidden items-center justify-center border-l border-gray-50 transition hover:border-gray-200 xl:flex"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                setIsResizingGuide(true);
+              }}
+            >
+              <div className="absolute -bottom-0 -left-1.5 -right-1.5 -top-0 z-20 cursor-col-resize bg-transparent" />
+            </div>
+            <aside
+              className="min-h-0 w-full border-t border-[#eeeeeb] bg-white xl:w-[var(--resource-guide-width)] xl:shrink-0 xl:border-l xl:border-t-0"
+            >
+              {guidePanel ? (
+                guidePanel({
+                  collapsed: false,
+                  onToggleCollapsed: () => setGuideOpen(false)
+                })
+              ) : guideKind ? (
+                <ResourceIntelligencePanel
+                  resource={resource}
+                  workspaceId={workspaceId}
+                  kind={guideKind}
+                  collapsed={false}
+                  onToggleCollapsed={() => setGuideOpen(false)}
+                />
+              ) : null}
+            </aside>
+          </>
         )}
       </div>
     </div>
@@ -889,7 +1163,7 @@ function VideoLearningPanel({
   onClose?: () => void;
 }) {
   const [analysis, setAnalysis] = useState<VideoAnalysis | null>(null);
-  const [activeTrack, setActiveTrack] = useState<'learning' | 'chapters' | 'transcript' | 'slides' | 'review'>('chapters');
+  const [activeGuideTab, setActiveGuideTab] = useState<OpenWebUIGuideTab>('chapters');
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
   const [savingEdits, setSavingEdits] = useState(false);
@@ -1294,665 +1568,289 @@ function VideoLearningPanel({
   };
 
   return (
-    <div className="flex h-full min-h-[520px] flex-col bg-[#f8f8f6] xl:min-h-0">
-      <div className="shrink-0 border-b border-[#e1e1de] bg-[#f8f8f6] px-4 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-            <div className="text-sm font-semibold text-[#25272b]">Source guide</div>
-          <div className="mt-1 text-xs text-[#777a80]">
-            {videoSubtitle}
-          </div>
-          {hasAnalysisIssue && (
-            <button
-              type="button"
-              onClick={() => {
-                setOpsPanelOpen(true);
-                setActionsOpen(true);
-              }}
-              className="mt-2 inline-flex h-7 max-w-full items-center gap-2 rounded-full bg-[#fff3ef] px-3 text-xs font-medium text-[#a3341c] ring-1 ring-[#f1d3ca] transition hover:bg-[#ffebe5]"
-            >
-              <span className="truncate">
-                {analysis?.status === 'failed' || analysis?.status === 'cancelled' ? 'Video analysis did not finish.' : 'Video analysis needs attention.'}
-              </span>
-              <span className="shrink-0 font-semibold text-[rgb(46,113,236)]">Details</span>
-            </button>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {hasContent && (
-            editing ? (
-              <>
-                <button
-                  type="button"
-                  onClick={cancelManualEdits}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#eeeeeb] px-3 text-xs font-medium text-[#5f6368] transition hover:bg-[#f6f6f4]"
-                >
-                  <X className="h-3.5 w-3.5" />
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => saveManualEdits({ status: reviewStatus, locked: isLocked })}
-                  disabled={savingEdits}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#202124] px-3 text-xs font-medium text-white transition hover:bg-[#34373c] disabled:opacity-60"
-                >
-                  {savingEdits ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                  Save
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setEditing(true)}
-                disabled={isLocked}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#eeeeeb] px-3 text-xs font-medium text-[#5f6368] transition hover:bg-[#f6f6f4]"
-              >
-                <Edit3 className="h-3.5 w-3.5" />
-                Edit
-              </button>
-            )
-          )}
-          <div ref={actionsRef} className="relative">
-            <button
-              type="button"
-              onClick={() => {
-                setActionsOpen((value) => !value);
-                setOpsPanelOpen(true);
-              }}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#5f6368] transition hover:bg-[#f6f6f4] hover:text-[#202124]"
-              title="More actions"
-            >
-              <MoreHorizontal className="h-4 w-4" />
-            </button>
-            {actionsOpen && (
-              <div className="absolute right-0 top-9 z-30 w-80 overflow-hidden rounded-xl border border-[#e5e5e1] bg-white py-1 text-sm shadow-lg shadow-black/10">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActionsOpen(false);
-                    startAnalysis(Boolean(hasContent || isStaleAnalysis));
-                  }}
-                  disabled={!canStartAnalysis}
-                  className="flex w-full items-center justify-between px-3 py-2 text-left text-[#34373c] transition hover:bg-[#f7f7f5] disabled:opacity-60"
-                >
-                  <span>{analysisActionLabel}</span>
-                  {starting || (!isStaleAnalysis && isRunning)
-                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    : hasContent ? <RefreshCcw className="h-3.5 w-3.5 text-[#8b8f94]" /> : <Sparkles className="h-3.5 w-3.5 text-[#8b8f94]" />}
-                </button>
-                {isRunning && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActionsOpen(false);
-                      cancelAnalysis();
-                    }}
-                    disabled={starting || progress?.canCancel === false}
-                    className="flex w-full items-center justify-between px-3 py-2 text-left text-[#34373c] transition hover:bg-[#f7f7f5] disabled:opacity-60"
-                  >
-                    <span>Cancel analysis</span>
-                    <X className="h-3.5 w-3.5 text-[#8b8f94]" />
-                  </button>
-                )}
-                <div className="border-t border-[#eeeeeb] px-3 py-3 text-xs leading-5 text-[#5f6368]">
-                  <div className="mb-2 flex items-center gap-2 font-semibold text-[#34373c]">
-                    <Info className="h-3.5 w-3.5 text-[#8b8f94]" />
-                    Source guide details
-                  </div>
-                  <div className="space-y-1">
-                    <div>Status: {analysis ? videoAnalysisStatusLabel[analysis.status] : loading ? 'Loading' : 'Not analyzed'}</div>
-                    {analysis?.provider ? <div>Source: {analysis.provider}</div> : null}
-                    {progress ? <div>Stage: {videoStageLabels[activeStage] || activeStage} · {progressPercent}%</div> : null}
-                    {progress?.message ? <div>{progress.message}</div> : null}
-                    {progress?.heartbeatAt ? <div>Last update {new Date(progress.heartbeatAt).toLocaleString()}</div> : null}
-                    {analysis?.manualRevision ? (
-                      <div>Manual revision {analysis.manualRevision.revision} saved {new Date(analysis.manualRevision.updatedAt).toLocaleString()}</div>
-                    ) : null}
-                    {analysis?.review ? <div>Review: {reviewStatus.replace('_', ' ')}{isLocked ? ' · locked' : ''}</div> : null}
-                    {analysis?.errorClass ? <div>{errorClassLabel[analysis.errorClass] || analysis.errorClass}</div> : null}
-                    {analysis?.error ? <div className="text-[#9f341c]">{analysis.error}</div> : null}
-                    {error ? <div className="text-[#9f341c]">{error}</div> : null}
-                  </div>
-                  {progress?.stages?.length ? <div className="mt-3"><ProgressPanel /></div> : null}
-                  {analysis?.warnings?.length ? (
-                    <div className="mt-3 border-t border-[#eeeeeb] pt-2">
-                      <div className="mb-1 font-semibold text-[#34373c]">Notes</div>
-                      <div className="space-y-1 text-amber-700">
-                        {analysis.warnings.slice(0, 5).map((warning, index) => (
-                          <div key={`${warning}-${index}`}>{warning}</div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            )}
-          </div>
-          {onClose && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#6f7378] transition hover:bg-[#f1f1ee] hover:text-[#202124]"
-              title="Close source guide"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-        </div>
-      </div>
-
-      <div className="shrink-0 border-b border-[#e1e1de] bg-[#f8f8f6] px-4 py-3">
-        <div className="flex items-center gap-1">
-          {([
-            { key: 'chapters', label: 'Chapters', count: chapters.length, icon: FileText },
-            { key: 'transcript', label: 'Transcript', count: transcript.length, icon: FileText },
-            { key: 'slides', label: 'Slides', count: slides.length, icon: Image },
-            { key: 'learning', label: 'Evidence & Review', count: keyPoints.length, icon: Sparkles }
-          ] as const).map(({ key, label, count, icon: Icon }) => {
-            const active = activeTrack === key || (activeTrack === 'review' && key === 'learning');
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setActiveTrack(key)}
-                className={`flex h-9 items-center justify-center overflow-hidden rounded-xl transition-all duration-300 ease-out ${
-                  active
-                    ? 'w-[132px] bg-white px-3 text-[#202124] shadow-[0_8px_24px_rgba(0,0,0,0.07)]'
-                    : 'w-9 px-0 text-[#7a7e84] hover:bg-white/70 hover:text-[#202124]'
-                }`}
-                title={label}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                <span className={`whitespace-nowrap text-sm font-semibold transition-all duration-300 ease-out ${
-                  active ? 'ml-2 max-w-[96px] opacity-100' : 'ml-0 max-w-0 opacity-0'
-                }`}>
-                  {label}{count ? ` ${count}` : ''}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-auto bg-[#f8f8f6] py-4">
-        {!analysis || (!hasContent && analysis.status === 'idle') ? (
-          <div className="border-y border-[#e1e1de] px-4 py-5 text-sm leading-6 text-[#5f6368]">
-            Start analysis to extract captions, AI chapters, learning key points, and slide-like frames from this video.
-          </div>
-        ) : (
-            <section ref={trackRef} className="min-w-0">
-              {activeTrack === 'learning' && (
-                <div className="space-y-4">
-            {analysis.manualRevision && (
-              <div className="border-y border-[#e1e1de] px-4 py-2 text-xs text-[#777a80]">
-                Manual revision {analysis.manualRevision.revision} saved {new Date(analysis.manualRevision.updatedAt).toLocaleString()} · {reviewStatus.replace('_', ' ')}{isLocked ? ' · locked' : ''}
-              </div>
-            )}
-            {editing ? (
-              <textarea
-                value={draftSummary}
-                onChange={(event) => setDraftSummary(event.target.value)}
-                className="min-h-[140px] w-full rounded-xl border border-[#d7d7d2] px-3 py-2 text-sm leading-6 text-[#34373c] outline-none focus:border-[rgb(46,113,236)] focus:ring-2 focus:ring-[rgb(46,113,236)]/15"
+    <OpenWebUIGuideShell
+      resource={resource}
+      activeTab={activeGuideTab}
+      onTabChange={setActiveGuideTab}
+      tabs={videoGuideTabs}
+      onClose={onClose}
+    >
+      {activeGuideTab === 'controls' ? (
+        <div className="space-y-1">
+          <OpenWebUICollapsible title="Files">
+            <OpenWebUIResourceFileCard resource={resource} />
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Analysis">
+            <OpenWebUIParamRows
+              rows={[
+                { label: 'Status', value: analysis ? videoAnalysisStatusLabel[analysis.status] : loading ? 'Loading' : 'Not analyzed' },
+                { label: 'Provider', value: analysis?.provider || 'Default' },
+                { label: 'Stage', value: progress ? videoStageLabels[activeStage] || activeStage : 'Default' },
+                { label: 'Progress', value: progress ? `${progressPercent}%` : 'Default' },
+                { label: 'Current Time', value: formatVideoTime(currentTime) },
+                { label: 'Review', value: `${reviewStatus.replace('_', ' ')}${isLocked ? ' · locked' : ''}` }
+              ]}
+            />
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Actions">
+            <OpenWebUIParamRows
+              rows={[
+                {
+                  label: analysisActionLabel,
+                  value: starting || (!isStaleAnalysis && isRunning) ? <Loader2 className="ml-auto h-4 w-4 animate-spin" /> : 'Run',
+                  onClick: canStartAnalysis ? () => startAnalysis(Boolean(hasContent || isStaleAnalysis)) : undefined,
+                  tone: 'accent'
+                },
+                ...(isRunning ? [{
+                  label: 'Cancel Analysis',
+                  value: 'Stop',
+                  onClick: progress?.canCancel === false ? undefined : cancelAnalysis,
+                  tone: 'danger' as const
+                }] : []),
+                ...(hasContent ? [{
+                  label: editing ? 'Save Manual Edits' : 'Edit Analysis',
+                  value: editing ? 'Save' : 'Edit',
+                  onClick: editing ? () => saveManualEdits({ status: reviewStatus, locked: isLocked }) : isLocked ? undefined : () => setEditing(true),
+                  tone: 'accent' as const
+                }] : []),
+                ...(editing ? [{
+                  label: 'Cancel Edits',
+                  value: 'Cancel',
+                  onClick: cancelManualEdits
+                }] : []),
+                ...(analysis ? [{
+                  label: isLocked ? 'Unlock Review' : 'Lock Review',
+                  value: isLocked ? 'Locked' : 'Unlocked',
+                  onClick: () => updateReview({ locked: !isLocked, status: reviewStatus })
+                }] : [])
+              ]}
+            />
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Debug">
+            <OpenWebUIParamRows
+              rows={[
+                { label: 'Status', value: analysis ? videoAnalysisStatusLabel[analysis.status] : 'Default', tone: hasAnalysisIssue ? 'danger' : 'default' },
+                { label: 'Error Class', value: analysis?.errorClass ? errorClassLabel[analysis.errorClass] || analysis.errorClass : 'Default' },
+                { label: 'Heartbeat', value: progress?.heartbeatAt ? new Date(progress.heartbeatAt).toLocaleString() : 'Default' },
+                { label: 'Manual Revision', value: analysis?.manualRevision ? String(analysis.manualRevision.revision) : 'Default' },
+                { label: 'Transcript', value: `${transcript.length}` },
+                { label: 'Chapters', value: `${chapters.length}` },
+                { label: 'Slides', value: `${slides.length}` }
+              ]}
+            />
+            {analysis?.error || error ? <div className="mt-2 text-xs leading-5 text-red-600">{analysis?.error || error}</div> : null}
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Run History" defaultOpen={Boolean(progress?.stages?.length)}>
+            {progress?.stages?.length ? (
+              <OpenWebUIParamRows
+                rows={progress.stages.slice(-10).map((stage) => ({
+                  label: stage.label || videoStageLabels[stage.stage] || stage.stage,
+                  value: <span className="max-w-[180px] whitespace-normal text-right leading-5">{stage.status}{stage.message ? ` · ${stage.message}` : ''}</span>
+                }))}
               />
-            ) : analysis.summary ? <div className="px-4">
-              <div className="mb-2 flex items-center gap-2">
-                <ConfidenceBadge confidence={analysis.summaryConfidence} edited={analysis.summaryManuallyEdited} />
-                {analysis.summarySourceRange && (
-                  <span className="text-xs text-[#777a80]">
-                    {videoRangeText(analysis.summarySourceRange.start, analysis.summarySourceRange.end)}
-                  </span>
-                )}
-              </div>
-              <p className="whitespace-pre-wrap text-sm leading-7 text-[#34373c]">{analysis.summary}</p>
-              <EvidenceList evidence={analysis.summaryEvidenceSegments} />
-            </div> : (
-              <p className="text-sm leading-7 text-[#777a80]">No summary is available yet.</p>
+            ) : (
+              <div className="text-xs text-gray-500">Default</div>
             )}
-                  {activeChapter && (
-                    <button
-                      type="button"
-                      draggable
-                      onDragStart={(event) => {
-                        startVideoDrag(event, {
-                          text: `[${videoRangeText(activeChapter.start, activeChapter.end)}] ${activeChapter.title}${activeChapter.summary ? `\n${activeChapter.summary}` : ''}`,
-                          selectedRange: {
-                            timestampStart: activeChapter.start,
-                            timestampEnd: activeChapter.end,
-                            sourceType: 'video_chapter',
-                            textLength: `${activeChapter.title}${activeChapter.summary || ''}`.length
-                          },
-                          label: '视频章节'
-                        });
-                      }}
-                      onClick={() => seekTo(activeChapter.start)}
-                      className={`${notionRowClass} border-y border-[#e1e1de]`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-[#777a80]">Current chapter</div>
-                        <span className="text-xs font-semibold text-[rgb(46,113,236)]">{videoRangeText(activeChapter.start, activeChapter.end)}</span>
-                      </div>
-                      <div className="mt-2 text-sm font-semibold text-[#25272b]">{activeChapter.title}</div>
-                      {activeChapter.summary && <p className="mt-1 text-sm leading-6 text-[#5f6368]">{activeChapter.summary}</p>}
-                    </button>
-                  )}
-
-                  {nearbySlides.length > 0 && (
-	                    <div className={notionListClass}>
-                      {nearbySlides.map((slide) => {
-                        const src = slide.imageUrl || (slide.imageFileId ? fileSystemApi.downloadUrl(workspaceId, slide.imageFileId) : '');
-                        const active = slide.id === activeSlide?.id;
-                        return (
-	                          <button
-                              key={slide.id}
-                              type="button"
-                              draggable
-                              onDragStart={(event) => {
-                                const transcriptText = (slide.transcriptSegmentIds || [])
-                                  .map((segmentId) => analysis.transcript.find((segment) => segment.id === segmentId))
-                                  .filter(Boolean)
-                                  .slice(0, 2)
-                                  .map((segment) => segment?.text)
-                                  .filter(Boolean)
-                                  .join(' ');
-                                startVideoDrag(event, {
-                                  text: `[${formatVideoTime(slide.timestamp)}] ${slide.title || 'Slide'}${slide.ocrText ? `\nOCR: ${slide.ocrText}` : ''}${transcriptText ? `\n${transcriptText}` : ''}`,
-                                  selectedRange: {
-                                    timestampStart: slide.timestamp,
-                                    timestampEnd: slide.timestamp,
-                                    sourceType: 'video_slide',
-                                    chapterId: slide.chapterId,
-                                    textLength: `${slide.title || ''}${slide.ocrText || ''}`.length
-                                  },
-                                  label: '视频幻灯片'
-                                });
-                              }}
-                              onClick={() => seekTo(slide.timestamp)}
-                              className={`${notionRowClass} grid grid-cols-[96px_1fr] gap-3 ${active ? notionActiveRowClass : ''}`}
-                            >
-                            {src ? <img src={src} alt={slide.title || 'Video frame'} className="aspect-video w-full bg-[#f6f6f4] object-cover" /> : <div className="flex aspect-video w-full items-center justify-center bg-[#f6f6f4] text-xs text-[#777a80]">Frame</div>}
-                            <div className="min-w-0 text-xs">
-                              <div className="font-semibold text-[rgb(46,113,236)]">{formatVideoTime(slide.timestamp)}</div>
-                              {slide.title && <div className="mt-1 line-clamp-1 font-semibold text-[#25272b]">{slide.title}</div>}
-                              {slide.ocrText && <div className="mt-1 line-clamp-2 text-[#5f6368]">{slide.ocrText}</div>}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-	                  <div className="border-y border-[#e1e1de] bg-[#f8f8f6]">
-                    <div className="flex items-center justify-between border-b border-[#e1e1de] px-4 py-2">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-[#777a80]">Live transcript evidence</div>
-                      <div className="text-xs font-semibold text-[rgb(46,113,236)]">{formatVideoTime(currentTime)}</div>
-                    </div>
-	                    <div className="max-h-[260px] overflow-auto">
-                      {transcript.length ? transcript.map((segment) => {
-                        const active = activeTranscript?.id === segment.id || highlightedTimestamp != null && highlightedTimestamp >= segment.start && highlightedTimestamp <= segment.end;
-                        const selected = selectedRange?.segmentIds.includes(segment.id);
-                        return (
-                          <button
-                            key={segment.id}
-                            type="button"
-                            draggable
-                            onDragStart={(event) => {
-                              startVideoDrag(event, {
-                                text: `[${videoRangeText(segment.start, segment.end)}] ${segment.text}`,
-                                selectedRange: {
-                                  timestampStart: segment.start,
-                                  timestampEnd: segment.end,
-                                  segmentIds: [segment.id],
-                                  sourceType: 'video_transcript',
-                                  textLength: segment.text.length
-                                },
-                                label: '视频字幕'
-                              });
-                            }}
-                            onClick={(event) => {
-                              seekTo(segment.start);
-                              selectTranscriptRange(segment);
-                            }}
-	                            className={`${notionRowClass} grid grid-cols-[88px_1fr] gap-3 ${
-	                              active ? notionActiveRowClass : selected ? 'bg-[#f7f8ff]' : ''
-	                            }`}
-                          >
-                            <span className="text-xs font-semibold text-[rgb(46,113,236)]">{videoRangeText(segment.start, segment.end)}</span>
-                            <span className="text-sm leading-6 text-[#34373c]">{segment.text}</span>
-                          </button>
-                        );
-                      }) : <div className="px-4 py-3 text-sm text-[#777a80]">No transcript available.</div>}
-                    </div>
-                  </div>
-
-                  {activeKeyPoints.length > 0 && (
-	                    <div className={notionListClass}>
-                      {activeKeyPoints.map((point) => (
-	                        <button
-                            key={point.id}
-                            type="button"
-                            draggable
-                            onDragStart={(event) => {
-                              const ts = point.timestamps[0] ?? point.sourceRange?.start ?? 0;
-                              startVideoDrag(event, {
-                                text: `[${point.timestamps.map(formatVideoTime).join(', ')}] ${point.concept}\n${point.explanation}`,
-                                selectedRange: {
-                                  timestampStart: point.sourceRange?.start ?? ts,
-                                  timestampEnd: point.sourceRange?.end ?? ts,
-                                  sourceType: 'video_key_point',
-                                  textLength: `${point.concept}${point.explanation}`.length
-                                },
-                                label: '视频关键点'
-                              });
-                            }}
-                            onClick={() => seekTo(point.timestamps[0] ?? point.sourceRange?.start)}
-                            className={notionRowClass}
-                          >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-[#25272b]">{point.concept}</div>
-                            <ConfidenceBadge confidence={point.confidence} edited={point.manuallyEdited} />
-                          </div>
-                          <div className="mt-1 text-xs leading-5 text-[#5f6368]">{point.explanation}</div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-            {keyPoints.length > 0 && (
-	              <div className={notionListClass}>
-                {keyPoints.map((point, index) => (
-                  <div
-                    key={point.id}
-                    role="button"
-                    tabIndex={0}
-                    draggable
-                    onDragStart={(event) => {
-                      const ts = point.timestamps[0] ?? point.sourceRange?.start ?? 0;
-                      startVideoDrag(event, {
-                        text: `[${point.timestamps.map(formatVideoTime).join(', ')}] ${point.concept}\n${point.explanation}`,
-                        selectedRange: {
-                          timestampStart: point.sourceRange?.start ?? ts,
-                          timestampEnd: point.sourceRange?.end ?? ts,
-                          sourceType: 'video_key_point',
-                          textLength: `${point.concept}${point.explanation}`.length
-                        },
-                        label: '视频关键点'
-                      });
-                    }}
-                    onClick={() => point.timestamps[0] != null && seekTo(point.timestamps[0])}
-                    onKeyDown={(event) => {
-                      if ((event.key === 'Enter' || event.key === ' ') && point.timestamps[0] != null) {
-                        event.preventDefault();
-                        seekTo(point.timestamps[0]);
-                      }
-                    }}
-	                    className={notionRowClass}
-                  >
-                    {editing ? (
-                      <div className="space-y-2" onClick={(event) => event.stopPropagation()}>
-                        <input
-                          value={point.concept}
-                          onChange={(event) => setDraftKeyPoints((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, concept: event.target.value } : item))}
-                          className="w-full rounded-lg border border-[#d7d7d2] px-2 py-1.5 text-sm font-semibold outline-none focus:border-[rgb(46,113,236)]"
-                        />
-                        <textarea
-                          value={point.explanation}
-                          onChange={(event) => setDraftKeyPoints((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, explanation: event.target.value } : item))}
-                          className="min-h-[72px] w-full rounded-lg border border-[#d7d7d2] px-2 py-1.5 text-xs leading-5 outline-none focus:border-[rgb(46,113,236)]"
-                        />
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="text-sm font-semibold text-[#25272b]">{point.concept}</div>
-                          <ConfidenceBadge confidence={point.confidence} edited={point.manuallyEdited} />
-                        </div>
-                        <div className="mt-1 text-xs leading-5 text-[#5f6368]">{point.explanation}</div>
-                      </>
-                    )}
-                    {point.timestamps.length > 0 && (
-                      <div
+          </OpenWebUICollapsible>
+          <OpenWebUISectionBreak />
+          <OpenWebUICollapsible title="Warnings" defaultOpen={Boolean(analysis?.warnings?.length)}>
+            {analysis?.warnings?.length ? (
+              <OpenWebUIParamRows
+                rows={analysis.warnings.slice(0, 8).map((warning, index) => ({
+                  label: `Warning ${index + 1}`,
+                  value: <span className="max-w-[180px] whitespace-normal text-right leading-5">{warning}</span>,
+                  tone: 'danger' as const
+                }))}
+              />
+            ) : (
+              <div className="text-xs text-gray-500">Default</div>
+            )}
+          </OpenWebUICollapsible>
+        </div>
+      ) : (
+        <section ref={trackRef} className="space-y-1">
+          {!analysis || (!hasContent && analysis.status === 'idle') ? (
+            <div className="py-2 text-sm leading-6 text-gray-500">
+              Start analysis to extract captions, AI chapters, learning key points, and slide-like frames from this video.
+            </div>
+          ) : activeGuideTab === 'summary' ? (
+            <OpenWebUICollapsible title="Summary">
+              {editing ? (
+                <textarea
+                  value={draftSummary}
+                  onChange={(event) => setDraftSummary(event.target.value)}
+                  className="min-h-[120px] w-full rounded-lg border border-gray-100 bg-transparent px-2.5 py-1.5 text-xs leading-5 text-gray-700 outline-none focus:border-gray-300"
+                />
+              ) : analysis.summary ? (
+                <OpenWebUIParamRows
+                  rows={[
+                    {
+                      label: 'Summary',
+                      value: <span className="max-w-[210px] whitespace-normal text-right leading-5">{analysis.summary}</span>
+                    },
+                    ...(analysis.summarySourceRange ? [{
+                      label: 'Source Range',
+                      value: videoRangeText(analysis.summarySourceRange.start, analysis.summarySourceRange.end)
+                    }] : [])
+                  ]}
+                />
+              ) : (
+                <div className="text-xs text-gray-500">Default</div>
+              )}
+            </OpenWebUICollapsible>
+          ) : activeGuideTab === 'chapters' ? (
+            <OpenWebUICollapsible title="Chapters">
+              {chapters.length ? (
+                <OpenWebUIParamRows
+                  rows={chapters.map((chapter, index) => {
+                    const end = chapter.end ?? chapters[index + 1]?.start;
+                    return {
+                      label: (
+                        <span
+                          className="block min-w-0"
+                          draggable
+                          onDragStart={(event) => {
+                            startVideoDrag(event, {
+                              text: `[${videoRangeText(chapter.start, end)}] ${chapter.title}${chapter.summary ? `\n${chapter.summary}` : ''}`,
+                              selectedRange: {
+                                timestampStart: chapter.start,
+                                timestampEnd: end,
+                                sourceType: 'video_chapter',
+                                textLength: `${chapter.title}${chapter.summary || ''}`.length
+                              },
+                              label: '视频章节'
+                            });
+                          }}
+                        >
+                          <span className="block truncate">{chapter.title}</span>
+                          {chapter.summary ? <span className="mt-0.5 block line-clamp-2 text-gray-500">{chapter.summary}</span> : null}
+                        </span>
+                      ),
+                      value: videoRangeText(chapter.start, end),
+                      onClick: () => seekTo(chapter.start)
+                    };
+                  })}
+                />
+              ) : (
+                <div className="text-xs text-gray-500">Default</div>
+              )}
+            </OpenWebUICollapsible>
+          ) : activeGuideTab === 'transcript' ? (
+            <OpenWebUICollapsible title="Transcript">
+              {transcript.length ? (
+                <OpenWebUIParamRows
+                  rows={transcript.map((segment) => ({
+                    label: (
+                      <span
+                        className="block min-w-0 line-clamp-2 text-gray-700"
                         draggable
                         onDragStart={(event) => {
-                          const ts = point.timestamps[0] ?? point.sourceRange?.start ?? 0;
                           startVideoDrag(event, {
-                            text: `[${point.timestamps.map(formatVideoTime).join(', ')}] ${point.concept}\n${point.explanation}`,
+                            text: `[${videoRangeText(segment.start, segment.end)}] ${segment.text}`,
                             selectedRange: {
-                              timestampStart: point.sourceRange?.start ?? ts,
-                              timestampEnd: point.sourceRange?.end ?? ts,
-                              sourceType: 'video_key_point',
-                              textLength: `${point.concept}${point.explanation}`.length
+                              timestampStart: segment.start,
+                              timestampEnd: segment.end,
+                              segmentIds: [segment.id],
+                              sourceType: 'video_transcript',
+                              textLength: segment.text.length
                             },
-                            label: '视频关键点'
+                            label: '视频字幕'
                           });
                         }}
-                        className="mt-2 text-xs font-medium text-[rgb(46,113,236)]"
                       >
-                        {point.timestamps.map(formatVideoTime).join(', ')}
-                      </div>
-                    )}
-                    {!editing && <EvidenceList evidence={point.evidenceSegments} />}
-                  </div>
-                ))}
-              </div>
-            )}
-                </div>
+                        {segment.text}
+                      </span>
+                    ),
+                    value: videoRangeText(segment.start, segment.end),
+                    onClick: () => {
+                      seekTo(segment.start);
+                      selectTranscriptRange(segment);
+                    }
+                  }))}
+                />
+              ) : (
+                <div className="text-xs text-gray-500">Default</div>
               )}
-
-              {activeTrack === 'chapters' && (
-	          <div className={notionListClass}>
-            {chapters.length ? chapters.map((chapter, index) => {
-              const active = activeChapter?.id === chapter.id;
-              return (
-                <button
-                  key={chapter.id}
-                  type="button"
-                  draggable
-                  onDragStart={(event) => {
-                    const end = chapter.end ?? chapters[index + 1]?.start;
-                    startVideoDrag(event, {
-                      text: `[${videoRangeText(chapter.start, end)}] ${chapter.title}${chapter.summary ? `\n${chapter.summary}` : ''}`,
-                      selectedRange: {
-                        timestampStart: chapter.start,
-                        timestampEnd: end,
-                        sourceType: 'video_chapter',
-                        textLength: `${chapter.title}${chapter.summary || ''}`.length
-                      },
-                      label: '视频章节'
-                    });
-                  }}
-                  onClick={() => seekTo(chapter.start)}
-	                  className={`${notionRowClass} ${
-	                    active ? notionActiveRowClass : ''
-	                  }`}
-                >
-                  <div className="text-xs font-semibold text-[rgb(46,113,236)]">{videoRangeText(chapter.start, chapter.end ?? chapters[index + 1]?.start)}</div>
-                  <div className="mt-1 text-sm font-semibold text-[#25272b]">{chapter.title}</div>
-                  {chapter.summary && <p className="mt-1 line-clamp-3 text-xs leading-5 text-[#5f6368]">{chapter.summary}</p>}
-                  {chapter.keyPoints.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {chapter.keyPoints.slice(0, 4).map((point) => (
-                        <span key={point} className="bg-[#f0f2fb] px-1.5 py-0.5 text-[11px] text-[#4b4f55]">{point}</span>
-                      ))}
-                    </div>
-                  )}
-                </button>
-              );
-            }) : <div className="px-3 py-4 text-sm text-[#777a80]">No chapters available.</div>}
-          </div>
+            </OpenWebUICollapsible>
+          ) : activeGuideTab === 'slides' ? (
+            <OpenWebUICollapsible title="Slides">
+              {slides.length ? (
+                <OpenWebUIParamRows
+                  rows={slides.map((slide) => ({
+                    label: (
+                      <span className="block min-w-0">
+                        <span className="block truncate">{slide.title || 'Frame'}</span>
+                        {slide.ocrText ? <span className="mt-0.5 block line-clamp-2 text-gray-500">{slide.ocrText}</span> : null}
+                      </span>
+                    ),
+                    value: formatVideoTime(slide.timestamp),
+                    onClick: () => seekTo(slide.timestamp)
+                  }))}
+                />
+              ) : (
+                <div className="text-xs text-gray-500">Default</div>
               )}
-
-              {activeTrack === 'transcript' && (
-	          <div className={notionListClass}>
-            {analysis.transcript.length ? analysis.transcript.map((segment) => (
-                <button
-                  key={segment.id}
-                  type="button"
-                  draggable
-                  onDragStart={(event) => {
-                  startVideoDrag(event, {
-                    text: `[${videoRangeText(segment.start, segment.end)}] ${segment.text}`,
-                    selectedRange: {
-                      timestampStart: segment.start,
-                      timestampEnd: segment.end,
-                      segmentIds: [segment.id],
-                      sourceType: 'video_transcript',
-                      textLength: segment.text.length
-                    },
-                    label: '视频字幕'
-                  });
-                  }}
-                  onClick={(event) => {
-                    seekTo(segment.start);
-                    selectTranscriptRange(segment);
-                  }}
-	                  className={`${notionRowClass} grid grid-cols-[96px_1fr] gap-3 py-2 ${
-	                  activeTranscript?.id === segment.id ? notionActiveRowClass : selectedRange?.segmentIds.includes(segment.id) ? 'bg-[#f7f8ff]' : ''
-	                }`}
-              >
-                <span className="text-xs font-semibold text-[rgb(46,113,236)]">
-                  {videoRangeText(segment.start, segment.end)}
-                </span>
-                <span className="text-sm leading-6 text-[#34373c]">{segment.text}</span>
-              </button>
-            )) : <div className="px-4 py-3 text-sm text-[#777a80]">No transcript available.</div>}
-          </div>
+            </OpenWebUICollapsible>
+          ) : activeGuideTab === 'keypoints' ? (
+            <OpenWebUICollapsible title="Key Points">
+              {keyPoints.length ? (
+                <OpenWebUIParamRows
+                  rows={keyPoints.map((point, index) => {
+                    const ts = point.timestamps[0] ?? point.sourceRange?.start ?? 0;
+                    return {
+                      label: editing ? (
+                        <span className="block min-w-0 space-y-1" onClick={(event) => event.stopPropagation()}>
+                          <input
+                            value={point.concept}
+                            onChange={(event) => setDraftKeyPoints((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, concept: event.target.value } : item))}
+                            className="w-full rounded-sm border border-gray-100 bg-transparent px-1 py-0.5 text-xs outline-none focus:border-gray-300"
+                          />
+                          <textarea
+                            value={point.explanation}
+                            onChange={(event) => setDraftKeyPoints((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, explanation: event.target.value } : item))}
+                            className="min-h-[54px] w-full rounded-sm border border-gray-100 bg-transparent px-1 py-0.5 text-xs leading-5 outline-none focus:border-gray-300"
+                          />
+                        </span>
+                      ) : (
+                        <span
+                          className="block min-w-0"
+                          draggable
+                          onDragStart={(event) => {
+                            startVideoDrag(event, {
+                              text: `[${point.timestamps.map(formatVideoTime).join(', ')}] ${point.concept}\n${point.explanation}`,
+                              selectedRange: {
+                                timestampStart: point.sourceRange?.start ?? ts,
+                                timestampEnd: point.sourceRange?.end ?? ts,
+                                sourceType: 'video_key_point',
+                                textLength: `${point.concept}${point.explanation}`.length
+                              },
+                              label: '视频关键点'
+                            });
+                          }}
+                        >
+                          <span className="block truncate">{point.concept}</span>
+                          <span className="mt-0.5 block line-clamp-2 text-gray-500">{point.explanation}</span>
+                        </span>
+                      ),
+                      value: point.timestamps[0] != null ? formatVideoTime(point.timestamps[0]) : 'Default',
+                      onClick: () => point.timestamps[0] != null && seekTo(point.timestamps[0])
+                    };
+                  })}
+                />
+              ) : (
+                <div className="text-xs text-gray-500">Default</div>
               )}
-
-              {activeTrack === 'slides' && (
-	          <div className={notionListClass}>
-            {analysis.slides.length ? analysis.slides.map((slide) => {
-              const src = slide.imageUrl || (slide.imageFileId ? fileSystemApi.downloadUrl(workspaceId, slide.imageFileId) : '');
-              const chapter = slide.chapterId ? analysis.chapters.find((item) => item.id === slide.chapterId) : undefined;
-              const transcript = (slide.transcriptSegmentIds || [])
-                .map((segmentId) => analysis.transcript.find((segment) => segment.id === segmentId))
-                .filter(Boolean)
-                .slice(0, 2);
-              return (
-                <button
-                  key={slide.id}
-                  type="button"
-                  draggable
-                  onDragStart={(event) => {
-                    const transcriptText = transcript.map((segment) => segment?.text).filter(Boolean).join(' ');
-                    startVideoDrag(event, {
-                      text: `[${formatVideoTime(slide.timestamp)}] ${slide.title || 'Slide'}${slide.ocrText ? `\nOCR: ${slide.ocrText}` : ''}${transcriptText ? `\n${transcriptText}` : ''}`,
-                      selectedRange: {
-                        timestampStart: slide.timestamp,
-                        timestampEnd: slide.timestamp,
-                        sourceType: 'video_slide',
-                        chapterId: slide.chapterId,
-                        textLength: `${slide.title || ''}${slide.ocrText || ''}${transcriptText}`.length
-                      },
-                      label: '视频幻灯片'
-                    });
-                  }}
-                  onClick={() => seekTo(slide.timestamp)}
-	                  className={`${notionRowClass} grid grid-cols-[104px_1fr] gap-3 py-2 ${activeSlide?.id === slide.id ? notionActiveRowClass : ''}`}
-                >
-                  {src ? <img src={src} alt={slide.title || 'Video frame'} className="aspect-video w-full bg-[#f6f6f4] object-cover" /> : (
-                    <div className="flex aspect-video w-full items-center justify-center bg-[#f6f6f4] text-xs text-[#777a80]">Frame</div>
-                  )}
-                  <div className="min-w-0 space-y-1 text-xs text-[#4b4f55]">
-                    <div className="flex flex-wrap items-center gap-2 font-medium">
-                      <span className="text-[rgb(46,113,236)]">{formatVideoTime(slide.timestamp)}</span>
-                      {slide.duplicateOf && <span className="rounded-full bg-[#f6f6f4] px-2 py-0.5 text-[11px] text-[#777a80]">重复帧</span>}
-                    </div>
-                    {slide.title && <div className="font-semibold text-[#25272b] line-clamp-1">{slide.title}</div>}
-                    {chapter && <div className="line-clamp-1 text-[#777a80]">章节：{chapter.title}</div>}
-                    {slide.ocrText && <div className="line-clamp-2 text-[#5f6368]">OCR：{slide.ocrText}</div>}
-                    {transcript.length > 0 && (
-                      <div className="line-clamp-2 text-[#777a80]">
-                        讲解：{transcript.map((segment) => segment?.text).filter(Boolean).join(' ')}
-                      </div>
-                    )}
-                  </div>
-                </button>
-              );
-            }) : <div className="px-4 py-3 text-sm text-[#777a80]">No slide frames available yet. Uploaded videos can use ffmpeg-based frame extraction.</div>}
-          </div>
-              )}
-
-              {(activeTrack === 'review' || activeTrack === 'learning') && (
-                <div className="space-y-4">
-                  <div className="border-y border-[#e1e1de] px-4 py-3">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#777a80]">Review controls</div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="inline-flex h-8 overflow-hidden border border-[#eeeeeb] bg-white text-xs font-medium">
-                        {(['draft', 'in_review', 'reviewed', 'approved'] as VideoReviewStatus[]).map((status) => (
-                          <button
-                            key={status}
-                            type="button"
-                            onClick={() => updateReview({ status })}
-                            disabled={savingEdits}
-                            className={`px-2.5 capitalize transition ${reviewStatus === status ? 'bg-[#f0f2fb] text-[#202124]' : 'text-[#777a80] hover:bg-[#f6f6f4]'}`}
-                          >
-                            {status.replace('_', ' ')}
-                          </button>
-                        ))}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => updateReview({ locked: !isLocked, status: reviewStatus })}
-                        disabled={savingEdits}
-                        className={`inline-flex h-8 items-center gap-1.5 border px-3 text-xs font-medium transition ${
-                          isLocked ? 'border-[#b8dfad] bg-[#f3faf1] text-[#2f6c2f]' : 'border-[#eeeeeb] bg-white text-[#5f6368] hover:bg-[#f6f6f4]'
-                        }`}
-                      >
-                        {isLocked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
-                        {isLocked ? 'Locked' : 'Lock'}
-                      </button>
-                      <label className="inline-flex h-8 items-center gap-2 border border-[#eeeeeb] bg-white px-2 text-xs font-medium text-[#5f6368]">
-                        <input
-                          type="checkbox"
-                          checked={preserveManualEdits}
-                          onChange={(event) => setPreserveManualEdits(event.target.checked)}
-                          className="h-3.5 w-3.5"
-                        />
-                        Regenerate keeps manual edits
-                      </label>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-y border-[#e1e1de] px-4 py-3">
-                    <div className="text-sm font-semibold text-[#25272b]">Manual revision vs AI original</div>
-                    <button type="button" onClick={() => setCompareOriginal((value) => !value)} className="border border-[#eeeeeb] bg-white px-3 py-1.5 text-xs font-medium text-[#5f6368]">
-                      {compareOriginal ? 'Hide compare' : 'Compare'}
-                    </button>
-                  </div>
-                  {editing && (
-                    <div className="divide-y divide-[#e1e1de] border-y border-[#e1e1de]">
-                      {draftChapters.map((chapter, index) => (
-                        <div key={chapter.id} className="px-4 py-3">
-                          <div className="mb-2 text-xs font-semibold text-[rgb(46,113,236)]">{formatVideoTime(chapter.start)}</div>
-                          <input value={chapter.title} onChange={(event) => setDraftChapters((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} className="w-full rounded-lg border border-[#d7d7d2] px-2 py-1.5 text-sm font-semibold outline-none focus:border-[rgb(46,113,236)]" />
-                          <textarea value={chapter.summary} onChange={(event) => setDraftChapters((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, summary: event.target.value } : item))} className="mt-2 min-h-[84px] w-full rounded-lg border border-[#d7d7d2] px-2 py-1.5 text-sm leading-6 outline-none focus:border-[rgb(46,113,236)]" />
-                          <input value={chapter.keyPoints.join('；')} onChange={(event) => setDraftChapters((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, keyPoints: event.target.value.split(/[;；]/).map((value) => value.trim()).filter(Boolean) } : item))} className="mt-2 w-full rounded-lg border border-[#d7d7d2] px-2 py-1.5 text-xs outline-none focus:border-[rgb(46,113,236)]" />
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {compareOriginal && analysis.original ? (
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <div className="border-y border-[#e1e1de] px-4 py-3">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#777a80]">AI original</div>
-                        <p className="whitespace-pre-wrap text-sm leading-6 text-[#5f6368]">{analysis.original.summary || 'No original summary snapshot.'}</p>
-                      </div>
-                      <div className="border-y border-[#e1e1de] px-4 py-3">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#777a80]">Current reviewed version</div>
-                        <p className="whitespace-pre-wrap text-sm leading-6 text-[#34373c]">{analysis.summary || 'No current summary.'}</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="border-y border-[#e1e1de] px-4 py-3 text-sm leading-6 text-[#5f6368]">
-                      {analysis.original ? 'Open compare to review the first AI version against the current human-edited version.' : 'The original AI snapshot will be preserved when the first manual revision is saved.'}
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
-        )}
-      </div>
-    </div>
+            </OpenWebUICollapsible>
+          ) : (
+            <div className="py-2 text-xs text-gray-500">Default</div>
+          )}
+        </section>
+      )}
+    </OpenWebUIGuideShell>
   );
 }
 
@@ -2058,6 +1956,14 @@ const formatBytes = (bytes: number) => {
   return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
 };
 
+const formatOpenWebUIFileSize = (bytes?: number) => {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes.toFixed(1)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+};
+
 const confidenceLabel = (confidence?: string) => {
   if (confidence === 'high') return '强依据';
   if (confidence === 'medium') return '辅助依据';
@@ -2149,34 +2055,205 @@ function ThinkingTrace({
   );
 }
 
-function MessageAttachmentStrip({ attachments }: { attachments?: AiChatAttachment[] }) {
+function OpenWebUIFileItem({
+  name,
+  type = 'file',
+  size,
+  loading = false,
+  dismissible = false,
+  className = 'w-60',
+  onOpen,
+  onDismiss
+}: {
+  name: string;
+  type?: string;
+  size?: number;
+  loading?: boolean;
+  dismissible?: boolean;
+  className?: string;
+  onOpen?: () => void;
+  onDismiss?: () => void;
+}) {
+  const decodedName = (() => {
+    try {
+      return decodeURIComponent(name);
+    } catch {
+      return name;
+    }
+  })();
+  const typeLabel = type === 'note' ? 'Note' : type === 'chat' ? 'Chat' : type === 'collection' ? 'Collection' : type === 'folder' ? 'Folder' : type === 'file' ? 'File' : type;
+  return (
+    <div
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (!onOpen) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      className={`relative group ${className} flex items-center gap-1 bg-white dark:bg-gray-850 border border-gray-50/30 dark:border-gray-800/30 rounded-xl p-2 text-left ${onOpen ? 'cursor-pointer' : ''}`}
+      title={decodedName}
+    >
+      <div className="pl-1.5">
+        {loading ? (
+          <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />
+        ) : type === 'note' ? (
+          <OWPencilSquareIcon className="h-4 w-4" strokeWidth={1.5} />
+        ) : type === 'chat' ? (
+          <OWChatBubbleIcon className="h-4 w-4" strokeWidth={1.5} />
+        ) : type === 'collection' ? (
+          <OWDatabaseIcon className="h-4 w-4" strokeWidth={1.5} />
+        ) : type === 'folder' ? (
+          <FolderOpen className="h-4 w-4" strokeWidth={1.5} />
+        ) : (
+          <OWDocumentPageIcon className="h-4 w-4" strokeWidth={1.5} />
+        )}
+      </div>
+      <div className="flex flex-col justify-center -space-y-0.5 px-1 w-full min-w-0">
+        <div className="dark:text-gray-100 text-sm flex justify-between items-center min-w-0">
+          <div className="font-medium line-clamp-1 flex-1 pr-1 min-w-0">{decodedName}</div>
+          {size ? (
+            <div className="text-gray-500 text-xs capitalize shrink-0">{formatOpenWebUIFileSize(size)}</div>
+          ) : (
+            <div className="text-gray-500 text-xs capitalize shrink-0">{typeLabel}</div>
+          )}
+        </div>
+      </div>
+      {dismissible && (
+        <div className="absolute -top-1 -right-1">
+          <button
+            aria-label="Remove File"
+            className="bg-white text-black border border-gray-50 rounded-full outline-hidden focus:outline-hidden group-hover:visible invisible transition"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDismiss?.();
+            }}
+          >
+            <OWXMarkIcon className="size-4" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SelectionCapsule({
+  label,
+  preview,
+  onInspect,
+  onDismiss
+}: {
+  label: string;
+  preview: string;
+  onInspect?: () => void;
+  onDismiss?: () => void;
+}) {
+  const text = preview.replace(/\s+/g, ' ').trim() || label;
+  const display = text.slice(0, 42) || 'Selection';
+  return (
+    <div className="relative group w-60 flex items-center gap-1 bg-white dark:bg-gray-850 border border-gray-50/30 dark:border-gray-800/30 rounded-xl p-2 text-left">
+      <div className="pl-1.5">
+        <OWDocumentPageIcon className="h-4 w-4" strokeWidth={1.5} />
+      </div>
+      <button type="button" onClick={onInspect} disabled={!onInspect} className="flex flex-col justify-center -space-y-0.5 px-1 w-full min-w-0 text-left disabled:cursor-default" title={text}>
+        <div className="dark:text-gray-100 text-sm flex justify-between items-center min-w-0">
+          <div className="font-medium line-clamp-1 flex-1 pr-1 min-w-0">{display}</div>
+        </div>
+      </button>
+      {onDismiss && (
+        <div className="absolute -top-1 -right-1">
+          <button
+            aria-label="Remove Selection"
+            className="bg-white text-black border border-gray-50 rounded-full outline-hidden focus:outline-hidden group-hover:visible invisible transition"
+            type="button"
+            onClick={onDismiss}
+          >
+            <OWXMarkIcon className="size-4" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const attachmentFileType = (attachment: AiChatAttachment) =>
+  attachment.displayType ||
+  (attachment.kind === 'image' ? 'image' : attachment.kind === 'pdf' || attachment.kind === 'document' || attachment.kind === 'text' ? 'doc' : 'file');
+
+function ComposerAttachmentTray({
+  attachments,
+  onRemove,
+  onOpen
+}: {
+  attachments: AiChatAttachment[];
+  onRemove: (attachmentId: string) => void;
+  onOpen?: (attachment: AiChatAttachment) => void;
+}) {
+  if (!attachments.length) return null;
+
+  return (
+    <div className="mx-2 mt-2.5 pb-1.5 flex items-center flex-wrap gap-2" dir="auto">
+      {attachments.map((attachment) =>
+        attachment.kind === 'image' && attachment.dataUrl ? (
+          <div key={attachment.id} className="relative group">
+            <div className="relative flex items-center">
+              <button type="button" onClick={() => onOpen?.(attachment)} className="rounded-xl">
+                <img src={attachment.dataUrl} alt="" className="size-10 rounded-xl object-cover" />
+              </button>
+            </div>
+            <div className="absolute -top-1 -right-1">
+              <button
+                className="bg-white text-black border border-white rounded-full outline-hidden focus:outline-hidden group-hover:visible invisible transition"
+                type="button"
+                aria-label="Remove file"
+                onClick={() => onRemove(attachment.id)}
+              >
+                <OWXMarkIcon className="size-4" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <OpenWebUIFileItem
+            key={attachment.id}
+            name={attachment.name}
+            type={attachmentFileType(attachment)}
+            size={attachment.size}
+            loading={attachment.status !== 'ready' && attachment.status !== 'metadata_only'}
+            dismissible
+            onOpen={() => onOpen?.(attachment)}
+            onDismiss={() => onRemove(attachment.id)}
+          />
+        )
+      )}
+    </div>
+  );
+}
+
+function MessageAttachmentStrip({ attachments, onOpen }: { attachments?: AiChatAttachment[]; onOpen?: (attachment: AiChatAttachment) => void }) {
   if (!attachments?.length) return null;
 
   return (
-    <div className="mt-3 grid max-w-[420px] gap-2">
+    <div className="mb-1 w-full flex flex-col justify-end overflow-x-auto gap-1 flex-wrap" dir="auto">
       {attachments.map((attachment) => (
-        <div
-          key={attachment.id}
-          className="flex min-w-0 items-center gap-2 rounded-2xl border border-black/5 bg-white/70 px-3 py-2 text-left shadow-sm"
-          title={`${attachment.name} · ${attachment.mimeType} · ${formatBytes(attachment.size)}`}
-        >
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[#f4f4f5] text-[#6b7280] ring-1 ring-inset ring-black/5">
-            {attachment.kind === 'image' && attachment.dataUrl ? (
-              <img src={attachment.dataUrl} alt={attachment.name} className="h-full w-full object-cover" />
-            ) : attachment.kind === 'image' ? (
-              <Image className="h-4 w-4" />
-            ) : (
-              <File className="h-4 w-4" />
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[13px] font-medium text-[#25272b]">{attachment.name}</div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[#7a7f87]">
-              <span className="truncate">{attachment.mimeType}</span>
-              <span>·</span>
-              <span>{formatBytes(attachment.size)}</span>
-            </div>
-          </div>
+        <div key={attachment.id} className="self-end">
+          {attachment.kind === 'image' && attachment.dataUrl ? (
+            <button type="button" onClick={() => onOpen?.(attachment)} className="rounded-lg">
+              <img src={attachment.dataUrl} alt={attachment.name} className="max-h-96 rounded-lg" />
+            </button>
+          ) : attachment.displayType === 'selection' ? (
+            <SelectionCapsule label={attachment.name} preview={attachment.textContent || attachment.summary || attachment.name} onInspect={() => onOpen?.(attachment)} />
+          ) : (
+            <OpenWebUIFileItem
+              name={attachment.name}
+              type={attachmentFileType(attachment)}
+              size={attachment.size}
+              onOpen={() => onOpen?.(attachment)}
+            />
+          )}
         </div>
       ))}
     </div>
@@ -2480,6 +2557,10 @@ const readFileAsDataUrl = (file: File) =>
 const base64FromDataUrl = (dataUrl: string) => dataUrl.match(/^data:[^;]+;base64,(.+)$/)?.[1] || '';
 
 const stripAttachmentPayload = (attachment: AiChatAttachment): AiChatAttachment => {
+  if (attachment.kind === 'image') {
+    const { base64Data, ...rest } = attachment;
+    return rest;
+  }
   const { dataUrl, base64Data, ...rest } = attachment;
   return rest;
 };
@@ -2493,6 +2574,169 @@ const fileFromChatAttachment = async (attachment: AiChatAttachment): Promise<Fil
   const blob = await response.blob();
   return new window.File([blob], attachment.name, { type: attachment.mimeType || blob.type || 'application/octet-stream' });
 };
+
+const editorTypeForAttachmentPreview = (resource: ResourceReference): EditorState['type'] => {
+  const kind = getResourceKind(resource);
+  if (kind === 'pdf' || kind === 'document') return 'resource';
+  if (kind === 'web') return 'external';
+  if (kind === 'video') return 'video';
+  if (kind === 'code' || kind === 'structured') return 'code';
+  if (kind === 'markdown' || kind === 'note') return 'notes';
+  return 'resource';
+};
+
+const shouldLoadAttachmentPreviewContent = (resource: ResourceReference) => {
+  const kind = getResourceKind(resource);
+  return kind === 'markdown' || kind === 'note' || kind === 'code' || kind === 'structured' || kind === 'unknown' || kind === 'web';
+};
+
+function AttachmentPreviewModal({
+  workspaceId,
+  attachment,
+  resource,
+  onClose
+}: {
+  workspaceId: string;
+  attachment: AiChatAttachment | null;
+  resource?: ResourceReference | null;
+  onClose: () => void;
+}) {
+  const [content, setContent] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!attachment) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+
+    const previousOverflow = document.body.style.overflow;
+    window.addEventListener('keydown', handleKeyDown);
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [attachment, onClose]);
+
+  useEffect(() => {
+    if (!workspaceId || !resource || !shouldLoadAttachmentPreviewContent(resource)) {
+      setContent('');
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setContent('');
+    void fileSystemApi
+      .getContent(workspaceId, resource.id)
+      .then((response) => {
+        if (!cancelled) setContent(response.content || '');
+      })
+      .catch(() => {
+        if (!cancelled) setContent('');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resource, workspaceId]);
+
+  if (!attachment) return null;
+
+  const title = attachment.name || resource?.name || 'Attachment';
+  const sourceUrl = resource ? fileSystemApi.downloadUrl(workspaceId, resource.id) : attachment.dataUrl || undefined;
+  const previewText = attachment.textContent || attachment.summary || attachment.error || '';
+
+  return createPortal(
+    <div
+      aria-modal="true"
+      role="dialog"
+      className="modal fixed bottom-0 left-0 right-0 top-0 z-[9999] flex h-screen max-h-[100dvh] w-full justify-center overflow-y-auto overscroll-contain bg-black/30 p-3 animate-[openwebui-fade_10ms_ease-out]"
+      style={{ scrollbarGutter: 'stable' }}
+      onMouseDown={onClose}
+    >
+      <style>
+        {`@keyframes openwebui-fade { from { opacity: 0; } to { opacity: 1; } }
+          @keyframes openwebui-scale-up { from { transform: scale(0.985); opacity: 0; } to { transform: scale(1); opacity: 1; } }`}
+      </style>
+      <div
+        className="m-auto flex h-[min(860px,calc(100vh-24px))] min-h-fit w-[84rem] max-w-full flex-col overflow-hidden rounded-[32px] border border-white bg-white/95 text-gray-900 shadow-[0_24px_90px_rgba(0,0,0,0.24)] backdrop-blur-sm animate-[openwebui-scale-up_100ms_ease-out_forwards]"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-3 px-4.5 pb-2 pt-3 text-gray-900">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden pr-4">
+            {sourceUrl ? (
+              <a href={sourceUrl} target="_blank" rel="noreferrer" className="block max-w-full truncate text-lg font-medium hover:underline" title={title}>
+                {title}
+              </a>
+            ) : (
+              <div className="block max-w-full truncate text-lg font-medium" title={title}>{title}</div>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="self-center rounded-lg p-1 text-gray-700 transition hover:bg-gray-100 hover:text-gray-900"
+            aria-label="Close attachment preview"
+          >
+            <OWXMarkIcon className="size-5" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 border-t border-gray-100 bg-white">
+          {resource ? (
+            <WorkbenchEditorContent
+              editor={{
+                id: `attachment-preview-${resource.id}`,
+                type: editorTypeForAttachmentPreview(resource),
+                title: resource.name,
+                resourceId: resource.id,
+                resourcePath: resource.path,
+                x: 0,
+                y: 0,
+                w: 12,
+                h: 12,
+                zIndex: 1,
+                minimized: false,
+                viewState: { mode: 'preview' }
+              }}
+              resource={resource}
+              workspaceId={workspaceId}
+              content={content}
+              isLoading={loading}
+              onChangeContent={() => undefined}
+              onSaveContent={() => undefined}
+              onBindResource={() => undefined}
+              onUpdateViewState={() => undefined}
+              minimalPreview
+            />
+          ) : attachment.kind === 'image' && attachment.dataUrl ? (
+            <div className="flex h-full items-center justify-center bg-[#111] p-4">
+              <img src={attachment.dataUrl} alt={title} className="max-h-full max-w-full object-contain" />
+            </div>
+          ) : (
+            <div className="h-full overflow-auto bg-white p-6">
+              {attachment.mimeType.includes('markdown') || attachment.name.toLowerCase().endsWith('.md') ? (
+                <MarkdownPreview content={previewText || 'No preview available.'} variant="document" />
+              ) : (
+                <pre className="whitespace-pre-wrap break-words font-mono text-sm leading-6 text-gray-800">{previewText || 'No preview available.'}</pre>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
 
 const normalizePdfHighlightRects = (
   locator: Record<string, any> | undefined,
@@ -2517,269 +2761,709 @@ const normalizePdfHighlightRects = (
     .filter((rect) => rect.width > 0 && rect.height > 0);
 };
 
-type PdfSearchMatch = {
-  page: number;
-  index: number;
-  preview: string;
+type SelectionPopoverBoundary = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
 };
 
-const normalizePdfSearchText = (value: string) => value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+const rectBoundary = (rect: DOMRect): SelectionPopoverBoundary => ({
+  left: rect.left,
+  top: rect.top,
+  right: rect.right,
+  bottom: rect.bottom
+});
 
-function PdfJsPage({
-  pdfDocument,
-  pageNumber,
-  scale,
-  highlighted,
-  highlightRects = []
+const clampNumber = (value: number, min: number, max: number) => {
+  if (max < min) return min;
+  return Math.min(max, Math.max(min, value));
+};
+
+const lastUsableRangeRect = (range: Range) => {
+  const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
+  return rects[rects.length - 1] || range.getBoundingClientRect();
+};
+
+const buildSelectionAskPrompt = (prompt: string, selectedText: string) =>
+  selectedText.trim()
+    ? `${prompt.trim()}\n\n【选区内容】\n${selectedText.trim()}`
+    : prompt.trim();
+
+const streamSelectionAsk = async ({
+  workspaceId,
+  request,
+  history = [],
+  handlers
 }: {
-  pdfDocument: any;
-  pageNumber: number;
-  scale: number;
-  highlighted?: boolean;
-  highlightRects?: Array<{ left: number; top: number; width: number; height: number }>;
+  workspaceId: string;
+  request: SelectionAskRequest;
+  history?: AiChatMessage[];
+  handlers: { onDelta: (delta: string) => void; onReplace?: (content: string) => void };
+}): Promise<SelectionAskResult> => {
+  const userContent = buildSelectionAskPrompt(request.prompt, request.selectedText);
+  const displayUserContent = request.question.trim() || request.prompt.trim();
+  const userCreatedAt = new Date().toISOString();
+  const assistantCreatedAt = new Date().toISOString();
+  let assistantContent = '';
+  const lockedSelection: AiLockedSelectionContext | null = request.selectedText.trim()
+    ? {
+        id: `inline-selection-${Date.now()}`,
+        panelId: request.detail.panelId,
+        panelType: request.detail.panelType,
+        fileId: request.detail.fileId || null,
+        fileName: request.detail.fileName || request.detail.sourceLabel,
+        content: request.selectedText,
+        locator: request.detail.selectedRange as AiLockedSelectionContext['locator'],
+        createdAt: userCreatedAt
+      }
+    : null;
+
+  const response = await aiApi.chatStream(
+    {
+      messages: [
+        ...history,
+        { role: 'user', content: userContent, createdAt: userCreatedAt }
+      ],
+      context: {
+        workspaceId,
+        contextMode: 'selection_only',
+        lockedSelection
+      } as AiChatContext
+    },
+    {
+      onDelta: (delta) => {
+        assistantContent += delta;
+        handlers.onDelta(delta);
+      },
+      onReplace: (content) => {
+        assistantContent = content;
+        handlers.onReplace?.(content);
+      }
+    }
+  );
+
+  const finalAssistantContent = response.reply || assistantContent;
+  return {
+    userMessage: { role: 'user', content: displayUserContent, createdAt: userCreatedAt },
+    assistantMessage: { role: 'assistant', content: finalAssistantContent, createdAt: assistantCreatedAt }
+  };
+};
+
+function SelectionActionPopover({
+  x,
+  y,
+  anchorRect,
+  boundaryRect,
+  sourceLabel,
+  askPlaceholder = 'Ask about this selection',
+  onAsk,
+  onAddToAssistant,
+  onExplain,
+  onPin,
+  onDismiss
+}: {
+  x: number;
+  y: number;
+  anchorRect?: SelectionPopoverBoundary;
+  boundaryRect?: SelectionPopoverBoundary;
+  sourceLabel?: string;
+  askPlaceholder?: string;
+  onAsk: SelectionAskSubmitHandler;
+  onAddToAssistant?: SelectionAskAddHandler;
+  onExplain: SelectionExplainSubmitHandler;
+  onPin: () => void;
+  onDismiss?: () => void;
 }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const textLayerRef = useRef<HTMLDivElement | null>(null);
-  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const inlineMessagesRef = useRef<AiChatMessage[]>([]);
+  const inlineMessagesEndRef = useRef<HTMLDivElement | null>(null);
+  const [mode, setMode] = useState<'menu' | 'ask'>('menu');
+  const [question, setQuestion] = useState('');
+  const [inlineMessages, setInlineMessages] = useState<AiChatMessage[]>([]);
+  const [askError, setAskError] = useState<string | null>(null);
+  const [isAsking, setIsAsking] = useState(false);
+  const [addedToAssistant, setAddedToAssistant] = useState(false);
+  const desiredPopoverWidth = mode === 'ask' ? 320 : 188;
+  const hasInlineConversation = inlineMessages.length > 0;
+  const hasAssistantReply = inlineMessages.some((message) => message.role === 'assistant' && message.content.trim());
+  const popoverHeight = mode === 'ask' ? (hasInlineConversation || askError ? 270 : 46) : 30;
+  const gap = 6;
+  const margin = 8;
+  const viewportBoundary = {
+    left: 0,
+    top: 0,
+    right: typeof window === 'undefined' ? 0 : window.innerWidth,
+    bottom: typeof window === 'undefined' ? 0 : window.innerHeight
+  };
+  const boundary = boundaryRect || viewportBoundary;
+  const popoverWidth = Math.min(
+    desiredPopoverWidth,
+    Math.max(120, boundary.right - boundary.left - margin * 2)
+  );
+  const left = clampNumber(x - popoverWidth / 2, boundary.left + margin, boundary.right - popoverWidth - margin);
+  const top = anchorRect
+    ? (() => {
+        const above = anchorRect.top - popoverHeight - gap;
+        const below = anchorRect.bottom + gap;
+        if (above >= boundary.top + margin) return above;
+        if (below <= boundary.bottom - popoverHeight - margin) return below;
+        return clampNumber(above, boundary.top + margin, boundary.bottom - popoverHeight - margin);
+      })()
+    : clampNumber(y, boundary.top + margin, boundary.bottom - popoverHeight - margin);
 
   useEffect(() => {
-    let cancelled = false;
-    let renderTask: any = null;
-    let textLayer: any = null;
-
-    void pdfDocument.getPage(pageNumber).then(async (page: any) => {
-      if (cancelled) return;
-      const viewport = page.getViewport({ scale });
-      const canvas = canvasRef.current;
-      const textLayerElement = textLayerRef.current;
-      if (!canvas || !textLayerElement) return;
-
-      const pixelRatio = window.devicePixelRatio || 1;
-      canvas.width = Math.floor(viewport.width * pixelRatio);
-      canvas.height = Math.floor(viewport.height * pixelRatio);
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
-      setSize({ width: viewport.width, height: viewport.height });
-
-      const context = canvas.getContext('2d');
-      if (!context) return;
-      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-      renderTask = page.render({ canvasContext: context, viewport });
-      await renderTask.promise;
-
-      if (cancelled) return;
-      textLayerElement.innerHTML = '';
-      textLayerElement.style.setProperty('--scale-factor', String(scale));
-      textLayer = new TextLayer({
-        textContentSource: await page.getTextContent(),
-        container: textLayerElement,
-        viewport
-      });
-      await textLayer.render();
-    });
-
-    return () => {
-      cancelled = true;
-      try {
-        renderTask?.cancel?.();
-        textLayer?.cancel?.();
-      } catch {
-        // Ignore pdf.js cancellation races during fast tab switches.
-      }
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && rootRef.current?.contains(target)) return;
+      onDismiss?.();
     };
-  }, [pageNumber, pdfDocument, scale]);
+    document.addEventListener('pointerdown', handleOutsidePointerDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', handleOutsidePointerDown, true);
+    };
+  }, [onDismiss]);
+
+  useEffect(() => {
+    inlineMessagesEndRef.current?.scrollIntoView({ block: 'end' });
+  }, [inlineMessages, isAsking, askError]);
+
+  const runInlineAction = async (
+    displayPrompt: string,
+    submit: (
+      history: AiChatMessage[],
+      handlers: { onDelta: (delta: string) => void; onReplace?: (content: string) => void }
+    ) => Promise<SelectionAskResult>
+  ) => {
+    const trimmedPrompt = displayPrompt.trim();
+    if (!trimmedPrompt || isAsking) return;
+    const history = inlineMessagesRef.current.filter((message) => message.content.trim());
+    const userCreatedAt = new Date().toISOString();
+    const assistantCreatedAt = new Date().toISOString();
+    const localUserMessage: AiChatMessage = { role: 'user', content: trimmedPrompt, createdAt: userCreatedAt };
+    const localAssistantMessage: AiChatMessage = { role: 'assistant', content: '', createdAt: assistantCreatedAt };
+    const assistantMessageIndex = history.length + 1;
+    const nextMessages = [...history, localUserMessage, localAssistantMessage];
+    inlineMessagesRef.current = nextMessages;
+    setInlineMessages(nextMessages);
+    setMode('ask');
+    setIsAsking(true);
+    setAskError(null);
+    setAddedToAssistant(false);
+    try {
+      const updateAssistantMessage = (contentUpdater: string | ((current: string) => string)) => {
+        const updatedMessages = inlineMessagesRef.current.map((message, index) => {
+          if (index !== assistantMessageIndex) return message;
+          const nextContent =
+            typeof contentUpdater === 'function' ? contentUpdater(message.content) : contentUpdater;
+          return { ...message, content: nextContent };
+        });
+        inlineMessagesRef.current = updatedMessages;
+        setInlineMessages(updatedMessages);
+      };
+      const result = await submit(history, {
+        onDelta: (delta) => updateAssistantMessage((current) => `${current}${delta}`),
+        onReplace: (content) => updateAssistantMessage(content)
+      });
+      const finalizedMessages = inlineMessagesRef.current.map((message, index) => {
+        if (index === assistantMessageIndex) return result.assistantMessage;
+        if (index === assistantMessageIndex - 1) return result.userMessage;
+        return message;
+      });
+      inlineMessagesRef.current = finalizedMessages;
+      setInlineMessages(finalizedMessages);
+      setQuestion('');
+    } catch (error: any) {
+      const revertedMessages = inlineMessagesRef.current.filter((_, index) => index !== assistantMessageIndex);
+      inlineMessagesRef.current = revertedMessages;
+      setInlineMessages(revertedMessages);
+      setAskError(error?.response?.data?.error || error?.message || 'AI 请求失败');
+    } finally {
+      setIsAsking(false);
+    }
+  };
+
+  const submitAsk = async () => {
+    const trimmedQuestion = question.trim();
+    if (!trimmedQuestion) return;
+    await runInlineAction(trimmedQuestion, (history, handlers) => onAsk(trimmedQuestion, history, handlers));
+  };
 
   return (
-    <section
-      data-doc-unit="true"
-      data-pdf-page="true"
-      data-page={pageNumber}
-      data-chunk-index={pageNumber - 1}
-      className={`mx-auto mb-7 overflow-hidden rounded-[3px] border bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06),0_8px_24px_rgba(15,23,42,0.06)] transition-all duration-300 ${
-        highlighted ? 'border-[rgb(46,113,236)] ring-4 ring-[rgba(46,113,236,0.18)]' : 'border-[#d9d9d5]'
-      }`}
-      style={size ? { width: size.width, minHeight: size.height } : undefined}
+    <div
+      ref={rootRef}
+      className="fixed z-50 text-xs text-gray-700"
+      title={sourceLabel}
+      style={{
+        left,
+        top,
+        width: popoverWidth
+      }}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+      }}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
+      onMouseUp={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+      onKeyUp={(event) => event.stopPropagation()}
     >
-      <div className="relative bg-white" style={size ? { width: size.width, height: size.height } : undefined}>
-        <canvas ref={canvasRef} className="absolute inset-0" />
-        <div ref={textLayerRef} className="textLayer absolute inset-0" />
-        {highlightRects.map((rect, index) => (
-          <div
-            key={`${pageNumber}-rect-${index}`}
-            className="pointer-events-none absolute rounded-[2px] bg-[#f5d36b]/45 ring-1 ring-[#d3a900]/50"
-            style={{
-              left: rect.left,
-              top: rect.top,
-              width: rect.width,
-              height: rect.height
+      {mode === 'menu' ? (
+        <div className="flex w-full shrink-0 flex-row rounded-xl border border-gray-100 bg-white p-0.5 shadow-xl">
+          <button
+            type="button"
+            aria-label="Ask"
+            className="flex min-w-fit items-center gap-1 rounded-xl px-1.5 py-[1px] font-medium text-gray-700 transition hover:bg-gray-50"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setMode('ask');
             }}
-          />
-        ))}
-      </div>
-    </section>
+          >
+            <MessageCircle className="size-3 shrink-0 text-gray-500" />
+            <span className="shrink-0">Ask</span>
+          </button>
+          <button
+            type="button"
+            aria-label="Explain"
+            className="flex min-w-fit items-center gap-1 rounded-xl px-1.5 py-[1px] font-medium text-gray-700 transition hover:bg-gray-50"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void runInlineAction('Explain this selection', (history, handlers) => onExplain(history, handlers));
+            }}
+          >
+            <Lightbulb className="size-3 shrink-0 text-gray-500" />
+            <span className="shrink-0">Explain</span>
+          </button>
+          <button
+            type="button"
+            aria-label="Pin"
+            className="flex min-w-fit items-center gap-1 rounded-xl px-1.5 py-[1px] font-medium text-gray-700 transition hover:bg-gray-50"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onPin();
+            }}
+          >
+            <Pin className="size-3 shrink-0 text-gray-500" />
+            <span className="shrink-0">Pin</span>
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-1">
+          <div className="flex w-full rounded-full border border-gray-100 bg-white py-1 shadow-xl">
+            <input
+              type="text"
+              autoFocus
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              value={question}
+              disabled={isAsking}
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void submitAsk();
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  onDismiss?.();
+                }
+              }}
+              placeholder={askPlaceholder}
+              className="ml-5 min-w-0 flex-1 appearance-none border-0 bg-transparent text-sm font-normal text-gray-900 outline-none ring-0 placeholder:text-gray-400 focus:border-0 focus:outline-none focus:ring-0 disabled:text-gray-400"
+            />
+            <div className="ml-1 mr-1">
+              <button
+                type="button"
+                className={`m-0.5 rounded-full p-1.5 transition ${
+                  question.trim() && !isAsking ? 'bg-black text-white hover:bg-gray-900' : 'bg-gray-200 text-white'
+                }`}
+                disabled={!question.trim() || isAsking}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void submitAsk();
+                }}
+                aria-label="Ask about selection"
+              >
+                {isAsking ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+              </button>
+            </div>
+          </div>
+          {(hasInlineConversation || askError || isAsking) ? (
+            <div className="w-full rounded-2xl border border-gray-100 bg-white p-2 text-xs font-normal text-gray-700 shadow-xl">
+              {sourceLabel ? <div className="mb-1 line-clamp-1 px-1 text-xs font-medium leading-5 text-gray-500">{sourceLabel}</div> : null}
+              <div className="max-h-[18rem] overflow-y-auto overscroll-contain pr-1 text-sm leading-6 [&>div>div]:gap-1 [&_li]:text-sm [&_li]:leading-6 [&_ol]:space-y-1 [&_p]:text-sm [&_p]:font-normal [&_p]:leading-6 [&_ul]:space-y-1">
+                {inlineMessages.map((message, index) =>
+                  message.role === 'user' ? (
+                    <div key={`${message.createdAt || 'user'}-${index}`} className="mb-1 ml-8 rounded-xl bg-gray-50 px-2 py-1.5 text-sm font-normal leading-6 text-gray-700">
+                      {message.content}
+                    </div>
+                  ) : message.content ? (
+                    <div key={`${message.createdAt || 'assistant'}-${index}`} className="mr-5 rounded-xl bg-white px-2 py-1.5 text-sm font-normal leading-6 text-gray-700">
+                      <MarkdownPreview
+                        content={message.content}
+                        variant="message"
+                        emptyMessage=""
+                        isStreaming={isAsking && index === inlineMessages.length - 1}
+                      />
+                    </div>
+                  ) : null
+                )}
+                {isAsking &&
+                inlineMessages[inlineMessages.length - 1]?.role === 'assistant' &&
+                !inlineMessages[inlineMessages.length - 1]?.content.trim() ? (
+                  <div className="flex items-center gap-2 px-2 py-2 text-sm text-gray-500">
+                    <Loader2 className="size-4 animate-spin" />
+                    Thinking...
+                  </div>
+                ) : null}
+                {askError ? <div className="px-1 py-1 text-[#b42318]">{askError}</div> : null}
+                <div ref={inlineMessagesEndRef} />
+              </div>
+              {hasAssistantReply && !askError && onAddToAssistant ? (
+                <div className="mt-1 flex justify-end border-t border-gray-100 pt-1">
+                  <button
+                    type="button"
+                    className="inline-flex h-8 items-center justify-center rounded-full bg-transparent px-3 text-sm font-medium text-gray-700 outline-none transition hover:bg-gray-100 disabled:text-gray-400"
+                    title={addedToAssistant ? 'Added' : 'Add to AI Assistant'}
+                    aria-label={addedToAssistant ? 'Added to AI Assistant' : 'Add to AI Assistant'}
+                    disabled={addedToAssistant}
+                    onClick={() => {
+                      onAddToAssistant?.(inlineMessages.filter((message) => message.content.trim()));
+                      setAddedToAssistant(true);
+                    }}
+                  >
+                    {addedToAssistant ? 'Added' : 'Add'}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
   );
 }
 
-function PdfThumbnail({
-  pdfDocument,
-  pageNumber,
-  active,
-  onClick
+function SelectionActionLayer({
+  children,
+  workspaceId,
+  aiContext,
+  fileId,
+  fileName,
+  panelId,
+  panelType,
+  sourceLabel = '选区',
+  onAddSelectionAskToAssistant,
+  onSelectionChange
 }: {
-  pdfDocument: any;
-  pageNumber: number;
-  active?: boolean;
-  onClick: () => void;
+  children: ReactNode;
+  workspaceId: string;
+  aiContext?: AiChatContext & { activeFileContent?: string | null };
+  fileId?: string | null;
+  fileName?: string;
+  panelId?: string;
+  panelType?: string;
+  sourceLabel?: string;
+  onAddSelectionAskToAssistant?: (messages: AiChatMessage[], detail: WorkbenchContextSelectionActionDetail) => void;
+  onSelectionChange?: (patch: Record<string, any>) => void;
 }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [selectionMenu, setSelectionMenu] = useState<{
+    x: number;
+    y: number;
+    anchorRect: SelectionPopoverBoundary;
+    boundaryRect: SelectionPopoverBoundary;
+    text: string;
+    selectedRange: Record<string, any>;
+  } | null>(null);
+  const selectionMenuRef = useRef<typeof selectionMenu>(null);
+  const lastAskDetailRef = useRef<WorkbenchContextSelectionActionDetail | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    let renderTask: any = null;
+    selectionMenuRef.current = selectionMenu;
+  }, [selectionMenu]);
 
-    void pdfDocument.getPage(pageNumber).then(async (page: any) => {
-      if (cancelled) return;
-      const baseViewport = page.getViewport({ scale: 1 });
-      const scale = 92 / baseViewport.width;
-      const viewport = page.getViewport({ scale });
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+  const showSelectionMenu = (nextMenu: NonNullable<typeof selectionMenu>) => {
+    selectionMenuRef.current = nextMenu;
+    setSelectionMenu(nextMenu);
+  };
 
-      const pixelRatio = window.devicePixelRatio || 1;
-      canvas.width = Math.floor(viewport.width * pixelRatio);
-      canvas.height = Math.floor(viewport.height * pixelRatio);
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
-      setSize({ width: viewport.width, height: viewport.height });
+  const closeSelectionMenu = () => {
+    selectionMenuRef.current = null;
+    setSelectionMenu(null);
+    onSelectionChange?.({ selectedText: '', selectedRange: null });
+  };
 
-      const context = canvas.getContext('2d');
-      if (!context) return;
-      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-      renderTask = page.render({ canvasContext: context, viewport });
-      await renderTask.promise;
-    });
-
-    return () => {
-      cancelled = true;
-      try {
-        renderTask?.cancel?.();
-      } catch {
-        // Ignore pdf.js cancellation races while the thumbnail rail changes.
+  const readSelection = () => {
+    const host = hostRef.current;
+    const selection = window.getSelection();
+    if (!host || !selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+    const range = selection.getRangeAt(0);
+    if (!host.contains(range.commonAncestorContainer)) return null;
+    const text = selection.toString().trim();
+    if (!text) return null;
+    const rect = lastUsableRangeRect(range);
+    if (!rect.width && !rect.height) return null;
+    const hostRect = host.getBoundingClientRect();
+    const boundaryRect = rectBoundary(hostRect);
+    const anchorRect = rectBoundary(rect);
+    return {
+      text,
+      selectedRange: {
+        sourceType: 'text_selection',
+        textLength: text.length,
+        scrollRatio: host.scrollHeight > host.clientHeight
+          ? Math.min(1, Math.max(0, host.scrollTop / Math.max(1, host.scrollHeight - host.clientHeight)))
+          : undefined
+      },
+      menu: {
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.max(boundaryRect.top + 8, Math.round(rect.top - 36)),
+        anchorRect,
+        boundaryRect
       }
     };
-  }, [pageNumber, pdfDocument]);
+  };
+
+  const reportSelection = (showActions = false) => {
+    const locator = readSelection();
+    if (!locator) {
+      if (!selectionMenuRef.current) {
+        onSelectionChange?.({ selectedText: '', selectedRange: null });
+      }
+      return;
+    }
+    if (showActions) {
+      showSelectionMenu({
+        x: locator.menu.x,
+        y: locator.menu.y,
+        anchorRect: locator.menu.anchorRect,
+        boundaryRect: locator.menu.boundaryRect,
+        text: locator.text,
+        selectedRange: locator.selectedRange
+      });
+    }
+    onSelectionChange?.({
+      selectedText: locator.text,
+      selectedRange: locator.selectedRange
+    });
+  };
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      window.setTimeout(() => reportSelection(false), 0);
+    };
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, [fileId, panelId, panelType, sourceLabel]);
+
+  const applySelectionPrompt = (prompt: string, submitImmediately = false) => {
+    const latestSelectionMenu = selectionMenuRef.current || selectionMenu;
+    if (!latestSelectionMenu) return;
+    window.dispatchEvent(
+      new CustomEvent('workbench:context-selection-action', {
+        detail: {
+          fileId: fileId || undefined,
+          fileName,
+          panelId,
+          panelType,
+          sourceLabel,
+          selectedRange: latestSelectionMenu.selectedRange,
+          text: latestSelectionMenu.text,
+          prompt,
+          submitImmediately
+        } as WorkbenchContextSelectionActionDetail
+      })
+    );
+  };
+
+  const buildSelectionActionDetail = (prompt: string): WorkbenchContextSelectionActionDetail | null => {
+    const latestSelectionMenu = selectionMenuRef.current || selectionMenu;
+    if (!latestSelectionMenu) return null;
+    return {
+      fileId: fileId || undefined,
+      fileName,
+      panelId,
+      panelType,
+      sourceLabel,
+      selectedRange: latestSelectionMenu.selectedRange,
+      text: latestSelectionMenu.text,
+      prompt
+    };
+  };
+
+  const askSelectionInline: SelectionAskSubmitHandler = (question, history, handlers) => {
+    const prompt = `请基于我选中的内容回答：${question}`;
+    const detail = buildSelectionActionDetail(prompt);
+    if (!detail?.text) return Promise.reject(new Error('选区已失效，请重新选择文本。'));
+    lastAskDetailRef.current = detail;
+    return streamSelectionAsk({
+      workspaceId,
+      request: {
+        question,
+        prompt,
+        selectedText: detail.text,
+        detail
+      },
+      history,
+      handlers
+    });
+  };
+
+  const explainSelectionInline: SelectionExplainSubmitHandler = (history, handlers) => {
+    const prompt = '请解释我选中的这段内容';
+    const detail = buildSelectionActionDetail(prompt);
+    if (!detail?.text) return Promise.reject(new Error('选区已失效，请重新选择文本。'));
+    lastAskDetailRef.current = detail;
+    return streamSelectionAsk({
+      workspaceId,
+      request: {
+        question: 'Explain this selection',
+        prompt,
+        selectedText: detail.text,
+        detail
+      },
+      history,
+      handlers
+    });
+  };
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`group flex w-full flex-col items-center gap-1.5 rounded-xl p-2.5 text-xs transition ${
-        active
-          ? 'bg-[rgb(46,113,236)] text-white shadow-[0_8px_18px_rgba(46,113,236,0.24)]'
-          : 'text-[#777a80] hover:bg-white'
-      }`}
-      title={`Page ${pageNumber}`}
+    <div
+      ref={hostRef}
+      className="relative h-full min-h-0"
+      onMouseDown={() => closeSelectionMenu()}
+      onMouseUp={() => window.setTimeout(() => reportSelection(true), 0)}
+      onKeyUp={() => window.setTimeout(() => reportSelection(true), 0)}
     >
-      <div
-        className={`overflow-hidden rounded-md border bg-white shadow-sm ${
-          active ? 'border-white/80' : 'border-[#d2d2d7] group-hover:border-[#b8b8bd]'
-        }`}
-        style={size ? { width: size.width, height: size.height } : { width: 92, height: 120 }}
-      >
-        <canvas ref={canvasRef} />
-      </div>
-      <span className="leading-none">{pageNumber}</span>
-    </button>
+      {selectionMenu && (
+        <SelectionActionPopover
+          x={selectionMenu.x}
+          y={selectionMenu.y}
+          anchorRect={selectionMenu.anchorRect}
+          boundaryRect={selectionMenu.boundaryRect}
+          sourceLabel={sourceLabel}
+          onAsk={askSelectionInline}
+          onAddToAssistant={(result) => {
+            const detail = lastAskDetailRef.current;
+            if (detail) onAddSelectionAskToAssistant?.(result, detail);
+          }}
+          onExplain={explainSelectionInline}
+          onPin={() => applySelectionPrompt('__lock_context_selection__')}
+          onDismiss={closeSelectionMenu}
+        />
+      )}
+      {children}
+    </div>
   );
 }
 
 function PdfJsReader({
   sourceUrl,
+  workspaceId,
+  aiContext,
   fileId,
   resourceName,
-  onViewportChange
+  onViewportChange,
+  onAddSelectionAskToAssistant,
+  enableSelectionActions = true
 }: {
   sourceUrl: string;
+  workspaceId: string;
+  aiContext?: AiChatContext & { activeFileContent?: string | null };
   fileId: string;
   resourceName: string;
   onViewportChange: (patch: Record<string, any>) => void;
+  onAddSelectionAskToAssistant?: (messages: AiChatMessage[], detail: WorkbenchContextSelectionActionDetail) => void;
+  enableSelectionActions?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const viewMenuRef = useRef<HTMLDivElement | null>(null);
-  const [pdfDocument, setPdfDocument] = useState<any>(null);
-  const [pageNumbers, setPageNumbers] = useState<number[]>([]);
-  const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null);
-  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
-  const [currentPage, setCurrentPage] = useState(1);
-  const [viewMode, setViewMode] = useState<'continuous' | 'single'>('continuous');
-  const [zoomMode, setZoomMode] = useState<'fit-width' | 'fit-page' | 'custom'>('fit-width');
-  const [customScale, setCustomScale] = useState(1.25);
-  const [showThumbnails, setShowThumbnails] = useState(true);
-  const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchIndex, setSearchIndex] = useState<Array<{ page: number; text: string }>>([]);
-  const [searching, setSearching] = useState(false);
-  const [activeSearchMatch, setActiveSearchMatch] = useState(0);
+  const viewerRef = useRef<HTMLDivElement | null>(null);
+  const pdfViewerRef = useRef<PDFViewer | null>(null);
+  const linkServiceRef = useRef<PDFLinkService | null>(null);
+  const highlightTimeoutRef = useRef<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectionMenu, setSelectionMenu] = useState<{
     x: number;
     y: number;
+    anchorRect: SelectionPopoverBoundary;
+    boundaryRect: SelectionPopoverBoundary;
     text: string;
     page?: number;
     selectedRange?: Record<string, any>;
   } | null>(null);
-  const [jumpHighlight, setJumpHighlight] = useState<{
-    page: number;
-    locator?: Record<string, any>;
-  } | null>(null);
-  const thumbnailRailWidth = showThumbnails ? 132 : 0;
-  const availableWidth = Math.max(280, viewportSize.width - thumbnailRailWidth - 56);
-  const availableHeight = Math.max(280, viewportSize.height - 44);
-  const fitWidthScale = pageSize ? Math.min(3, Math.max(0.35, availableWidth / pageSize.width)) : 1.25;
-  const fitPageScale = pageSize
-    ? Math.min(3, Math.max(0.25, Math.min(availableWidth / pageSize.width, availableHeight / pageSize.height)))
-    : 1.1;
-  const scale = zoomMode === 'fit-width' ? fitWidthScale : zoomMode === 'fit-page' ? fitPageScale : customScale;
-  const displayedPages = viewMode === 'single' ? [currentPage] : pageNumbers;
-  const scalePercent = Math.round(scale * 100);
-  const searchMatches = useMemo<PdfSearchMatch[]>(() => {
-    const needle = normalizePdfSearchText(searchQuery);
-    if (!needle) return [];
+  const selectionMenuRef = useRef<typeof selectionMenu>(null);
+  const lastAskDetailRef = useRef<WorkbenchContextSelectionActionDetail | null>(null);
 
-    return searchIndex.flatMap((pageEntry) => {
-      const pageText = normalizePdfSearchText(pageEntry.text);
-      const matches: PdfSearchMatch[] = [];
-      let fromIndex = 0;
-      while (matches.length < 80) {
-        const matchIndex = pageText.indexOf(needle, fromIndex);
-        if (matchIndex < 0) break;
-        const previewStart = Math.max(0, matchIndex - 18);
-        const previewEnd = Math.min(pageText.length, matchIndex + needle.length + 28);
-        matches.push({
-          page: pageEntry.page,
-          index: matchIndex,
-          preview: pageText.slice(previewStart, previewEnd)
-        });
-        fromIndex = matchIndex + Math.max(needle.length, 1);
-      }
-      return matches;
+  useEffect(() => {
+    selectionMenuRef.current = selectionMenu;
+  }, [selectionMenu]);
+
+  const showSelectionMenu = (nextMenu: NonNullable<typeof selectionMenu>) => {
+    selectionMenuRef.current = nextMenu;
+    setSelectionMenu(nextMenu);
+  };
+
+  const closeSelectionMenu = () => {
+    selectionMenuRef.current = null;
+    setSelectionMenu(null);
+    onViewportChange({
+      selectedText: '',
+      selectedRange: null
     });
-  }, [searchIndex, searchQuery]);
+  };
 
   useEffect(() => {
     let cancelled = false;
+    let loadedPdf: any = null;
+    const container = containerRef.current;
+    const viewerElement = viewerRef.current;
+    if (!container || !viewerElement) return;
+
     setLoading(true);
     setError(null);
-    setPdfDocument(null);
-    setPageNumbers([]);
-    setPageSize(null);
-    setCurrentPage(1);
-    setSearchIndex([]);
-    setSearchQuery('');
-    setActiveSearchMatch(0);
+    selectionMenuRef.current = null;
+    setSelectionMenu(null);
+    viewerElement.replaceChildren();
+
+    const eventBus = new EventBus();
+    const linkService = new PDFLinkService({ eventBus });
+    const pdfViewer = new PDFViewer({
+      container,
+      viewer: viewerElement,
+      eventBus,
+      linkService,
+      removePageBorders: false,
+      enableAutoLinking: true
+    });
+    linkService.setViewer(pdfViewer);
+    pdfViewerRef.current = pdfViewer;
+    linkServiceRef.current = linkService;
+
+    const handlePagesInit = () => {
+      if (cancelled) return;
+      pdfViewer.currentScaleValue = 'page-width';
+      setLoading(false);
+      window.requestAnimationFrame(() => reportViewport(false));
+    };
+    const handlePageChanging = () => {
+      window.requestAnimationFrame(() => reportViewport(false));
+    };
+
+    eventBus.on('pagesinit', handlePagesInit);
+    eventBus.on('pagechanging', handlePageChanging);
+    eventBus.on('textlayerrendered', handlePageChanging);
 
     const loadingTask = pdfjsLib.getDocument({
       url: sourceUrl,
@@ -2791,13 +3475,9 @@ function PdfJsReader({
           pdf.destroy();
           return;
         }
-        setPdfDocument(pdf);
-        setPageNumbers(Array.from({ length: pdf.numPages }, (_, index) => index + 1));
-        void pdf.getPage(1).then((page: any) => {
-          if (cancelled) return;
-          const viewport = page.getViewport({ scale: 1 });
-          setPageSize({ width: viewport.width, height: viewport.height });
-        });
+        loadedPdf = pdf;
+        linkService.setDocument(pdf);
+        pdfViewer.setDocument(pdf);
       })
       .catch((loadError: unknown) => {
         if (!cancelled) {
@@ -2810,95 +3490,98 @@ function PdfJsReader({
 
     return () => {
       cancelled = true;
+      if (highlightTimeoutRef.current) {
+        window.clearTimeout(highlightTimeoutRef.current);
+        highlightTimeoutRef.current = null;
+      }
+      eventBus.off('pagesinit', handlePagesInit);
+      eventBus.off('pagechanging', handlePageChanging);
+      eventBus.off('textlayerrendered', handlePageChanging);
+      clearJumpHighlights();
+      pdfViewer.cleanup();
+      linkService.setDocument(null);
       loadingTask.destroy();
+      void loadedPdf?.destroy?.();
+      if (pdfViewerRef.current === pdfViewer) pdfViewerRef.current = null;
+      if (linkServiceRef.current === linkService) linkServiceRef.current = null;
+      viewerElement.replaceChildren();
     };
   }, [sourceUrl]);
 
   useEffect(() => {
-    if (!pdfDocument || !pageNumbers.length) return;
-    let cancelled = false;
-    setSearching(true);
-
-    const buildSearchIndex = async () => {
-      const pages = await Promise.all(
-        pageNumbers.map(async (pageNumber) => {
-          const page = await pdfDocument.getPage(pageNumber);
-          const textContent = await page.getTextContent();
-          const text = textContent.items
-            .map((item: any) => ('str' in item ? item.str : ''))
-            .join(' ');
-          return { page: pageNumber, text };
-        })
-      );
-      if (!cancelled) setSearchIndex(pages);
-    };
-
-    void buildSearchIndex()
-      .catch(() => {
-        if (!cancelled) setSearchIndex([]);
-      })
-      .finally(() => {
-        if (!cancelled) setSearching(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [pdfDocument, pageNumbers]);
-
-  useEffect(() => {
-    setActiveSearchMatch(0);
-  }, [searchQuery]);
-
-  useEffect(() => {
-    if (!viewMenuOpen) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!viewMenuRef.current?.contains(event.target as Node)) {
-        setViewMenuOpen(false);
-      }
-    };
-    window.addEventListener('pointerdown', handlePointerDown);
-    return () => window.removeEventListener('pointerdown', handlePointerDown);
-  }, [viewMenuOpen]);
-
-  useEffect(() => {
-    const element = viewportRef.current;
+    const element = containerRef.current;
     if (!element) return;
 
-    const updateSize = () => {
-      setViewportSize({
-        width: element.clientWidth,
-        height: element.clientHeight
-      });
+    const updateScale = () => {
+      const pdfViewer = pdfViewerRef.current;
+      if (pdfViewer?.pdfDocument) {
+        pdfViewer.currentScaleValue = 'page-width';
+      }
     };
-    updateSize();
+    updateScale();
 
-    const resizeObserver = new ResizeObserver(updateSize);
+    const resizeObserver = new ResizeObserver(updateScale);
     resizeObserver.observe(element);
     return () => resizeObserver.disconnect();
   }, []);
 
+  const pageSelector = (page: number) => `.page[data-page-number="${page}"]`;
+
+  const clearJumpHighlights = () => {
+    containerRef.current
+      ?.querySelectorAll<HTMLElement>('[data-workbench-pdf-jump-highlight="true"]')
+      .forEach((node) => node.remove());
+  };
+
+  const showJumpHighlight = (page: number, locator?: Record<string, any>) => {
+    const pageElement = containerRef.current?.querySelector<HTMLElement>(pageSelector(page));
+    if (!pageElement) return;
+
+    clearJumpHighlights();
+    const pageOverlay = document.createElement('div');
+    pageOverlay.dataset.workbenchPdfJumpHighlight = 'true';
+    Object.assign(pageOverlay.style, {
+      position: 'absolute',
+      inset: '0',
+      border: '2px solid rgb(46,113,236)',
+      boxShadow: '0 0 0 4px rgba(46,113,236,0.18)',
+      pointerEvents: 'none',
+      zIndex: '6'
+    });
+    pageElement.appendChild(pageOverlay);
+
+    normalizePdfHighlightRects(locator, page, 1).forEach((rect) => {
+      const rectOverlay = document.createElement('div');
+      rectOverlay.dataset.workbenchPdfJumpHighlight = 'true';
+      Object.assign(rectOverlay.style, {
+        position: 'absolute',
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+        background: 'rgba(245,211,107,0.45)',
+        border: '1px solid rgba(211,169,0,0.5)',
+        borderRadius: '2px',
+        pointerEvents: 'none',
+        zIndex: '7'
+      });
+      pageElement.appendChild(rectOverlay);
+    });
+
+    if (highlightTimeoutRef.current) window.clearTimeout(highlightTimeoutRef.current);
+    highlightTimeoutRef.current = window.setTimeout(() => {
+      clearJumpHighlights();
+      highlightTimeoutRef.current = null;
+    }, 2400);
+  };
+
   const scrollToPage = (page: number, behavior: ScrollBehavior = 'smooth') => {
-    const safePage = Math.min(Math.max(1, page), Math.max(1, pageNumbers.length));
-    setCurrentPage(safePage);
-    if (viewMode === 'single') return;
-    const pageElement = containerRef.current?.querySelector<HTMLElement>(`[data-pdf-page="true"][data-page="${safePage}"]`);
+    const pageCount = Math.max(1, pdfViewerRef.current?.pagesCount || page);
+    const safePage = Math.min(Math.max(1, page), pageCount);
+    linkServiceRef.current?.goToPage(safePage);
+    const pageElement = containerRef.current?.querySelector<HTMLElement>(pageSelector(safePage));
     pageElement?.scrollIntoView({ behavior, block: 'start' });
   };
-
-  const activateSearchMatch = (matchIndex: number) => {
-    if (!searchMatches.length) return;
-    const safeIndex = ((matchIndex % searchMatches.length) + searchMatches.length) % searchMatches.length;
-    setActiveSearchMatch(safeIndex);
-    const match = searchMatches[safeIndex];
-    scrollToPage(match.page);
-    setJumpHighlight({ page: match.page });
-    window.setTimeout(() => {
-      setJumpHighlight((current) => (current?.page === match.page ? null : current));
-    }, 1600);
-  };
-
-  const activeSearchPreview = searchMatches[activeSearchMatch]?.preview;
 
   useEffect(() => {
     const handleJump = (event: Event) => {
@@ -2909,13 +3592,12 @@ function PdfJsReader({
       const page = detail.locator?.page || detail.locator?.pageStart || detail.locator?.primaryPage;
       if (!page) return;
       scrollToPage(page);
-      setJumpHighlight({ page, locator: detail.locator as Record<string, any> });
-      window.setTimeout(() => setJumpHighlight((current) => (current?.page === page ? null : current)), 2400);
+      window.setTimeout(() => showJumpHighlight(page, detail.locator as Record<string, any>), 100);
     };
 
     window.addEventListener('workbench:jump-to-citation', handleJump);
     return () => window.removeEventListener('workbench:jump-to-citation', handleJump);
-  }, [fileId, pageNumbers.length, viewMode]);
+  }, [fileId]);
 
   const readSelectionLocator = (element: HTMLDivElement) => {
     const selection = window.getSelection();
@@ -2929,13 +3611,13 @@ function PdfJsReader({
     const rangeRects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
     if (!rangeRects.length) return null;
 
-    const pages = Array.from(element.querySelectorAll<HTMLElement>('[data-pdf-page="true"]'));
+    const pages = Array.from(element.querySelectorAll<HTMLElement>('.page[data-page-number]'));
     const rects: Array<{ page: number; left: number; top: number; width: number; height: number }> = [];
     let selectedPage: number | undefined;
     let pageElement: HTMLElement | null = null;
 
     pages.forEach((pageNode) => {
-      const page = Number(pageNode.dataset.page);
+      const page = Number(pageNode.dataset.pageNumber);
       if (!Number.isFinite(page)) return;
       const pageRect = pageNode.getBoundingClientRect();
       rangeRects.forEach((rect) => {
@@ -2967,8 +3649,9 @@ function PdfJsReader({
     const normalizedSelection = selectedText.replace(/\s+/g, ' ');
     const normalizedPage = pageText.replace(/\s+/g, ' ');
     const normalizedIndex = normalizedPage.indexOf(normalizedSelection);
-    const firstRect = rangeRects[0];
-
+    const anchorDomRect = rangeRects[rangeRects.length - 1];
+    const containerBoundary = rectBoundary(element.getBoundingClientRect());
+    const anchorRect = rectBoundary(anchorDomRect);
     return {
       selectedText,
       selectedPage,
@@ -2982,17 +3665,19 @@ function PdfJsReader({
         rects
       },
       menu: {
-        x: Math.round(firstRect.left + firstRect.width / 2),
-        y: Math.max(12, Math.round(firstRect.top - 48))
+        x: Math.round(anchorDomRect.left + anchorDomRect.width / 2),
+        y: Math.max(containerBoundary.top + 8, Math.round(anchorDomRect.top - 36)),
+        anchorRect,
+        boundaryRect: containerBoundary
       }
     };
   };
 
-  const reportViewport = () => {
+  const reportViewport = (showActions = false) => {
     const element = containerRef.current;
     if (!element) return;
     const totalScrollable = Math.max(1, element.scrollHeight - element.clientHeight);
-    const units = Array.from(element.querySelectorAll<HTMLElement>('[data-pdf-page="true"]'));
+    const units = Array.from(element.querySelectorAll<HTMLElement>('.page[data-page-number]'));
     const containerRect = element.getBoundingClientRect();
     const visible = units
       .map((unit) => {
@@ -3007,24 +3692,23 @@ function PdfJsReader({
       .filter((item) => item.visibleHeight > 0)
       .sort((left, right) => right.visibleHeight - left.visibleHeight);
     const visiblePages = visible
-      .map((item) => Number(item.unit.dataset.page))
+      .map((item) => Number(item.unit.dataset.pageNumber))
       .filter((page) => Number.isFinite(page) && page > 0);
     const primaryPage = visiblePages[0] || 1;
     const selectionLocator = readSelectionLocator(element);
-    const selectedText = selectionLocator?.selectedText || '';
+    const selectedText = selectionLocator?.selectedText || selectionMenuRef.current?.text || '';
     const selectedPage = selectionLocator?.selectedPage;
-    setCurrentPage(selectedPage || primaryPage);
 
-    if (selectionLocator) {
-      setSelectionMenu({
+    if (enableSelectionActions && selectionLocator && showActions) {
+      showSelectionMenu({
         x: selectionLocator.menu.x,
         y: selectionLocator.menu.y,
+        anchorRect: selectionLocator.menu.anchorRect,
+        boundaryRect: selectionLocator.menu.boundaryRect,
         text: selectionLocator.selectedText,
         page: selectedPage,
         selectedRange: selectionLocator.selectedRange
       });
-    } else {
-      setSelectionMenu(null);
     }
 
     onViewportChange({
@@ -3033,7 +3717,7 @@ function PdfJsReader({
       primaryPage,
       approxChunkIndex: Math.max(0, primaryPage - 1),
       selectedText,
-      selectedRange: selectionLocator?.selectedRange || null,
+      selectedRange: selectionLocator?.selectedRange || selectionMenuRef.current?.selectedRange || null,
       ...(selectedText && selectedPage
         ? {
             visiblePages: [selectedPage],
@@ -3045,253 +3729,118 @@ function PdfJsReader({
     });
   };
 
-  const applySelectionPrompt = (prompt: string) => {
-    if (!selectionMenu) return;
+  const applySelectionPrompt = (prompt: string, submitImmediately = false) => {
+    const latestSelectionMenu = selectionMenuRef.current || selectionMenu;
+    if (!latestSelectionMenu) return;
     window.dispatchEvent(
       new CustomEvent('workbench:pdf-selection-action', {
         detail: {
           fileId,
           fileName: resourceName,
-          page: selectionMenu.page,
-          selectedRange: selectionMenu.selectedRange,
-          text: selectionMenu.text,
-          prompt
+          page: latestSelectionMenu.page,
+          selectedRange: latestSelectionMenu.selectedRange,
+          text: latestSelectionMenu.text,
+          prompt,
+          submitImmediately
         }
       })
     );
   };
+  const buildPdfSelectionDetail = (prompt: string): WorkbenchContextSelectionActionDetail | null => {
+    const latestSelectionMenu = selectionMenuRef.current || selectionMenu;
+    if (!latestSelectionMenu) return null;
+    return {
+      fileId,
+      fileName: resourceName,
+      page: latestSelectionMenu.page,
+      selectedRange: latestSelectionMenu.selectedRange,
+      text: latestSelectionMenu.text,
+      prompt,
+      sourceLabel: `PDF selection${latestSelectionMenu.page ? ` · Page ${latestSelectionMenu.page}` : ''}`
+    };
+  };
+  const askSelection: SelectionAskSubmitHandler = (question, history, handlers) => {
+    const prompt = `请基于我选中的 PDF 内容回答：${question}`;
+    const detail = buildPdfSelectionDetail(prompt);
+    if (!detail?.text) return Promise.reject(new Error('选区已失效，请重新选择 PDF 内容。'));
+    lastAskDetailRef.current = detail;
+    return streamSelectionAsk({
+      workspaceId,
+      request: {
+        question,
+        prompt,
+        selectedText: detail.text,
+        detail
+      },
+      history,
+      handlers
+    });
+  };
+  const explainSelection: SelectionExplainSubmitHandler = (history, handlers) => {
+    const prompt = '请解释我选中的这段 PDF 内容';
+    const detail = buildPdfSelectionDetail(prompt);
+    if (!detail?.text) return Promise.reject(new Error('选区已失效，请重新选择 PDF 内容。'));
+    lastAskDetailRef.current = detail;
+    return streamSelectionAsk({
+      workspaceId,
+      request: {
+        question: 'Explain this selection',
+        prompt,
+        selectedText: detail.text,
+        detail
+      },
+      history,
+      handlers
+    });
+  };
+
+  useEffect(() => {
+    if (!enableSelectionActions) return;
+    const handleSelectionChange = () => {
+      window.setTimeout(() => reportViewport(false), 0);
+    };
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, [enableSelectionActions, fileId]);
 
   return (
     <div ref={viewportRef} className="relative flex h-full min-h-0 flex-col bg-white">
-      {selectionMenu && (
-        <div
-          className="fixed z-50 flex items-center gap-1 rounded-full border border-[#d9d9d5] bg-[#202124] px-2 py-1 text-xs font-medium text-white shadow-[0_12px_35px_rgba(0,0,0,0.22)]"
-          style={{ left: selectionMenu.x, top: selectionMenu.y, transform: 'translateX(-50%)' }}
-        >
-          <button
-            className="rounded-full px-2 py-1 hover:bg-white/15"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => applySelectionPrompt('请解释我选中的这段 PDF 内容')}
-          >
-            解释
-          </button>
-          <button
-            className="rounded-full px-2 py-1 hover:bg-white/15"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => applySelectionPrompt('请总结我选中的这段 PDF 内容')}
-          >
-            总结
-          </button>
-          <button
-            className="rounded-full px-2 py-1 hover:bg-white/15"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => applySelectionPrompt('请基于我选中的 PDF 内容回答：')}
-          >
-            提问
-          </button>
-          <button
-            className="rounded-full px-2 py-1 hover:bg-white/15"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => applySelectionPrompt('__lock_pdf_selection__')}
-          >
-            锁定
-          </button>
-        </div>
+      {enableSelectionActions && selectionMenu && (
+        <SelectionActionPopover
+          x={selectionMenu.x}
+          y={selectionMenu.y}
+          anchorRect={selectionMenu.anchorRect}
+          boundaryRect={selectionMenu.boundaryRect}
+          sourceLabel={`PDF selection${selectionMenu.page ? ` · Page ${selectionMenu.page}` : ''}`}
+          onAsk={askSelection}
+          onAddToAssistant={(result) => {
+            const detail = lastAskDetailRef.current;
+            if (detail) onAddSelectionAskToAssistant?.(result, detail);
+          }}
+          onExplain={explainSelection}
+          onPin={() => applySelectionPrompt('__lock_pdf_selection__')}
+          onDismiss={closeSelectionMenu}
+        />
       )}
-      <div className="relative z-30 flex min-h-0 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#eeeeeb] bg-white px-4 py-2 text-xs text-[#5f6368]">
-        <div className="flex min-w-0 items-center gap-3">
-          <div ref={viewMenuRef} className="relative">
-            <button
-              type="button"
-              onClick={() => setViewMenuOpen((value) => !value)}
-              className="inline-flex h-9 items-center gap-2 rounded-full border border-[#e5e5e1] bg-white px-3 font-medium text-[#34373c] shadow-sm transition hover:bg-[#fbfbfa] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(46,113,236,0.35)]"
-              title="View options"
-            >
-              <PanelLeft className="h-4 w-4" />
-              <ChevronDown className="h-3.5 w-3.5" />
-            </button>
-            {viewMenuOpen && (
-              <div className="absolute left-0 top-11 z-[200] w-56 overflow-hidden rounded-2xl border border-[#e5e5e1] bg-white p-2 text-[13px] text-[#25272b] shadow-[0_18px_50px_rgba(15,23,42,0.18)]">
-                {[
-                  { label: showThumbnails ? 'Hide Sidebar' : 'Show Sidebar', active: showThumbnails, onClick: () => setShowThumbnails((value) => !value) },
-                  { label: 'Continuous Scroll', active: viewMode === 'continuous', onClick: () => setViewMode('continuous') },
-                  { label: 'Single Page', active: viewMode === 'single', onClick: () => setViewMode('single') }
-                ].map((item) => (
-                  <button
-                    type="button"
-                    key={item.label}
-                    onClick={() => {
-                      item.onClick();
-                      setViewMenuOpen(false);
-                    }}
-                    className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left transition hover:bg-[#f6f6f4]"
-                  >
-                    <span className="flex w-4 justify-center">{item.active ? <Check className="h-4 w-4" /> : null}</span>
-                    <span>{item.label}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="hidden text-sm font-medium text-[#777a80] sm:block">
-            Page {currentPage} of {pageNumbers.length || 1}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="flex overflow-hidden rounded-full border border-[#e5e5e1] bg-white shadow-sm">
-            <button
-              type="button"
-              onClick={() => scrollToPage(currentPage - 1)}
-              disabled={currentPage <= 1}
-              className="inline-flex h-9 w-9 items-center justify-center text-[#4b4f55] transition hover:bg-[#f6f6f4] disabled:cursor-not-allowed disabled:opacity-35"
-              title="Previous page"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <input
-              value={currentPage}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (Number.isFinite(next)) scrollToPage(next);
-              }}
-              className="h-9 w-14 border-x border-[#eeeeeb] bg-transparent text-center text-xs font-semibold text-[#25272b] outline-none focus:bg-[#fbfbfa]"
-              aria-label="Current PDF page"
-            />
-            <button
-              type="button"
-              onClick={() => scrollToPage(currentPage + 1)}
-              disabled={currentPage >= pageNumbers.length}
-              className="inline-flex h-9 w-9 items-center justify-center text-[#4b4f55] transition hover:bg-[#f6f6f4] disabled:cursor-not-allowed disabled:opacity-35"
-              title="Next page"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="flex overflow-hidden rounded-full border border-[#e5e5e1] bg-white shadow-sm">
-            <button
-              type="button"
-              onClick={() => {
-                setZoomMode('custom');
-                setCustomScale((value) => Math.max(0.35, Number((value - 0.1).toFixed(2))));
-              }}
-              className="inline-flex h-9 w-10 items-center justify-center text-[#4b4f55] transition hover:bg-[#f6f6f4]"
-              title="Zoom out"
-            >
-              <ZoomOut className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setZoomMode(zoomMode === 'fit-width' ? 'fit-page' : 'fit-width')}
-              className="inline-flex h-9 w-10 items-center justify-center border-x border-[#eeeeeb] text-[#4b4f55] transition hover:bg-[#f6f6f4]"
-              title={zoomMode === 'fit-page' ? 'Fit width' : 'Fit page'}
-            >
-              <Maximize2 className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setZoomMode('custom');
-                setCustomScale((value) => Math.min(3, Number((value + 0.1).toFixed(2))));
-              }}
-              className="inline-flex h-9 w-10 items-center justify-center text-[#4b4f55] transition hover:bg-[#f6f6f4]"
-              title="Zoom in"
-            >
-              <ZoomIn className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="flex h-9 min-w-[238px] items-center gap-2 rounded-full border border-[#e5e5e1] bg-white px-3 shadow-sm">
-            <Search className="h-4 w-4 shrink-0 text-[#7b7b80]" />
-            <input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') activateSearchMatch(activeSearchMatch + (event.shiftKey ? -1 : 1));
-              }}
-              placeholder="Search"
-              className="min-w-0 flex-1 bg-transparent text-sm text-[#1d1d1f] outline-none placeholder:text-[#8e8e93]"
-            />
-            {searchQuery && (
-              <span className="whitespace-nowrap text-[11px] text-[#7b7b80]">
-                {searching ? '...' : searchMatches.length ? `${activeSearchMatch + 1}/${searchMatches.length}` : '0'}
-              </span>
-            )}
-            {searchMatches.length > 0 && (
-              <div className="flex items-center border-l border-[#eeeeeb] pl-1">
-                <button
-                  type="button"
-                  onClick={() => activateSearchMatch(activeSearchMatch - 1)}
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[#4b4f55] hover:bg-[#f6f6f4]"
-                  title="Previous result"
-                >
-                  <ChevronUp className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => activateSearchMatch(activeSearchMatch + 1)}
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[#4b4f55] hover:bg-[#f6f6f4]"
-                  title="Next result"
-                >
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-        {activeSearchPreview && searchQuery && (
-          <div className="basis-full truncate px-1 text-right text-[11px] text-[#7b7b80]">
-            Page {searchMatches[activeSearchMatch]?.page}: {activeSearchPreview}
-          </div>
-        )}
-      </div>
-      <div className="grid min-h-0 flex-1 bg-[#f4f4f1]" style={{ gridTemplateColumns: showThumbnails ? '156px minmax(0,1fr)' : 'minmax(0,1fr)' }}>
-        {showThumbnails && (
-          <aside className="min-h-0 overflow-auto border-r border-[#eeeeeb] bg-[#f8f8f6] p-3">
-            <div className="space-y-3">
-              {pdfDocument && pageNumbers.map((pageNumber) => (
-                <PdfThumbnail
-                  key={`thumb-${pageNumber}`}
-                  pdfDocument={pdfDocument}
-                  pageNumber={pageNumber}
-                  active={pageNumber === currentPage}
-                  onClick={() => scrollToPage(pageNumber, 'auto')}
-                />
-              ))}
-            </div>
-          </aside>
-        )}
+      <div className="relative min-h-0 flex-1 bg-white">
         <div
           ref={containerRef}
-          className={`min-h-0 overflow-auto px-6 py-7 ${viewMode === 'single' ? 'flex items-start justify-center' : ''}`}
-          onScroll={reportViewport}
-          onMouseEnter={reportViewport}
-          onMouseUp={reportViewport}
-          onKeyUp={reportViewport}
+          className="absolute inset-0 overflow-auto px-6 py-7"
+          onScroll={() => reportViewport(false)}
+          onMouseEnter={() => reportViewport(false)}
+          onMouseDown={() => closeSelectionMenu()}
+          onMouseUp={() => reportViewport(true)}
+          onKeyUp={() => reportViewport(true)}
         >
+          <div ref={viewerRef} className="pdfViewer" />
           {loading && (
-            <div className="flex h-80 items-center justify-center text-sm text-[#777a80]">Loading PDF...</div>
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-[#777a80]">Loading PDF...</div>
           )}
           {error && (
             <div className="mx-auto max-w-3xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
               {error}
             </div>
           )}
-          {pdfDocument && displayedPages.map((pageNumber) => (
-            <PdfJsPage
-              key={`${pageNumber}-${scale}`}
-              pdfDocument={pdfDocument}
-              pageNumber={pageNumber}
-              scale={scale}
-              highlighted={jumpHighlight?.page === pageNumber}
-              highlightRects={
-                jumpHighlight?.page === pageNumber
-                  ? normalizePdfHighlightRects(jumpHighlight.locator, pageNumber, scale)
-                  : []
-              }
-            />
-          ))}
         </div>
       </div>
     </div>
@@ -3301,32 +3850,40 @@ function PdfJsReader({
 function DocumentPreview({
   resource,
   workspaceId,
+  aiContext,
   editorId,
   onUpdateViewState,
   onExtractedText,
-  onDocumentStructure
+  onDocumentStructure,
+  onAddSelectionAskToAssistant,
+  enableSelectionActions = true
 }: {
   resource: ResourceReference;
   workspaceId: string;
+  aiContext?: AiChatContext & { activeFileContent?: string | null };
   editorId: string;
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
   onExtractedText?: (text: string) => void;
   onDocumentStructure?: (documentStructure: RenderableDocument | null) => void;
+  onAddSelectionAskToAssistant?: (messages: AiChatMessage[], detail: WorkbenchContextSelectionActionDetail) => void;
+  enableSelectionActions?: boolean;
 }) {
   const [previewInfo, setPreviewInfo] = useState<FilePreviewInfo | null>(null);
   const [documentStructure, setDocumentStructure] = useState<RenderableDocument | null>(null);
   const [loading, setLoading] = useState(true);
   const [jumpHighlight, setJumpHighlight] = useState<{ chunkIndex?: number; blockId?: string } | null>(null);
   const readerRef = useRef<HTMLDivElement | null>(null);
+  const isPdfResource = getResourceKind(resource) === 'pdf';
 
   useEffect(() => {
     let active = true;
     const cacheKey = previewCacheKey(workspaceId, resource.id);
     const cachedPreviewInfo = previewInfoCache.get(cacheKey);
+    const usableCachedPreviewInfo = cachedPreviewInfo?.status === 'unavailable' ? undefined : cachedPreviewInfo;
     const cachedStructure = documentStructureCache.get(cacheKey);
 
-    if (cachedPreviewInfo || cachedStructure) {
-      setPreviewInfo(cachedPreviewInfo ?? null);
+    if (usableCachedPreviewInfo || cachedStructure) {
+      setPreviewInfo(usableCachedPreviewInfo ?? null);
       setDocumentStructure(cachedStructure ?? null);
       setLoading(false);
       return () => {
@@ -3347,12 +3904,12 @@ function DocumentPreview({
           setPreviewInfo(previewResult.value);
         } else {
           const fallbackPreviewInfo = {
-            status: 'unavailable',
-            previewKind: 'document',
+            status: isPdfResource ? 'ready' : 'unavailable',
+            previewKind: isPdfResource ? 'pdf' : 'document',
+            previewUrl: isPdfResource ? fileSystemApi.previewUrl(workspaceId, resource.id) : undefined,
             sourceUrl: fileSystemApi.downloadUrl(workspaceId, resource.id),
             message: 'Preview is temporarily unavailable for this document.'
           } as FilePreviewInfo;
-          previewInfoCache.set(cacheKey, fallbackPreviewInfo);
           setPreviewInfo(fallbackPreviewInfo);
         }
 
@@ -3366,12 +3923,12 @@ function DocumentPreview({
       .catch(() => {
         if (active) {
           const fallbackPreviewInfo = {
-            status: 'unavailable',
-            previewKind: 'document',
+            status: isPdfResource ? 'ready' : 'unavailable',
+            previewKind: isPdfResource ? 'pdf' : 'document',
+            previewUrl: isPdfResource ? fileSystemApi.previewUrl(workspaceId, resource.id) : undefined,
             sourceUrl: fileSystemApi.downloadUrl(workspaceId, resource.id),
             message: 'Preview is temporarily unavailable for this document.'
           } as FilePreviewInfo;
-          previewInfoCache.set(cacheKey, fallbackPreviewInfo);
           setPreviewInfo(fallbackPreviewInfo);
           setDocumentStructure(null);
         }
@@ -3498,20 +4055,25 @@ function DocumentPreview({
   };
 
   if (
+    isPdfResource ||
     documentStructure?.kind === 'pdf' ||
     (previewInfo?.status === 'ready' && (previewInfo.previewKind === 'pdf' || previewInfo.previewKind === 'document') && previewInfo.previewUrl)
   ) {
     return (
       <PdfJsReader
         sourceUrl={previewInfo?.previewUrl || fileSystemApi.previewUrl(workspaceId, resource.id)}
+        workspaceId={workspaceId}
+        aiContext={aiContext}
         fileId={resource.id}
         resourceName={resource.name}
         onViewportChange={(patch) => onUpdateViewState?.(editorId, patch)}
+        onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
+        enableSelectionActions={enableSelectionActions}
       />
     );
   }
 
-  return (
+  const reader = (
     <div
       ref={readerRef}
       className="h-full overflow-auto bg-white px-5 pb-5 text-[#25272b]"
@@ -3549,6 +4111,22 @@ function DocumentPreview({
       </div>
     </div>
   );
+
+  return enableSelectionActions ? (
+    <SelectionActionLayer
+      fileId={resource.id}
+      fileName={resource.name}
+      panelId={editorId}
+      panelType="document"
+      sourceLabel="文档选区"
+      workspaceId={workspaceId}
+      aiContext={aiContext}
+      onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
+      onSelectionChange={(patch) => onUpdateViewState?.(editorId, patch)}
+    >
+      {reader}
+    </SelectionActionLayer>
+  ) : reader;
 }
 
 function HtmlVisualizationPreview({
@@ -3585,19 +4163,25 @@ function WebSourcePreview({
   url,
   body,
   workspaceId,
+  aiContext,
   resource,
   editorId,
   onUpdateViewState,
-  onExtractedText
+  onExtractedText,
+  onAddSelectionAskToAssistant,
+  enableSelectionActions = true
 }: {
   title: string;
   url?: string;
   body?: string;
   workspaceId: string;
+  aiContext?: AiChatContext & { activeFileContent?: string | null };
   resource?: ResourceReference;
   editorId?: string;
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
   onExtractedText?: (text: string) => void;
+  onAddSelectionAskToAssistant?: (messages: AiChatMessage[], detail: WorkbenchContextSelectionActionDetail) => void;
+  enableSelectionActions?: boolean;
 }) {
   const embed = getEmbedInfo(url);
   const [previewData, setPreviewData] = useState<WebPreviewData | null>(null);
@@ -3607,9 +4191,13 @@ function WebSourcePreview({
   const [selectionMenu, setSelectionMenu] = useState<{
     x: number;
     y: number;
+    anchorRect: SelectionPopoverBoundary;
+    boundaryRect: SelectionPopoverBoundary;
     text: string;
     selectedRange: Record<string, any>;
   } | null>(null);
+  const selectionMenuRef = useRef<typeof selectionMenu>(null);
+  const lastAskDetailRef = useRef<WorkbenchContextSelectionActionDetail | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const displayedTitle = previewData?.title || title;
   const displayedUrl = previewData?.url || activeUrl || url;
@@ -3617,8 +4205,30 @@ function WebSourcePreview({
   const readableText = previewData?.contentMarkdown || body || '';
 
   useEffect(() => {
+    selectionMenuRef.current = selectionMenu;
+  }, [selectionMenu]);
+
+  const showSelectionMenu = (nextMenu: NonNullable<typeof selectionMenu>) => {
+    selectionMenuRef.current = nextMenu;
+    setSelectionMenu(nextMenu);
+  };
+
+  const closeSelectionMenu = () => {
+    selectionMenuRef.current = null;
+    setSelectionMenu(null);
+    if (resource?.id && editorId && onUpdateViewState) {
+      onUpdateViewState(editorId, {
+        selectedText: '',
+        selectedRange: null
+      });
+    }
+  };
+
+  useEffect(() => {
     setActiveUrl(url || '');
     setPreviewData(null);
+    selectionMenuRef.current = null;
+    setSelectionMenu(null);
   }, [url]);
 
   useEffect(() => {
@@ -3705,8 +4315,10 @@ function WebSourcePreview({
     if (!selectedText) return null;
     const range = selection.getRangeAt(0);
     if (!element.contains(range.commonAncestorContainer)) return null;
-    const rect = range.getBoundingClientRect();
+    const rect = lastUsableRangeRect(range);
     if (!rect.width && !rect.height) return null;
+    const boundaryRect = rectBoundary(element.getBoundingClientRect());
+    const anchorRect = rectBoundary(rect);
     const normalizedSelection = selectedText.replace(/\s+/g, ' ');
     const normalizedText = readableText.replace(/\s+/g, ' ');
     const charStart = normalizedText.indexOf(normalizedSelection);
@@ -3727,41 +4339,45 @@ function WebSourcePreview({
       },
       menu: {
         x: Math.round(rect.left + rect.width / 2),
-        y: Math.max(12, Math.round(rect.top - 48))
+        y: Math.max(boundaryRect.top + 8, Math.round(rect.top - 36)),
+        anchorRect,
+        boundaryRect
       }
     };
   };
 
-  const reportWebContext = () => {
+  const reportWebContext = (showActions = false) => {
     const element = scrollerRef.current;
     if (!resource?.id || !editorId || !onUpdateViewState || !element) return;
     const totalScrollable = Math.max(1, element.scrollHeight - element.clientHeight);
-    const selectionLocator = readWebSelection();
+    const selectionLocator = enableSelectionActions ? readWebSelection() : null;
+    const latestSelectionMenu = selectionMenuRef.current;
     const scrollRatio = Math.min(1, Math.max(0, element.scrollTop / totalScrollable));
     const lineCount = Math.max(1, readableText.split('\n').length);
     const approxLine = Math.max(1, Math.round(scrollRatio * lineCount));
-    if (selectionLocator) {
-      setSelectionMenu({
+    if (selectionLocator && showActions) {
+      showSelectionMenu({
         x: selectionLocator.menu.x,
         y: selectionLocator.menu.y,
+        anchorRect: selectionLocator.menu.anchorRect,
+        boundaryRect: selectionLocator.menu.boundaryRect,
         text: selectionLocator.selectedText,
         selectedRange: selectionLocator.selectedRange
       });
-    } else {
-      setSelectionMenu(null);
     }
     onUpdateViewState(editorId, {
       scrollRatio,
       approxChunkIndex: Math.max(0, approxLine - 1),
       visibleLineRange: { start: approxLine, end: Math.min(lineCount, approxLine + 40) },
-      selectedText: selectionLocator?.selectedText || '',
-      selectedRange: selectionLocator?.selectedRange || null,
-      visibleContent: selectionLocator?.selectedText || readableText.slice(Math.max(0, approxLine - 1), approxLine + 2500)
+      selectedText: selectionLocator?.selectedText || latestSelectionMenu?.text || '',
+      selectedRange: selectionLocator?.selectedRange || latestSelectionMenu?.selectedRange || null,
+      visibleContent: selectionLocator?.selectedText || latestSelectionMenu?.text || readableText.slice(Math.max(0, approxLine - 1), approxLine + 2500)
     });
   };
 
-  const applyWebSelectionPrompt = (prompt: string) => {
-    if (!selectionMenu || !resource?.id) return;
+  const applyWebSelectionPrompt = (prompt: string, submitImmediately = false) => {
+    const latestSelectionMenu = selectionMenuRef.current || selectionMenu;
+    if (!latestSelectionMenu || !resource?.id) return;
     window.dispatchEvent(
       new CustomEvent('workbench:context-selection-action', {
         detail: {
@@ -3770,13 +4386,71 @@ function WebSourcePreview({
           panelId: editorId,
           panelType: 'web',
           sourceLabel: '网页选区',
-          selectedRange: selectionMenu.selectedRange,
-          text: selectionMenu.text,
-          prompt
+          selectedRange: latestSelectionMenu.selectedRange,
+          text: latestSelectionMenu.text,
+          prompt,
+          submitImmediately
         } as WorkbenchContextSelectionActionDetail
       })
     );
   };
+  const buildWebSelectionDetail = (prompt: string): WorkbenchContextSelectionActionDetail | null => {
+    const latestSelectionMenu = selectionMenuRef.current || selectionMenu;
+    if (!latestSelectionMenu || !resource?.id) return null;
+    return {
+      fileId: resource.id,
+      fileName: displayedTitle || resource.name,
+      panelId: editorId,
+      panelType: 'web',
+      sourceLabel: '网页选区',
+      selectedRange: latestSelectionMenu.selectedRange,
+      text: latestSelectionMenu.text,
+      prompt
+    };
+  };
+  const askWebSelection: SelectionAskSubmitHandler = (question, history, handlers) => {
+    const prompt = `请基于我选中的网页内容回答：${question}`;
+    const detail = buildWebSelectionDetail(prompt);
+    if (!detail?.text) return Promise.reject(new Error('选区已失效，请重新选择网页内容。'));
+    lastAskDetailRef.current = detail;
+    return streamSelectionAsk({
+      workspaceId,
+      request: {
+        question,
+        prompt,
+        selectedText: detail.text,
+        detail
+      },
+      history,
+      handlers
+    });
+  };
+  const explainWebSelection: SelectionExplainSubmitHandler = (history, handlers) => {
+    const prompt = '请解释我选中的这段网页内容';
+    const detail = buildWebSelectionDetail(prompt);
+    if (!detail?.text) return Promise.reject(new Error('选区已失效，请重新选择网页内容。'));
+    lastAskDetailRef.current = detail;
+    return streamSelectionAsk({
+      workspaceId,
+      request: {
+        question: 'Explain this selection',
+        prompt,
+        selectedText: detail.text,
+        detail
+      },
+      history,
+      handlers
+    });
+  };
+
+  useEffect(() => {
+    if (!enableSelectionActions) return;
+    const handleSelectionChange = () => {
+      window.setTimeout(() => reportWebContext(false), 0);
+    };
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, [activeUrl, displayedUrl, enableSelectionActions, readableText, resource?.id]);
 
   if (embed && resource) {
     return (
@@ -3812,21 +4486,28 @@ function WebSourcePreview({
     <div
       ref={scrollerRef}
       className="h-full overflow-auto bg-white px-6 py-5"
-      onScroll={reportWebContext}
-      onMouseUp={reportWebContext}
-      onKeyUp={reportWebContext}
-      onMouseEnter={reportWebContext}
+      onScroll={() => reportWebContext(false)}
+      onMouseDown={() => closeSelectionMenu()}
+      onMouseUp={() => reportWebContext(true)}
+      onKeyUp={() => reportWebContext(true)}
+      onMouseEnter={() => reportWebContext(false)}
     >
-      {selectionMenu && (
-        <div
-          className="fixed z-50 flex items-center gap-1 rounded-full border border-[#d9d9d5] bg-[#202124] px-2 py-1 text-xs font-medium text-white shadow-[0_12px_35px_rgba(0,0,0,0.22)]"
-          style={{ left: selectionMenu.x, top: selectionMenu.y, transform: 'translateX(-50%)' }}
-        >
-          <button className="rounded-full px-2 py-1 hover:bg-white/15" onMouseDown={(event) => event.preventDefault()} onClick={() => applyWebSelectionPrompt('请解释我选中的这段网页内容')}>解释</button>
-          <button className="rounded-full px-2 py-1 hover:bg-white/15" onMouseDown={(event) => event.preventDefault()} onClick={() => applyWebSelectionPrompt('请总结我选中的这段网页内容')}>总结</button>
-          <button className="rounded-full px-2 py-1 hover:bg-white/15" onMouseDown={(event) => event.preventDefault()} onClick={() => applyWebSelectionPrompt('请基于我选中的网页内容回答：')}>提问</button>
-          <button className="rounded-full px-2 py-1 hover:bg-white/15" onMouseDown={(event) => event.preventDefault()} onClick={() => applyWebSelectionPrompt('__lock_context_selection__')}>锁定</button>
-        </div>
+      {enableSelectionActions && selectionMenu && (
+        <SelectionActionPopover
+          x={selectionMenu.x}
+          y={selectionMenu.y}
+          anchorRect={selectionMenu.anchorRect}
+          boundaryRect={selectionMenu.boundaryRect}
+          sourceLabel="Web selection"
+          onAsk={askWebSelection}
+          onAddToAssistant={(result) => {
+            const detail = lastAskDetailRef.current;
+            if (detail) onAddSelectionAskToAssistant?.(result, detail);
+          }}
+          onExplain={explainWebSelection}
+          onPin={() => applyWebSelectionPrompt('__lock_context_selection__')}
+          onDismiss={closeSelectionMenu}
+        />
       )}
       <div className="mx-auto max-w-5xl">
         <article className="min-w-0 text-[#25272b]">
@@ -4023,17 +4704,25 @@ function VideoSourcePanel({
 function TextEditingSurface({
   editor,
   resource,
+  workspaceId,
+  aiContext,
   content,
   isLoading,
   onChangeContent,
-  onUpdateViewState
+  onUpdateViewState,
+  onAddSelectionAskToAssistant,
+  minimalPreview = false
 }: {
   editor: EditorState;
   resource: ResourceReference;
+  workspaceId: string;
+  aiContext?: AiChatContext & { activeFileContent?: string | null };
   content: string;
   isLoading: boolean;
   onChangeContent?: (resourceId: string, content: string) => void;
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
+  onAddSelectionAskToAssistant?: (messages: AiChatMessage[], detail: WorkbenchContextSelectionActionDetail) => void;
+  minimalPreview?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const resourceKind = getResourceKind(resource);
@@ -4094,6 +4783,70 @@ function TextEditingSurface({
     });
   };
 
+  const previewContent = showMarkdownPreview ? (
+    <SelectionActionLayer
+      fileId={resource.id}
+      fileName={resource.name}
+      panelId={editor.id}
+      panelType={editor.type}
+      sourceLabel="Markdown 选区"
+      workspaceId={workspaceId}
+      aiContext={aiContext}
+      onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
+      onSelectionChange={(patch) => onUpdateViewState?.(editor.id, patch)}
+    >
+      <MarkdownPreview
+        content={content}
+        emptyMessage={isLoading ? 'Loading file content...' : 'Open a markdown note to preview.'}
+        onViewportChange={(patch) => onUpdateViewState?.(editor.id, patch)}
+        fileId={resource.id}
+      />
+    </SelectionActionLayer>
+  ) : resourceKind === 'note' ? (
+    <SelectionActionLayer
+      fileId={resource.id}
+      fileName={resource.name}
+      panelId={editor.id}
+      panelType={editor.type}
+      sourceLabel="文本选区"
+      workspaceId={workspaceId}
+      aiContext={aiContext}
+      onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
+      onSelectionChange={(patch) => onUpdateViewState?.(editor.id, patch)}
+    >
+      <PlainTextPreview
+        content={content}
+        emptyMessage={isLoading ? 'Loading file content...' : 'Open a text note to preview.'}
+        onViewportChange={(patch) => onUpdateViewState?.(editor.id, patch)}
+        fileId={resource.id}
+      />
+    </SelectionActionLayer>
+  ) : (
+    <SelectionActionLayer
+      fileId={resource.id}
+      fileName={resource.name}
+      panelId={editor.id}
+      panelType={editor.type}
+      sourceLabel="代码选区"
+      workspaceId={workspaceId}
+      aiContext={aiContext}
+      onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
+      onSelectionChange={(patch) => onUpdateViewState?.(editor.id, patch)}
+    >
+      <SyntaxHighlightedCode
+        code={content}
+        language={languageLabel}
+        emptyMessage={isLoading ? 'Loading file content...' : 'Open a file to preview.'}
+        onViewportChange={(patch) => onUpdateViewState?.(editor.id, patch)}
+        fileId={resource.id}
+      />
+    </SelectionActionLayer>
+  );
+
+  if (minimalPreview) {
+    return <TextEditorShell>{previewContent}</TextEditorShell>;
+  }
+
   return (
     <TextEditorShell
       toolbar={
@@ -4151,29 +4904,7 @@ function TextEditingSurface({
           placeholder={isLoading ? 'Loading file content...' : 'Open a file to start editing.'}
           spellCheck={editor.type === 'notes'}
         />
-      ) : showMarkdownPreview ? (
-        <MarkdownPreview
-          content={content}
-          emptyMessage={isLoading ? 'Loading file content...' : 'Open a markdown note to preview.'}
-          onViewportChange={(patch) => onUpdateViewState?.(editor.id, patch)}
-          fileId={resource.id}
-        />
-      ) : resourceKind === 'note' ? (
-        <PlainTextPreview
-          content={content}
-          emptyMessage={isLoading ? 'Loading file content...' : 'Open a text note to preview.'}
-          onViewportChange={(patch) => onUpdateViewState?.(editor.id, patch)}
-          fileId={resource.id}
-        />
-      ) : (
-        <SyntaxHighlightedCode
-          code={content}
-          language={languageLabel}
-          emptyMessage={isLoading ? 'Loading file content...' : 'Open a file to preview.'}
-          onViewportChange={(patch) => onUpdateViewState?.(editor.id, patch)}
-          fileId={resource.id}
-        />
-      )}
+      ) : previewContent}
     </TextEditorShell>
   );
 }
@@ -4250,64 +4981,6 @@ function ExternalEditorView({
     </div>
   );
 }
-
-const aiWelcomeCache = new Map<string, AiWelcomeContent>();
-const rememberAiWelcomeContent = (signature: string, content: AiWelcomeContent) => {
-  aiWelcomeCache.set(signature, content);
-  if (aiWelcomeCache.size > 40) {
-    const firstKey = aiWelcomeCache.keys().next().value;
-    if (firstKey) aiWelcomeCache.delete(firstKey);
-  }
-};
-
-const clipWelcomeText = (value?: string | null, length = 180) =>
-  String(value || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, length);
-
-const buildAiWelcomeSignature = (aiContext?: WorkbenchEditorContentProps['aiContext']) => {
-  const activePanel =
-    aiContext?.openPanels?.find((panel) => panel.panelId === aiContext.activePanelId) ||
-    aiContext?.openPanels?.find((panel) => panel.fileId === aiContext.activeFileId) ||
-    aiContext?.openPanels?.[0];
-  return [
-    aiContext?.workbenchId || '',
-    aiContext?.workbenchTitle || '',
-    aiContext?.activeFileId || '',
-    activePanel?.panelId || '',
-    activePanel?.fileName || aiContext?.activeFile?.name || '',
-    clipWelcomeText(activePanel?.selectedText || aiContext?.selectedText, 120),
-    clipWelcomeText(activePanel?.visibleContent, 240),
-    (aiContext?.openPanels || []).map((panel) => panel.fileId || panel.panelId).join(',')
-  ].join('|');
-};
-
-const getWelcomeActionIcon = (suggestion: AiWelcomeSuggestion) => {
-  switch (suggestion.icon) {
-    case 'translate':
-      return <Languages className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
-    case 'analysis':
-      return <Brain className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
-    case 'task':
-      return <ClipboardList className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
-    case 'outline':
-      return <ListChecks className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
-    case 'question':
-      return <CircleHelp className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
-    case 'compare':
-      return <GitCompare className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
-    case 'search':
-      return <Search className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
-    case 'practice':
-      return <Check className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
-    case 'plan':
-      return <Route className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
-    case 'summary':
-    default:
-      return <FileText className="h-4.5 w-4.5 shrink-0 text-[#555960]" />;
-  }
-};
 
 const NOTE_EDIT_INTENT_PATTERN =
   /修改|改写|重写|润色|整理|补充|追加|加入|写进|放进|插入|删除|更新|扩写|缩写|合并|应用到|改成|改为|改得|改的|调整|优化|精简|简化|压缩|提炼|浓缩|写成|变成|变得|edit|rewrite|revise|polish|update|append|insert|delete|shorten|simplify|condense|optimize/i;
@@ -4477,27 +5150,29 @@ export function AiEditorView({
 }) {
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [queuedChatRequests, setQueuedChatRequests] = useState<QueuedChatRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<AgentTimelineItem[]>([]);
   const [thinkingTraceOpen, setThinkingTraceOpen] = useState(false);
-  const [debugOpen, setDebugOpen] = useState(false);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [attachmentSubmenu, setAttachmentSubmenu] = useState<ComposerAttachMenu>('root');
   const [contextModeMenuOpen, setContextModeMenuOpen] = useState(false);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('');
+  const [contextSubmenuOpen, setContextSubmenuOpen] = useState(false);
+  const [webpageUrlDraft, setWebpageUrlDraft] = useState('');
+  const [webpageTitleDraft, setWebpageTitleDraft] = useState('');
+  const [attachBusyKey, setAttachBusyKey] = useState<string | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [referencedChatSessions, setReferencedChatSessions] = useState<any[] | null>(null);
+  const [referenceChatsLoading, setReferenceChatsLoading] = useState(false);
+  const [workspaceKnowledgeResources, setWorkspaceKnowledgeResources] = useState<ResourceReference[] | null>(null);
+  const [workspaceKnowledgeLoading, setWorkspaceKnowledgeLoading] = useState(false);
   const [inspectedChipId, setInspectedChipId] = useState<string | null>(null);
   const [sourceModalSource, setSourceModalSource] = useState<CitationUiSource | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<AiChatAttachment | null>(null);
   const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
   const [editingMessageContent, setEditingMessageContent] = useState('');
   const [savingAttachmentId, setSavingAttachmentId] = useState<string | null>(null);
-  const [aiWelcomeContent, setAiWelcomeContent] = useState<AiWelcomeContent | null>(() => {
-    const signature = buildAiWelcomeSignature(aiContext);
-    return aiWelcomeCache.get(signature) || null;
-  });
-  const [isWelcomeLoading, setIsWelcomeLoading] = useState(false);
-  const [welcomeError, setWelcomeError] = useState<string | null>(null);
-  const [availableModels, setAvailableModels] = useState<Array<{ provider: string; model: string }>>([]);
   const [applyingNoteEditKey, setApplyingNoteEditKey] = useState<string | null>(null);
   const [appliedNoteEditKey, setAppliedNoteEditKey] = useState<string | null>(null);
   const [noteEditPreview, setNoteEditPreview] = useState<{
@@ -4515,20 +5190,31 @@ export function AiEditorView({
   const [isRevertingRevision, setIsRevertingRevision] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const selectedModelEntry = useMemo(
-    () => availableModels.find((item) => `${item.provider}:${item.model}` === selectedModel) || availableModels[0] || null,
-    [availableModels, selectedModel]
-  );
-  const openComposerMenu = (menu: 'attachment' | 'context' | 'model' | 'scope') => {
-    setAttachmentMenuOpen((open) => (menu === 'attachment' ? !open : false));
-    setContextModeMenuOpen((open) => (menu === 'context' ? !open : false));
-    setModelMenuOpen((open) => (menu === 'model' ? !open : false));
-    setDebugOpen((open) => (menu === 'scope' ? !open : false));
+  const streamAbortControllerRef = useRef<AbortController | null>(null);
+  const isStoppingRef = useRef(false);
+  const openComposerMenu = (menu: 'attachment' | 'context') => {
+    setAttachmentMenuOpen((open) => {
+      const next = menu === 'attachment' ? !open : false;
+      if (next) {
+        setAttachmentSubmenu('root');
+        setAttachError(null);
+      }
+      return next;
+    });
+    setContextModeMenuOpen((open) => {
+      const next = menu === 'context' ? !open : false;
+      if (!next) setContextSubmenuOpen(false);
+      return next;
+    });
   };
   const messages = useMemo(
     () => (Array.isArray(editor.viewState?.messages) ? editor.viewState.messages : []),
     [editor.viewState?.messages]
   );
+  const messagesRef = useRef<AiChatMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages as AiChatMessage[];
+  }, [messages]);
   const chatSessionAttachments = useMemo(
     () =>
       Array.isArray(editor.viewState?.chatSessionAttachments)
@@ -4536,11 +5222,34 @@ export function AiEditorView({
         : [],
     [editor.viewState?.chatSessionAttachments]
   );
+  const previewResources = useMemo(
+    () => [...resources, ...(workspaceKnowledgeResources || [])].filter((resource) => resource.type !== 'folder'),
+    [resources, workspaceKnowledgeResources]
+  );
+  const previewResourceForAttachment = useMemo(
+    () =>
+      previewAttachment?.fileObjectId
+        ? previewResources.find((resource) => resource.id === previewAttachment.fileObjectId) || null
+        : null,
+    [previewAttachment?.fileObjectId, previewResources]
+  );
   const storedContextMode = editor.viewState?.contextMode as AiContextMode | 'workspace' | undefined;
   const contextMode: AiContextMode =
     storedContextMode === 'workspace' || storedContextMode === 'selection_only'
       ? 'auto'
       : storedContextMode || 'auto';
+  const contextModeOptions = useMemo(
+    () =>
+      [
+        ['auto', 'Auto context', Hand],
+        ['viewport', 'Visible context', Eye],
+        ['active_file', 'Current file', FileText],
+        ['workbench', 'Workbench resources', FolderOpen],
+        ['model_knowledge', 'Model knowledge', Brain]
+      ] as Array<[AiContextMode, string, typeof Hand]>,
+    []
+  );
+  const contextModeLabel = contextModeOptions.find(([mode]) => mode === contextMode)?.[1] || 'Auto context';
   const hiddenChipIds = useMemo(
     () =>
       new Set(
@@ -4590,9 +5299,6 @@ export function AiEditorView({
     () => resources.filter((item) => item.type !== 'folder').slice(0, 12),
     [resources]
   );
-  const resourceScopeLabel = workbenchResourceFiles.length
-    ? `资源范围：当前 Workbench ${workbenchResourceFiles.length} 个文件`
-    : '资源范围：当前 Workbench 暂无文件';
   const activePanelContext = useMemo(
     () =>
       aiContext?.openPanels?.find((panel) => panel.panelId === aiContext.activePanelId) ||
@@ -4607,109 +5313,89 @@ export function AiEditorView({
 
   const activeNoteFileId = aiContext?.activeFile?.id || activePanelContext?.fileId || '';
 
-  const aiWelcomeSignature = useMemo(
-    () => buildAiWelcomeSignature(aiContext),
-    [
-      aiContext?.activeFileId,
-      aiContext?.activePanelId,
-      aiContext?.workbenchId,
-      aiContext?.workbenchTitle,
-      activePanelContext?.panelId,
-      activePanelContext?.fileName,
-      activePanelContext?.selectedText,
-      activePanelContext?.visibleContent,
-      aiContext?.openPanels?.length
-    ]
-  );
-
-  useEffect(() => {
-    if (messages.length > 0) return;
-    const cached = aiWelcomeCache.get(aiWelcomeSignature);
-    if (cached) {
-      setAiWelcomeContent(cached);
-      setWelcomeError(null);
-      setIsWelcomeLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setIsWelcomeLoading(true);
-    setWelcomeError(null);
-    setAiWelcomeContent(null);
-    const timer = window.setTimeout(() => {
-      void aiApi
-        .chatWelcome({ context: aiContext })
-        .then((content) => {
-          if (cancelled) return;
-          rememberAiWelcomeContent(aiWelcomeSignature, content);
-          setAiWelcomeContent(content);
-        })
-        .catch((error) => {
-          if (cancelled) return;
-          setWelcomeError(error instanceof Error ? error.message : 'AI 起始建议生成失败');
-        })
-        .finally(() => {
-          if (!cancelled) setIsWelcomeLoading(false);
-        });
-    }, 180);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [aiContext, aiWelcomeSignature, messages.length]);
-
   useEffect(() => {
     const closeMenus = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest('[data-ai-composer-menu]')) return;
       setAttachmentMenuOpen(false);
+      setAttachmentSubmenu('root');
       setContextModeMenuOpen(false);
-      setModelMenuOpen(false);
-      setDebugOpen(false);
+      setContextSubmenuOpen(false);
     };
     window.addEventListener('mousedown', closeMenus);
     return () => window.removeEventListener('mousedown', closeMenus);
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    void aiApi
-      .listModels()
-      .then((response) => {
-        if (cancelled) return;
-        setAvailableModels(Array.isArray(response.models) ? response.models : []);
-        if (Array.isArray(response.models) && response.models[0]?.model) {
-          setSelectedModel(`${response.models[0].provider}:${response.models[0].model}`);
+    if (typeof document === 'undefined' || document.getElementById('openwebui-composer-menu-animations')) return;
+    const style = document.createElement('style');
+    style.id = 'openwebui-composer-menu-animations';
+    style.textContent = `
+      @keyframes openwebui-composer-dropdown-in {
+        from {
+          opacity: 0;
+          transform: translate3d(0, -8px, 0) scale(0.95);
         }
-      })
-      .catch(() => {
-        if (!cancelled) setAvailableModels([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  useEffect(() => {
-    const handleSelectionAction = (event: Event) => {
-      const detail = (event as CustomEvent).detail as WorkbenchContextSelectionActionDetail | undefined;
-      if (!detail?.prompt) return;
-      if ((detail.prompt === '__lock_pdf_selection__' || detail.prompt === '__lock_context_selection__') && detail.text) {
-        addDroppedContextSelection(detail);
-        return;
+        to {
+          opacity: 1;
+          transform: translate3d(0, 0, 0) scale(1);
+        }
       }
-      setInput(detail.prompt);
-      window.setTimeout(() => inputRef.current?.focus(), 0);
-    };
 
-    window.addEventListener('workbench:pdf-selection-action', handleSelectionAction);
-    window.addEventListener('workbench:context-selection-action', handleSelectionAction);
-    return () => {
-      window.removeEventListener('workbench:pdf-selection-action', handleSelectionAction);
-      window.removeEventListener('workbench:context-selection-action', handleSelectionAction);
-    };
-  }, [activePanelContext, addDroppedContextSelection, editor.id, onUpdateViewState]);
+      @keyframes openwebui-composer-slide-root {
+        from {
+          opacity: 0;
+          transform: translate3d(-20px, 0, 0);
+        }
+        to {
+          opacity: 1;
+          transform: translate3d(0, 0, 0);
+        }
+      }
 
+      @keyframes openwebui-composer-slide-sub {
+        from {
+          opacity: 0;
+          transform: translate3d(20px, 0, 0);
+        }
+        to {
+          opacity: 1;
+          transform: translate3d(0, 0, 0);
+        }
+      }
+
+      .openwebui-composer-dropdown-in {
+        transform-origin: bottom left;
+        animation: openwebui-composer-dropdown-in 200ms cubic-bezier(0.33, 1, 0.68, 1);
+        will-change: transform, opacity;
+      }
+
+      .openwebui-composer-slide-root {
+        animation: openwebui-composer-slide-root 150ms cubic-bezier(0.33, 1, 0.68, 1);
+        will-change: transform, opacity;
+      }
+
+      .openwebui-composer-slide-sub {
+        animation: openwebui-composer-slide-sub 150ms cubic-bezier(0.33, 1, 0.68, 1);
+        will-change: transform, opacity;
+      }
+    `;
+    document.head.appendChild(style);
+  }, []);
+
+  useEffect(() => {
+    if (attachmentMenuOpen && attachmentSubmenu === 'chats') {
+      void loadReferenceChats();
+    }
+    if (attachmentMenuOpen && attachmentSubmenu === 'knowledge') {
+      void loadWorkspaceKnowledge();
+    }
+  }, [attachmentMenuOpen, attachmentSubmenu]);
+
+  useEffect(() => {
+    setWorkspaceKnowledgeResources(null);
+    setReferencedChatSessions(null);
+  }, [workspaceId, aiContext?.workbenchId]);
   const contextChips = useMemo(() => {
     const chips: Array<{
       id: string;
@@ -4846,6 +5532,42 @@ export function AiEditorView({
     })),
     ...contextChips.filter((chip) => chip.kind === 'active_file')
   ];
+  const contextAttachmentDisplayType = (selection: DroppedContextSelection): AiChatAttachment['displayType'] => {
+    const sourceLabel = String(selection.sourceLabel || '').toLowerCase();
+    const sourceType = String(selection.selectedRange?.sourceType || '').toLowerCase();
+    if (sourceLabel.includes('note')) return 'note';
+    if (sourceLabel.includes('chat') || sourceType === 'reference_chat') return 'chat';
+    if (sourceLabel.includes('knowledge')) return 'collection';
+    if (sourceLabel.includes('webpage') || sourceType === 'webpage') return 'webpage';
+    return 'selection';
+  };
+  const droppedSelectionToAttachment = (selection: DroppedContextSelection): AiChatAttachment => {
+    const sourceLabel = selection.sourceLabel || 'Selection';
+    const displayText = selection.text.replace(/\s+/g, ' ').trim();
+    const displayName =
+      contextAttachmentDisplayType(selection) === 'selection'
+        ? displayText.slice(0, 42) || sourceLabel
+        : [sourceLabel, selection.fileName].filter(Boolean).join(' · ') || displayText.slice(0, 42) || sourceLabel;
+    return {
+      id: `context:${selection.id}`,
+      name: displayName,
+      mimeType: 'text/plain',
+      size: new Blob([selection.text]).size,
+      kind: 'text',
+      displayType: contextAttachmentDisplayType(selection),
+      sourceLabel,
+      locator: selection.selectedRange,
+      textContent: selection.text,
+      summary: selection.text.slice(0, 500),
+      fileObjectId: selection.fileId || undefined,
+      createdAt: selection.createdAt || new Date().toISOString(),
+      status: 'ready'
+    };
+  };
+  const composerContextAttachments = useMemo(
+    () => droppedContextSelections.map(droppedSelectionToAttachment),
+    [droppedContextSelections]
+  );
   const menuContextChips = contextChips.filter((chip) => chip.kind !== 'selection' && chip.kind !== 'active_file');
   const lastAssistantIndex = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -4855,7 +5577,7 @@ export function AiEditorView({
   }, [messages]);
 
   const hideChip = (chipId: string) => {
-    if (chipId.startsWith('dropped:')) {
+    if (droppedContextSelections.some((selection) => selection.id === chipId)) {
       removeDroppedContextSelection(chipId);
       return;
     }
@@ -4915,6 +5637,209 @@ export function AiEditorView({
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }
 
+  const isWorkbenchUserMarkdownNote = (resource: ResourceReference) =>
+    resource.type !== 'folder' &&
+    resource.fileCategory === 'note' &&
+    resource.resourceType === 'note' &&
+    resource.scope === 'workbench' &&
+    resource.origin === 'user' &&
+    (resource.extension === 'md' || resource.mimeType === 'text/markdown' || resource.name.toLowerCase().endsWith('.md'));
+
+  const isWorkspaceKnowledgeResource = (resource: ResourceReference) =>
+    resource.type !== 'folder' &&
+    resource.scope === 'workspace' &&
+    resource.resourceType === 'source';
+
+  const knowledgeAttachResources = useMemo(
+    () => (workspaceKnowledgeResources || []).filter(isWorkspaceKnowledgeResource).slice(0, 50),
+    [workspaceKnowledgeResources]
+  );
+  const noteAttachResources = useMemo(
+    () => resources.filter(isWorkbenchUserMarkdownNote).slice(0, 30),
+    [resources]
+  );
+
+  const closeAttachmentMenu = () => {
+    setAttachmentMenuOpen(false);
+    setAttachmentSubmenu('root');
+    setAttachError(null);
+  };
+
+  const buildResourceContextText = async (resource: ResourceReference) => {
+    const isActiveResource = aiContext?.activeFile?.id === resource.id;
+    const activeContent = isActiveResource ? aiContext?.activeFileContent || aiContext?.activeFile?.content || '' : '';
+    if (activeContent.trim()) return activeContent.trim().slice(0, 12000);
+
+    try {
+      const structure = await fileSystemApi.getDocumentStructure(workspaceId, resource.id);
+      const pageText = Array.isArray(structure.pages)
+        ? structure.pages.map((page) => page.text).filter(Boolean).join('\n\n')
+        : '';
+      const chunkText = Array.isArray(structure.chunks)
+        ? structure.chunks.map((chunk) => chunk.text).filter(Boolean).join('\n\n')
+        : '';
+      const text = pageText || chunkText;
+      if (text.trim()) return text.trim().slice(0, 12000);
+    } catch {
+      // The resource can still be referenced by metadata if extraction is unavailable.
+    }
+
+    try {
+      const preview = await fileSystemApi.getPreviewInfo(workspaceId, resource.id);
+      return [
+        resource.name,
+        resource.path,
+        preview.message,
+        preview.sourceUrl || preview.previewUrl
+      ].filter(Boolean).join('\n');
+    } catch {
+      return [resource.name, resource.path, resource.resourceType, resource.fileCategory].filter(Boolean).join('\n');
+    }
+  };
+
+  const attachResourceContext = async (resource: ResourceReference, sourceLabel: string) => {
+    if (attachBusyKey) return;
+    setAttachBusyKey(`${sourceLabel}:${resource.id}`);
+    setAttachError(null);
+    try {
+      const text = await buildResourceContextText(resource);
+      addDroppedContextSelection({
+        fileId: resource.id,
+        fileName: resource.name,
+        sourceLabel,
+        panelType: isWorkbenchUserMarkdownNote(resource) ? 'notes' : 'resource',
+        text
+      });
+      closeAttachmentMenu();
+    } catch (error) {
+      setAttachError(error instanceof Error ? error.message : 'Failed to attach resource.');
+    } finally {
+      setAttachBusyKey(null);
+    }
+  };
+
+  const attachWebpageContext = async () => {
+    const rawUrl = webpageUrlDraft.trim();
+    if (!rawUrl || attachBusyKey) return;
+    let normalizedUrl = '';
+    try {
+      normalizedUrl = normalizeComposerUrl(rawUrl);
+      new URL(normalizedUrl);
+    } catch {
+      setAttachError('Please enter a valid URL.');
+      return;
+    }
+
+    setAttachBusyKey('webpage');
+    setAttachError(null);
+    try {
+      const preview = await fileSystemApi.extractUrlPreview(workspaceId, {
+        url: normalizedUrl,
+        title: webpageTitleDraft.trim() || undefined
+      });
+      const title = webpageTitleDraft.trim() || preview.title || makeComposerTitleFromUrl(normalizedUrl);
+      const imported = aiContext?.workbenchId
+        ? await fileSystemApi.importUrl(workspaceId, {
+            url: normalizedUrl,
+            title,
+            workbenchId: aiContext.workbenchId,
+            resourceRole: 'source',
+            resourceType: 'source',
+            scope: 'workbench',
+            origin: 'web'
+          }).catch(() => null)
+        : null;
+      const file = imported?.file;
+      addDroppedContextSelection({
+        fileId: file?.id || normalizedUrl,
+        fileName: file?.name || title,
+        sourceLabel: 'Webpage',
+        panelType: 'external',
+        selectedRange: {
+          sourceType: 'webpage',
+          url: preview.url || normalizedUrl,
+          textLength: (preview.contentMarkdown || preview.excerpt || '').length
+        },
+        text: [title, preview.url || normalizedUrl, preview.excerpt, preview.contentMarkdown]
+          .filter(Boolean)
+          .join('\n\n')
+      });
+      setWebpageUrlDraft('');
+      setWebpageTitleDraft('');
+      closeAttachmentMenu();
+    } catch (error: any) {
+      setAttachError(error?.response?.data?.error || error?.message || 'Failed to attach webpage.');
+    } finally {
+      setAttachBusyKey(null);
+    }
+  };
+
+  const loadReferenceChats = async () => {
+    if (referenceChatsLoading || referencedChatSessions) return;
+    setReferenceChatsLoading(true);
+    setAttachError(null);
+    try {
+      const result = await learningApi.listConversationSessions(workspaceId, {
+        workbenchId: aiContext?.workbenchId,
+        source: 'workbench_ai',
+        includeMessages: true,
+        limit: 100
+      });
+      setReferencedChatSessions(Array.isArray(result.sessions) ? result.sessions : []);
+    } catch (error: any) {
+      setAttachError(error?.response?.data?.error || error?.message || 'Failed to load chats.');
+      setReferencedChatSessions([]);
+    } finally {
+      setReferenceChatsLoading(false);
+    }
+  };
+
+  const loadWorkspaceKnowledge = async () => {
+    if (workspaceKnowledgeLoading || workspaceKnowledgeResources) return;
+    setWorkspaceKnowledgeLoading(true);
+    setAttachError(null);
+    try {
+      const result = await fileSystemApi.getResources(workspaceId, {
+        scope: 'workspace',
+        role: 'source'
+      });
+      setWorkspaceKnowledgeResources(Array.isArray(result) ? (result as ResourceReference[]) : []);
+    } catch (error: any) {
+      setAttachError(error?.response?.data?.error || error?.message || 'Failed to load knowledge.');
+      setWorkspaceKnowledgeResources([]);
+    } finally {
+      setWorkspaceKnowledgeLoading(false);
+    }
+  };
+
+  const attachChatContext = (session: any) => {
+    const sessionMessages = Array.isArray(session.messages)
+      ? session.messages
+      : Array.isArray(session.viewState?.messages)
+        ? session.viewState.messages
+        : [];
+    const text = sessionMessages
+      .slice(-20)
+      .map((message: any) => `${message.role || 'message'}: ${String(message.content || '').trim()}`)
+      .filter((line: string) => line.trim() && !line.endsWith(':'))
+      .join('\n\n');
+    addDroppedContextSelection({
+      fileId: session.id,
+      fileName: session.title || 'AI Chat',
+      sourceLabel: 'Chat',
+      panelType: 'ai',
+      selectedRange: {
+        sourceType: 'reference_chat',
+        sessionId: session.id,
+        messageCount: sessionMessages.length
+      },
+      text: [`Conversation: ${session.title || 'AI Chat'}`, text || session.lastMessagePreview || 'No messages available.']
+        .filter(Boolean)
+        .join('\n\n')
+    });
+    closeAttachmentMenu();
+  };
+
   const removeDroppedContextSelection = (selectionId: string) => {
     onUpdateViewState?.(editor.id, {
       droppedContextSelections: droppedContextSelections.filter((selection) => selection.id !== selectionId)
@@ -4929,16 +5854,16 @@ export function AiEditorView({
     onUpdateViewState?.(editor.id, { contextMode: mode });
   };
 
-  const buildDroppedSelectionContext = (): AiLockedSelectionContext | null => {
-    if (!droppedContextSelections.length) return null;
-    const first = droppedContextSelections[0];
+  const buildDroppedSelectionContext = (selections: DroppedContextSelection[] = droppedContextSelections): AiLockedSelectionContext | null => {
+    if (!selections.length) return null;
+    const first = selections[0];
     return {
-      id: `dropped-context:${droppedContextSelections.map((selection) => selection.id).join('|')}`,
+      id: `dropped-context:${selections.map((selection) => selection.id).join('|')}`,
       panelId: first.panelId,
       panelType: first.panelType || 'video',
       fileId: first.fileId || null,
       fileName: first.fileName,
-      content: droppedContextSelections
+      content: selections
         .map((selection, index) => {
           const locator = selection.selectedRange || {};
           const timeLabel =
@@ -4951,7 +5876,7 @@ export function AiEditorView({
         .join('\n\n'),
       locator: {
         sourceType: 'dropped_context_group',
-        textLength: droppedContextSelections.reduce((sum, selection) => sum + selection.text.length, 0)
+        textLength: selections.reduce((sum, selection) => sum + selection.text.length, 0)
       },
       createdAt: new Date().toISOString()
     };
@@ -5133,15 +6058,24 @@ export function AiEditorView({
 
   const submitMessages = async ({
     prompt,
-    baseMessages
+    baseMessages,
+    attachments,
+    droppedSelections,
+    clearComposer = true
   }: {
     prompt: string;
     baseMessages: AiChatMessage[];
-  }) => {
+    attachments?: AiChatAttachment[];
+    droppedSelections?: DroppedContextSelection[];
+    clearComposer?: boolean;
+  }): Promise<boolean> => {
     const trimmedInput = prompt.trim();
-    if ((!trimmedInput && chatSessionAttachments.length === 0) || isSending) return;
+    const effectiveAttachments = (attachments || chatSessionAttachments).map((attachment) => ({ ...attachment }));
+    const effectiveDroppedSelections = (droppedSelections || droppedContextSelections).map((selection) => ({ ...selection }));
+    const effectiveContextAttachments = effectiveDroppedSelections.map(droppedSelectionToAttachment);
+    if (!trimmedInput && effectiveAttachments.length === 0 && effectiveContextAttachments.length === 0) return false;
 
-    const userContent = trimmedInput || '请分析当前 Chat 附件。';
+    const userContent = trimmedInput || '请分析当前附件和上下文。';
     const selectedNoteText = activePanelContext?.selectedText?.trim() || aiContext?.selectedText?.trim() || '';
     const hasSelectedNoteText = Boolean(selectedNoteText);
     const shouldRequestNoteEditProposal =
@@ -5154,20 +6088,26 @@ export function AiEditorView({
     const createdAt = new Date().toISOString();
 
     const previousMessages = [...baseMessages] as AiChatMessage[];
-    const pendingAttachments = chatSessionAttachments.map((attachment) => ({ ...attachment }));
-    const messageAttachments = pendingAttachments.map(stripAttachmentPayload);
+    const previousDroppedContextSelections = droppedContextSelections.map((selection) => ({ ...selection }));
+    const pendingAttachments = effectiveAttachments;
+    const pendingContextAttachments = effectiveContextAttachments.map((attachment) => ({ ...attachment }));
+    const messageAttachments = [...pendingContextAttachments, ...pendingAttachments].map(stripAttachmentPayload);
     const nextMessages: AiChatMessage[] = [
       ...previousMessages,
       { role: 'user', content: userContent, createdAt, attachments: messageAttachments }
     ];
 
-    onUpdateViewState?.(editor.id, { messages: nextMessages, chatSessionAttachments: [] });
-    setInput('');
+    onUpdateViewState?.(editor.id, {
+      messages: nextMessages,
+      ...(clearComposer ? { chatSessionAttachments: [], droppedContextSelections: [] } : {})
+    });
+    if (clearComposer) setInput('');
     setError(null);
     setTimeline([]);
     setThinkingTraceOpen(true);
     setIsSending(true);
 
+    let abortController: AbortController | null = null;
     try {
       const effectiveContextMode: AiContextMode = /@选区/.test(trimmedInput)
         ? 'selection_only'
@@ -5182,7 +6122,7 @@ export function AiEditorView({
                 : contextMode;
       const assistantCreatedAt = new Date().toISOString();
       const targetNoteFileId = aiContext?.activeFile?.id || activePanelContext?.fileId;
-      const droppedSelectionContext = buildDroppedSelectionContext();
+      const droppedSelectionContext = buildDroppedSelectionContext(effectiveDroppedSelections);
       const activeContextChipsForRequest = contextChips.map((chip) => ({
         id: chip.id,
         kind: chip.kind,
@@ -5195,7 +6135,7 @@ export function AiEditorView({
           enabled: true
         });
       }
-      const droppedSelectionCitations = droppedContextSelections.map((selection, index) => ({
+      const droppedSelectionCitations = effectiveDroppedSelections.map((selection, index) => ({
         sourceId: `D${index + 1}`,
         fileId: selection.fileId || selection.panelId || `dropped-${index + 1}`,
         fileName: selection.fileName || selection.sourceLabel || '视频引用',
@@ -5249,8 +6189,6 @@ export function AiEditorView({
         activeContextChips: activeContextChipsForRequest,
         activePanelId: aiContext?.activePanelId,
         activeFileId: aiContext?.activeFileId || aiContext?.activeFile?.id || null,
-        preferredProvider: selectedModelEntry?.provider || undefined,
-        preferredModel: selectedModelEntry?.model || undefined,
         activeFile: aiContext?.activeFile
           ? {
               ...aiContext.activeFile,
@@ -5260,7 +6198,7 @@ export function AiEditorView({
         activeExternal: aiContext?.activeExternal || null,
         openPanels: aiContext?.openPanels || [],
         visiblePanels: aiContext?.visiblePanels || [],
-        chatSessionAttachments,
+        chatSessionAttachments: pendingAttachments,
         selectedText:
           window.getSelection()?.toString().trim() ||
           activePanelContext?.selectedText ||
@@ -5272,10 +6210,12 @@ export function AiEditorView({
         }))
       };
 
-      onUpdateViewState?.(editor.id, { chatSessionAttachments: [] });
-      onUpdateViewState?.(editor.id, { droppedContextSelections: [] });
+      if (clearComposer) onUpdateViewState?.(editor.id, { chatSessionAttachments: [], droppedContextSelections: [] });
       onUpdateViewState?.(editor.id, { messages: streamMessages });
 
+      abortController = new AbortController();
+      streamAbortControllerRef.current = abortController;
+      isStoppingRef.current = false;
       const response = await aiApi.chatStream(
         {
           messages: requestMessages,
@@ -5303,10 +6243,11 @@ export function AiEditorView({
           onTimeline: (nextTimeline) => setTimeline(nextTimeline),
           onMeta: (meta) => {
             onUpdateViewState?.(editor.id, {
-              lastModel: meta.model || selectedModelEntry?.model || 'deepseek-chat'
+              lastModel: meta.model || 'default'
             });
           }
-        }
+        },
+        { signal: abortController.signal }
       );
 
       setTimeline(response.timeline || []);
@@ -5317,9 +6258,14 @@ export function AiEditorView({
       };
       onUpdateViewState?.(editor.id, {
         messages: [...streamMessages],
-        lastModel: response.model || selectedModelEntry?.model || 'deepseek-chat'
+        lastModel: response.model || 'default'
       });
+      return true;
     } catch (sendError: any) {
+      if (sendError?.name === 'AbortError' || abortController?.signal.aborted || isStoppingRef.current) {
+        setError(null);
+        return true;
+      }
       const message =
         sendError?.response?.data?.error ||
         sendError?.message ||
@@ -5329,18 +6275,124 @@ export function AiEditorView({
           ? 'AI 请求失败：后端或检索模型服务暂时不可用。已更新为本地 BM25 降级链路，请重启后端后重试。'
           : message
       );
-      onUpdateViewState?.(editor.id, { messages: previousMessages, chatSessionAttachments: pendingAttachments });
+      onUpdateViewState?.(editor.id, {
+        messages: previousMessages,
+        ...(clearComposer
+          ? {
+              chatSessionAttachments: pendingAttachments,
+              droppedContextSelections: previousDroppedContextSelections
+            }
+          : {})
+      });
+      return false;
     } finally {
+      if (streamAbortControllerRef.current === abortController) {
+        streamAbortControllerRef.current = null;
+        isStoppingRef.current = false;
+      }
       setIsSending(false);
     }
   };
 
   const handleSend = async () => {
+    const hasContent = input.trim() || chatSessionAttachments.length > 0 || composerContextAttachments.length > 0;
+    if (isSending) {
+      if (!hasContent) return;
+      setQueuedChatRequests((items) => [
+        ...items,
+        {
+          id: `queued:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+          prompt: input,
+          attachments: chatSessionAttachments.map((attachment) => ({ ...attachment })),
+          droppedSelections: droppedContextSelections.map((selection) => ({ ...selection }))
+        }
+      ]);
+      setInput('');
+      onUpdateViewState?.(editor.id, { chatSessionAttachments: [], droppedContextSelections: [] });
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+      return;
+    }
     await submitMessages({
       prompt: input,
       baseMessages: [...messages] as AiChatMessage[]
     });
   };
+
+  const stopGeneration = () => {
+    isStoppingRef.current = true;
+    streamAbortControllerRef.current?.abort();
+    setIsSending(false);
+  };
+
+  useEffect(() => {
+    if (isSending || queuedChatRequests.length === 0) return;
+    const [next, ...rest] = queuedChatRequests;
+    setQueuedChatRequests(rest);
+    void submitMessages({
+      prompt: next.prompt,
+      baseMessages: [...messagesRef.current],
+      attachments: next.attachments,
+      droppedSelections: next.droppedSelections,
+      clearComposer: false
+    });
+  }, [isSending, queuedChatRequests]);
+
+  const submitSelectionPrompt = async (prompt: string, detail?: WorkbenchContextSelectionActionDetail) => {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) return;
+    const selectionText = String(detail?.text || '').trim();
+    const promptWithSelection = selectionText
+      ? `${trimmedPrompt}\n\n【选区内容】\n${selectionText}`
+      : trimmedPrompt;
+    setInput(promptWithSelection);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+    if (isSending) {
+      setQueuedChatRequests((items) => [
+        ...items,
+        {
+          id: `queued:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+          prompt: promptWithSelection,
+          attachments: chatSessionAttachments.map((attachment) => ({ ...attachment })),
+          droppedSelections: droppedContextSelections.map((selection) => ({ ...selection }))
+        }
+      ]);
+      setInput('');
+      onUpdateViewState?.(editor.id, { chatSessionAttachments: [], droppedContextSelections: [] });
+      return;
+    }
+    const submitted = await submitMessages({
+      prompt: promptWithSelection,
+      baseMessages: [...messagesRef.current]
+    });
+    if (!submitted) {
+      setInput(promptWithSelection);
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+    }
+  };
+
+  useEffect(() => {
+    const handleSelectionAction = (event: Event) => {
+      const detail = (event as CustomEvent).detail as WorkbenchContextSelectionActionDetail | undefined;
+      if (!detail?.prompt) return;
+      if ((detail.prompt === '__lock_pdf_selection__' || detail.prompt === '__lock_context_selection__') && detail.text) {
+        addDroppedContextSelection(detail);
+        return;
+      }
+      if (detail.submitImmediately) {
+        void submitSelectionPrompt(detail.prompt, detail);
+        return;
+      }
+      setInput(detail.prompt);
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+    };
+
+    window.addEventListener('workbench:pdf-selection-action', handleSelectionAction);
+    window.addEventListener('workbench:context-selection-action', handleSelectionAction);
+    return () => {
+      window.removeEventListener('workbench:pdf-selection-action', handleSelectionAction);
+      window.removeEventListener('workbench:context-selection-action', handleSelectionAction);
+    };
+  }, [addDroppedContextSelection, isSending, submitSelectionPrompt]);
 
   const copyMessage = async (content: string, index: number) => {
     await navigator.clipboard?.writeText(content).catch(() => undefined);
@@ -5498,6 +6550,12 @@ export function AiEditorView({
         }}
         onPin={persistCitation}
       />
+      <AttachmentPreviewModal
+        workspaceId={workspaceId}
+        attachment={previewAttachment}
+        resource={previewResourceForAttachment}
+        onClose={() => setPreviewAttachment(null)}
+      />
       {!hideHeader && (
         <div className="border-b border-[#eeeeeb] bg-white px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
@@ -5514,48 +6572,24 @@ export function AiEditorView({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-white px-5 py-6">
-        <div className="mx-auto flex max-w-4xl flex-col gap-8">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-6">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-7">
           {hideHeader && error && (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {error}
             </div>
           )}
           {messages.length === 0 && (
-            <div className={`ai-message-in mr-auto flex w-full max-w-2xl flex-col items-start ${compactWelcome ? 'pt-5' : 'pt-12'}`}>
-              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#e5e5e1] bg-white text-[#202124] shadow-[0_14px_34px_rgba(15,23,42,0.1)] transition-transform duration-300 hover:scale-[1.03]">
-                <Bot className="h-7 w-7" />
+            <div className={`ai-message-in mx-auto flex w-full max-w-2xl flex-col items-center text-center ${compactWelcome ? 'pt-8' : 'pt-16'}`}>
+              <div className="mb-5 flex size-16 items-center justify-center rounded-full bg-gray-50 text-3xl">
+                <span aria-hidden="true">🙂</span>
               </div>
-              <h2 className="max-w-xl text-left text-2xl font-bold tracking-0 text-[#25272b]">
-                {aiWelcomeContent?.greeting || (isWelcomeLoading ? '正在结合上下文准备建议...' : 'AI 建议暂时没有生成成功')}
+              <h2 className="max-w-xl text-2xl font-medium tracking-0 text-gray-900">
+                开始新聊天
               </h2>
-              <div className="mt-7 grid w-full max-w-xl gap-2">
-                {aiWelcomeContent?.actions.map((suggestion) => (
-                  <button
-                    key={`${suggestion.icon}-${suggestion.label}`}
-                    type="button"
-                    onClick={() => {
-                      setInput(suggestion.label);
-                      window.setTimeout(() => inputRef.current?.focus(), 0);
-                    }}
-                    className="ai-soft-button flex items-center gap-3 rounded-xl px-4 py-2.5 text-left text-[15px] font-medium text-[#34373c] hover:bg-[#f6f6f4]"
-                  >
-                    {getWelcomeActionIcon(suggestion)}
-                    <span className="min-w-0 flex-1 truncate">{suggestion.label}</span>
-                  </button>
-                ))}
-                {isWelcomeLoading && (
-                  <div className="flex items-center gap-3 rounded-xl px-4 py-2.5 text-left text-[15px] font-medium text-[#777a80]">
-                    <Loader2 className="h-4.5 w-4.5 shrink-0 animate-spin" />
-                    <span>正在生成适合当前内容的开场建议</span>
-                  </div>
-                )}
-                {!isWelcomeLoading && welcomeError && !aiWelcomeContent && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-800">
-                    暂时没能生成 AI 建议，你仍然可以直接输入想做的事。
-                  </div>
-                )}
-              </div>
+              <p className="mt-3 max-w-md text-sm leading-6 text-[#777a80]">
+                直接输入你想做的事，或者把问题、选中的内容、下一步目标发给我。
+              </p>
             </div>
           )}
           {messages.map((message: AiChatMessage, index: number) => {
@@ -5574,21 +6608,15 @@ export function AiEditorView({
             return (
               <div
                 key={`${message.role}-${index}`}
-                className={`ai-message-in group flex w-full ${isAssistant ? 'items-start gap-4' : 'justify-end'}`}
-              >
-                {isAssistant && (
-                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#eeeeeb] bg-white text-[#111827]">
-                    <Bot className="h-4.5 w-4.5" />
-                  </div>
-                )}
-                <div className={isAssistant ? 'min-w-0 flex-1 border-b border-[#eeeeeb] pb-7' : 'flex max-w-[min(72%,640px)] flex-col items-end'}>
+                  className={`ai-message-in group flex w-full ${isAssistant ? 'items-start' : 'justify-end'}`}
+                >
+                <div className={isAssistant ? 'min-w-0 flex-1 pb-4' : 'flex max-w-[min(85%,640px)] flex-col items-end'}>
                   {isAssistant ? (
                     <>
-                      <div className="mb-3 flex items-center gap-2">
-                        <span className="text-[15px] font-semibold text-[#111827]">AI Assistant</span>
-                        <span className="text-xs font-medium text-[#a1a1aa] opacity-0 transition-opacity group-hover:opacity-100">
-                          {messageTime}
-                        </span>
+                      <div className="mb-0.5 flex items-center text-xs">
+                        <div className="text-[0.65rem] font-medium first-letter:capitalize text-gray-400 opacity-0 transition-opacity group-hover:opacity-100">
+                          <span className="line-clamp-1">{messageTime}</span>
+                        </div>
                       </div>
                       {showThinkingTrace && (
                         <ThinkingTrace
@@ -5628,7 +6656,7 @@ export function AiEditorView({
                           </button>
                         </div>
                       )}
-                      <div className="mt-3 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                      <div className="mt-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                         <button onClick={() => void copyMessage(cleanMessageContent, index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Copy">
                           {copiedMessageIndex === index ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                         </button>
@@ -5639,11 +6667,11 @@ export function AiEditorView({
                     </>
                   ) : (
                     <>
-                      <MessageAttachmentStrip attachments={message.attachments} />
                       <div className="mb-1 flex items-center gap-2 pr-2 text-xs font-medium text-[#a1a1aa] opacity-0 transition-opacity group-hover:opacity-100">
                         <span>{messageTime}</span>
                       </div>
-                      <div className="rounded-[20px] bg-[#f4f4f5] px-4 py-2.5 text-[14px] leading-6 text-[#374151] shadow-sm transition-transform duration-200 group-hover:-translate-y-0.5">
+                      <MessageAttachmentStrip attachments={message.attachments} onOpen={setPreviewAttachment} />
+                      <div className={`rounded-3xl max-w-[90%] px-4 py-1.5 bg-gray-50 dark:bg-gray-850 ${message.attachments ? 'rounded-tr-lg' : ''}`}>
                         {editingMessageIndex === index ? (
                           <div className="w-[min(520px,calc(100vw-7rem))]">
                             <textarea
@@ -5776,11 +6804,12 @@ export function AiEditorView({
         );
       })()}
 
-      <div className="bg-white px-5 py-4">
-        <div className="mx-auto max-w-4xl">
+      <div className="bg-white px-4 pb-4 pt-2">
+        <div className="mx-auto w-full max-w-3xl">
           <div
             data-ai-composer-menu
-            className="ai-composer-lift relative rounded-[24px] border border-[#e5e7eb] bg-white p-2.5 shadow-[0_12px_30px_rgba(15,23,42,0.06)]"
+            id="message-input-container"
+            className="flex-1 flex flex-col relative w-full shadow-lg rounded-3xl border border-gray-100/30 dark:border-gray-850/30 hover:border-gray-200 focus-within:border-gray-100 hover:dark:border-gray-800 focus-within:dark:border-gray-800 transition px-1 bg-white/5 dark:bg-gray-500/5 backdrop-blur-sm dark:text-gray-100"
             onDragOver={(event) => {
               if (event.dataTransfer.types.includes('application/x-workbench-context-selection')) {
                 event.preventDefault();
@@ -5801,26 +6830,23 @@ export function AiEditorView({
             {(pinnedContextChips.length > 0 || persistentCitations.length > 0) && (
               <div className="mb-2 flex flex-wrap gap-2">
                 {pinnedContextChips.slice(0, 8).map((chip) => (
-                  <span
-                    key={chip.id}
-                    className="inline-flex max-w-full items-center gap-1 rounded-full border border-[#dfe5dc] bg-[#f7fbf6] px-2 py-0.5 text-[10px] font-medium text-[#4f6f49]"
-                  >
-                    {chip.kind === 'selection' ? <FileText className="h-3 w-3" /> : <File className="h-3 w-3" />}
-                    <button
-                      onClick={() => setInspectedChipId(inspectedChipId === chip.id ? null : chip.id)}
-                      className="min-w-0 truncate text-left"
-                      title={chip.label}
-                    >
-                      {chip.label}
-                    </button>
-                    <button
-                      onClick={() => hideChip(chip.id)}
-                      className="rounded-full p-0.5 text-[#a6a8ab] hover:bg-[#eeeeeb] hover:text-[#34373c]"
-                      title="隐藏上下文"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
+                  chip.kind === 'selection' ? (
+                    <SelectionCapsule
+                      key={chip.id}
+                      label={chip.label}
+                      preview={chip.detail}
+                      onInspect={() => setInspectedChipId(inspectedChipId === chip.id ? null : chip.id)}
+                      onDismiss={() => hideChip(chip.id)}
+                    />
+                  ) : (
+                    <OpenWebUIFileItem
+                      key={chip.id}
+                      name={chip.label}
+                      type="file"
+                      dismissible
+                      onDismiss={() => hideChip(chip.id)}
+                    />
+                  )
                 ))}
                 {persistentCitations.length > 0 && (
                   <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#dfe5dc] bg-[#f7fbf6] px-1 py-0.5 text-[10px] font-medium text-[#4f6f49]">
@@ -5857,8 +6883,8 @@ export function AiEditorView({
               }}
               rows={1}
               placeholder="使用 AI 处理各种任务..."
-              disabled={isSending}
-              className="block min-h-[38px] w-full resize-none border-0 bg-transparent px-1 py-1 text-[14px] leading-5 text-[#111827] outline-none placeholder:text-[#a1a1aa]"
+              id="chat-input"
+              className="scrollbar-hidden rtl:text-right ltr:text-left bg-transparent dark:text-gray-100 outline-hidden w-full pb-1 px-1 resize-none h-fit max-h-96 overflow-auto pt-2.5"
             />
             <input
               ref={fileInputRef}
@@ -5869,197 +6895,268 @@ export function AiEditorView({
                 if (event.target.files) void handleAttachmentFiles(event.target.files);
               }}
             />
-            {chatSessionAttachments.length > 0 && (
-              <div className="mb-2 flex flex-wrap gap-2">
-                {chatSessionAttachments.map((attachment) => (
-                  <div
-                    key={attachment.id}
-                    className="flex min-w-0 max-w-[260px] items-center gap-2 rounded-2xl border border-[#e5e7eb] bg-[#fbfbfb] px-2 py-1.5 text-xs text-[#525866]"
-                    title={`${attachment.name} · ${attachment.mimeType} · ${formatBytes(attachment.size)}`}
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white text-[#6b7280] ring-1 ring-inset ring-[#e5e7eb]">
-                      {attachment.kind === 'image' && attachment.dataUrl ? (
-                        <img src={attachment.dataUrl} alt={attachment.name} className="h-full w-full object-cover" />
-                      ) : attachment.kind === 'image' ? (
-                        <Image className="h-3.5 w-3.5" />
-                      ) : (
-                        <File className="h-3.5 w-3.5" />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[12px] font-medium text-[#25272b]">{attachment.name}</div>
-                      <div className="truncate text-[10px] text-[#8a8f98]">{formatBytes(attachment.size)}</div>
-                    </div>
-                    <button
-                      onClick={() => removeAttachment(attachment.id)}
-                      className="rounded-full p-1 text-[#a6a8ab] hover:bg-[#eeeeeb] hover:text-[#34373c]"
-                      title="Remove attachment"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="mt-2 flex items-center justify-between gap-3">
-              <div className="relative flex items-center gap-1">
+            <ComposerAttachmentTray attachments={chatSessionAttachments} onRemove={removeAttachment} onOpen={setPreviewAttachment} />
+            <div className=" flex justify-between mt-0.5 mb-2.5 mx-0.5 max-w-full" dir="ltr">
+              <div className="ml-1 self-end flex items-center flex-1 max-w-[80%]">
                 <button
                   type="button"
                   onClick={() => openComposerMenu('attachment')}
-                  className="ai-soft-button inline-flex h-8 w-8 items-center justify-center text-[#6f7378] hover:text-[#25272b]"
-                  title="Add photos and files"
+                  className="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
+                  title="More"
                 >
-                  <Plus className="h-4.5 w-4.5" />
+                  <OWPlusAltIcon />
                 </button>
                 {attachmentMenuOpen && (
-                  <div data-ai-composer-menu className="ai-menu-pop absolute bottom-full left-0 z-30 mb-2 w-56 rounded-2xl border border-[#e5e5e1] bg-white/95 p-1.5 text-xs text-[#525866] shadow-[0_18px_45px_rgba(15,23,42,0.14)] backdrop-blur">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAttachmentMenuOpen(false);
-                        fileInputRef.current?.click();
-                      }}
-                      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-[#f6f6f4]"
-                    >
-                      <Image className="h-3.5 w-3.5 text-[#777a80]" />
-                      <span>Add photos & files</span>
-                    </button>
+                  <div data-ai-composer-menu className="ai-menu-pop openwebui-composer-dropdown-in absolute bottom-full left-0 z-[10000] mb-2 w-70 rounded-2xl border border-gray-100 bg-white px-1 py-1 text-black shadow-lg max-h-72 overflow-y-auto overflow-x-hidden scrollbar-thin transition dark:border-gray-800 dark:bg-gray-850 dark:text-white">
+                    {attachmentSubmenu === 'root' ? (
+                      <div key="attachment-root" className="openwebui-composer-slide-root">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closeAttachmentMenu();
+                            fileInputRef.current?.click();
+                          }}
+                          className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                        >
+                          <OWClipIcon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                          <div className="line-clamp-1">Upload Files</div>
+                        </button>
+                        {([
+                          ['webpage', 'Attach Webpage', OWGlobeAltIcon],
+                          ['knowledge', 'Attach Knowledge', OWDatabaseIcon],
+                          ['notes', 'Attach Notes', OWPencilSquareIcon],
+                          ['chats', 'Reference Chats', OWClockRotateRightIcon]
+                        ] as Array<[ComposerAttachMenu, string, typeof OWDatabaseIcon]>).map(([key, label, Icon]) => (
+                          <button
+                            key={key}
+                            type="button"
+                            onClick={() => setAttachmentSubmenu(key)}
+                            className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                          >
+                            <Icon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                            <div className="flex w-full items-center justify-between">
+                              <div className="line-clamp-1">{label}</div>
+                              <ChevronRight className="h-4 w-4 text-gray-500" strokeWidth={1.5} />
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div key={attachmentSubmenu} className="openwebui-composer-slide-sub">
+                        <button
+                          type="button"
+                          onClick={() => setAttachmentSubmenu('root')}
+                          className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                        >
+                          <ChevronLeft className="h-4 w-4 shrink-0 text-gray-500" strokeWidth={1.5} />
+                          <div className="line-clamp-1">
+                            {attachmentSubmenu === 'webpage'
+                              ? 'Attach Webpage'
+                              : attachmentSubmenu === 'knowledge'
+                                ? 'Attach Knowledge'
+                                : attachmentSubmenu === 'notes'
+                                  ? 'Attach Notes'
+                                  : 'Reference Chats'}
+                          </div>
+                        </button>
+                        {attachmentSubmenu === 'webpage' && (
+                          <div className="space-y-1 px-1 pb-1 pt-0.5">
+                            <input
+                              value={webpageUrlDraft}
+                              onChange={(event) => setWebpageUrlDraft(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') void attachWebpageContext();
+                              }}
+                              placeholder="URL"
+                              className="h-8 w-full rounded-xl border border-gray-100 bg-transparent px-3 text-sm outline-hidden focus:border-gray-200 dark:border-gray-800"
+                              autoFocus
+                            />
+                            <input
+                              value={webpageTitleDraft}
+                              onChange={(event) => setWebpageTitleDraft(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') void attachWebpageContext();
+                              }}
+                              placeholder="Title"
+                              className="h-8 w-full rounded-xl border border-gray-100 bg-transparent px-3 text-sm outline-hidden focus:border-gray-200 dark:border-gray-800"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void attachWebpageContext()}
+                              disabled={!webpageUrlDraft.trim() || attachBusyKey === 'webpage'}
+                              className="flex w-full cursor-pointer select-none items-center justify-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-400 dark:hover:bg-gray-800/50"
+                            >
+                              {attachBusyKey === 'webpage' && <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />}
+                              <span>{attachBusyKey === 'webpage' ? 'Attaching...' : 'Attach'}</span>
+                            </button>
+                          </div>
+                        )}
+                        {attachmentSubmenu === 'knowledge' && (
+                          <div className="pb-1">
+                            {workspaceKnowledgeLoading ? (
+                              <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500">
+                                <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />
+                                <span>Loading...</span>
+                              </div>
+                            ) : knowledgeAttachResources.length === 0 ? (
+                              <div className="px-3 py-2 text-sm text-gray-500">No knowledge found.</div>
+                            ) : (
+                              knowledgeAttachResources.map((resource) => (
+                                <button
+                                  key={resource.id}
+                                  type="button"
+                                  onClick={() => void attachResourceContext(resource, 'Knowledge')}
+                                  className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                                >
+                                  <OWDatabaseIcon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                                  <div className="min-w-0 flex-1 text-left">
+                                    <div className="truncate">{resource.name}</div>
+                                    <div className="truncate text-xs text-gray-500">{resource.path}</div>
+                                  </div>
+                                  {attachBusyKey === `Knowledge:${resource.id}` && <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                        {attachmentSubmenu === 'notes' && (
+                          <div className="pb-1">
+                            {noteAttachResources.length === 0 ? (
+                              <div className="px-3 py-2 text-sm text-gray-500">No notes found.</div>
+                            ) : (
+                              noteAttachResources.map((resource) => (
+                                <button
+                                  key={resource.id}
+                                  type="button"
+                                  onClick={() => void attachResourceContext(resource, 'Note')}
+                                  className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                                >
+                                  <OWPencilSquareIcon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                                  <div className="min-w-0 flex-1 text-left">
+                                    <div className="truncate">{resource.name}</div>
+                                    <div className="truncate text-xs text-gray-500">{resource.path}</div>
+                                  </div>
+                                  {attachBusyKey === `Note:${resource.id}` && <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                        {attachmentSubmenu === 'chats' && (
+                          <div className="pb-1">
+                            {referenceChatsLoading ? (
+                              <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500">
+                                <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />
+                                <span>Loading...</span>
+                              </div>
+                            ) : !referencedChatSessions?.length ? (
+                              <div className="px-3 py-2 text-sm text-gray-500">No chats found.</div>
+                            ) : (
+                              referencedChatSessions.map((session) => (
+                                <button
+                                  key={session.id}
+                                  type="button"
+                                  onClick={() => attachChatContext(session)}
+                                  className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                                >
+                                  <OWClockRotateRightIcon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                                  <div className="min-w-0 flex-1 text-left">
+                                    <div className="truncate">{session.title || 'AI Chat'}</div>
+                                    <div className="truncate text-xs text-gray-500">{session.lastMessagePreview || `${session.messageCount || 0} messages`}</div>
+                                  </div>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                        {attachError && <div className="px-3 pb-2 pt-1 text-xs text-red-500">{attachError}</div>}
+                      </div>
+                    )}
                   </div>
                 )}
+                <div className="flex self-center w-[1px] h-4 mx-1 bg-gray-200/50 dark:bg-gray-800/50" />
                 <div className="relative">
                   <button
                     type="button"
                     onClick={() => openComposerMenu('context')}
-                    className="ai-soft-button inline-flex h-8 items-center gap-1.5 text-xs font-medium text-[#666b73] hover:text-[#25272b]"
-                    title="Context strategy"
+                    className="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
+                    title="Select context"
                   >
-                    <Hand className="h-3.5 w-3.5" />
-                    <span className="max-w-[110px] truncate">
-                      {contextMode === 'auto'
-                        ? 'Auto context'
-                        : contextMode === 'viewport'
-                          ? 'Visible context'
-                          : contextMode === 'active_file'
-                            ? 'Current file'
-                            : contextMode === 'workbench'
-                              ? 'Workbench'
-                              : 'Model knowledge'}
-                    </span>
-                    <ChevronDown className="h-3.5 w-3.5" />
+                    <OWComponentIcon strokeWidth={1.5} />
                   </button>
                   {contextModeMenuOpen && (
-                    <div data-ai-composer-menu className="ai-menu-pop absolute bottom-full left-0 z-30 mb-2 w-56 rounded-2xl border border-[#e5e5e1] bg-white/95 p-1.5 text-xs text-[#525866] shadow-[0_18px_45px_rgba(15,23,42,0.14)] backdrop-blur">
-                      {([
-                        ['auto', 'Auto context', Hand],
-                        ['viewport', 'Visible context', Eye],
-                        ['active_file', 'Current file', FileText],
-                        ['workbench', 'Workbench resources', FolderOpen],
-                        ['model_knowledge', 'Model knowledge', Brain]
-                      ] as Array<[AiContextMode, string, typeof Hand]>).map(([mode, label, Icon]) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => {
-                            setContextMode(mode);
-                            setContextModeMenuOpen(false);
-                          }}
-                          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-[#f6f6f4]"
-                        >
-                          <Icon className="h-3.5 w-3.5 text-[#777a80]" />
-                          <span className="min-w-0 flex-1">{label}</span>
-                          {contextMode === mode && <Check className="h-3.5 w-3.5 text-[#16833a]" />}
-                        </button>
-                      ))}
+                    <div data-ai-composer-menu className="ai-menu-pop absolute bottom-full left-0 z-[10000] mb-2 w-70 rounded-2xl border border-gray-100 bg-white px-1 py-1 text-black shadow-lg max-h-72 overflow-visible transition dark:border-gray-800 dark:bg-gray-850 dark:text-white">
+                      <button
+                        type="button"
+                        onMouseEnter={() => setContextSubmenuOpen(true)}
+                        onClick={() => setContextSubmenuOpen((open) => !open)}
+                        className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                      >
+                        <OWComponentIcon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                        <div className="flex w-full items-center justify-between">
+                          <div className="line-clamp-1">Select context</div>
+                          <ChevronRight className="h-4 w-4 text-gray-500" strokeWidth={1.5} />
+                        </div>
+                      </button>
+                      <div className="px-3 pb-1 pt-0.5 text-xs text-gray-500 dark:text-gray-400">{contextModeLabel}</div>
+                      <button
+                        type="button"
+                        onMouseEnter={() => setContextSubmenuOpen(false)}
+                        onClick={() => {
+                          setContextModeMenuOpen(false);
+                          window.setTimeout(() => inputRef.current?.focus(), 0);
+                        }}
+                        className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                      >
+                        <OWWrenchIcon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                        <div className="line-clamp-1">Tools</div>
+                      </button>
+                      {contextSubmenuOpen && (
+                        <div className="absolute bottom-0 left-full z-[10001] ml-2 w-70 rounded-2xl border border-gray-100 bg-white px-1 py-1 text-black shadow-lg max-h-72 overflow-y-auto overflow-x-hidden scrollbar-thin transition dark:border-gray-800 dark:bg-gray-850 dark:text-white">
+                          {contextModeOptions.map(([mode, label, Icon]) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => {
+                                setContextMode(mode);
+                                setContextModeMenuOpen(false);
+                                setContextSubmenuOpen(false);
+                              }}
+                              className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                            >
+                              <Icon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+                              <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+                              {contextMode === mode && <Check className="h-4 w-4 text-gray-900 dark:text-gray-100" strokeWidth={1.5} />}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => openComposerMenu('scope')}
-                    className={`ai-soft-button inline-flex h-8 w-8 items-center justify-center text-[#6f7378] hover:text-[#25272b] ${debugOpen ? 'text-[#25272b]' : ''}`}
-                    title="Resource scope"
-                  >
-                    <Gauge className="h-4 w-4" />
-                  </button>
-                </div>
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => openComposerMenu('model')}
-                    className={`ai-soft-button inline-flex h-8 items-center gap-1.5 text-xs font-medium text-[#666b73] hover:text-[#25272b] ${modelMenuOpen ? 'text-[#25272b]' : ''}`}
-                    title="Model"
-                  >
-                    <Brain className="h-3.5 w-3.5" />
-                    <span className="max-w-[120px] truncate">
-                      {selectedModelEntry ? selectedModelEntry.model : 'Model'}
-                    </span>
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </button>
-                  {modelMenuOpen && (
-                    <div data-ai-composer-menu className="ai-menu-pop absolute bottom-full right-0 z-30 mb-2 w-64 rounded-2xl border border-[#e5e5e1] bg-white/95 p-1.5 text-xs text-[#525866] shadow-[0_18px_45px_rgba(15,23,42,0.14)] backdrop-blur">
-                      {!availableModels.length && (
-                        <div className="px-2.5 py-2 text-[#8a8f98]">No configured chat model</div>
-                      )}
-                      {availableModels.map((entry) => {
-                        const key = `${entry.provider}:${entry.model}`;
-                        const isSelected = selectedModel === key;
-                        return (
-                          <button
-                            key={key}
-                            type="button"
-                            onClick={() => {
-                              setSelectedModel(key);
-                              setModelMenuOpen(false);
-                            }}
-                            className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-[#f6f6f4] ${isSelected ? 'bg-[#f3f7f2]' : ''}`}
-                          >
-                            <Brain className="h-3.5 w-3.5 text-[#777a80]" />
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-[#25272b]">{entry.model}</span>
-                              <span className="block truncate text-[10px] text-[#8a8f98]">{entry.provider}</span>
-                            </span>
-                            {isSelected && <Check className="h-3.5 w-3.5 text-[#16833a]" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+              <div className="self-end flex space-x-1 mr-1 shrink-0 gap-[0.5px]">
                 <button
-                  onClick={() => void handleSend()}
-                  disabled={isSending || (!input.trim() && chatSessionAttachments.length === 0)}
-                  className="ai-soft-button inline-flex h-8 w-8 items-center justify-center text-[#111827] hover:text-[#000000] disabled:cursor-not-allowed disabled:text-[#c2c3c5]"
-                  title="Send"
+                  onClick={() => {
+                    if (isSending) {
+                      stopGeneration();
+                      return;
+                    }
+                    void handleSend();
+                  }}
+                  disabled={!isSending && !input.trim() && chatSessionAttachments.length === 0 && composerContextAttachments.length === 0}
+                  className="bg-gray-900 hover:bg-gray-850 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full p-1.5 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400"
+                  title={isSending ? 'Stop generating' : 'Send'}
                 >
-                  <ArrowUp className="h-4.5 w-4.5 stroke-[2.25]" />
+                  {isSending ? (
+                    <span className="block h-[18px] w-[18px] p-[4px]">
+                      <span className="block h-full w-full rounded-[2px] bg-current" />
+                    </span>
+                  ) : (
+                    <ArrowUp className="h-[18px] w-[18px] stroke-[2.25]" />
+                  )}
                 </button>
               </div>
-            </div>
-            <div className="mt-2">
-              <button
-                type="button"
-                onClick={() => openComposerMenu('scope')}
-                className="inline-flex items-center gap-1.5 rounded-full border border-[#e5e7eb] bg-[#fbfbfa] px-2.5 py-1 text-[10px] font-medium text-[#5f6368] hover:bg-[#f7fbf6] hover:text-[#25272b]"
-              >
-                <Gauge className="h-3.5 w-3.5" />
-                {resourceScopeLabel}
-              </button>
-              {debugOpen && (
-                <div data-ai-composer-menu className="mt-2 w-full max-w-md rounded-2xl border border-[#e7ece7] bg-white p-3 text-xs text-[#4b5563] shadow-[0_14px_38px_rgba(15,23,42,0.10)]">
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#96999d]">资源范围</div>
-                  <div className="space-y-1.5">
-                    {workbenchResourceFiles.map((item, index) => (
-                      <div key={item.id} className="flex items-start gap-2">
-                        <span className="mt-0.5 text-[#a1a1aa]">{index + 1}.</span>
-                        <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
           {inspectedChip && (
@@ -6091,8 +7188,10 @@ export default function WorkbenchEditorContent({
   onApplyAiNoteEdit,
   onUpdateViewState,
   onBindResource,
+  onAddSelectionAskToAssistant,
   aiContext,
-  resources = []
+  resources = [],
+  minimalPreview = false
 }: WorkbenchEditorContentProps) {
   const detectedResourceKind = getResourceKind(resource);
   const [sourceFileContent, setSourceFileContent] = useState('');
@@ -6186,7 +7285,7 @@ export default function WorkbenchEditorContent({
           </p>
         </div>
         <button
-          onClick={() => onBindResource(editor.id)}
+          onClick={(event) => onBindResource(editor.id, event.currentTarget.getBoundingClientRect())}
           className="rounded-full border border-[#e5e5e1] bg-white px-4 py-2 text-sm font-medium text-[#34373c] transition-all duration-200 hover:bg-[#f6f6f4] active:scale-95"
         >
           Bind Resource
@@ -6200,6 +7299,9 @@ export default function WorkbenchEditorContent({
   const sourceUrl = sourceMetadata.url || resourceSourceUrl;
   const sourceTitle = sourceMetadata.title || resource.name.replace(/\.source$/i, '');
   if (resourceKind === 'html') {
+    if (minimalPreview) {
+      return <HtmlVisualizationPreview resource={resource} workspaceId={workspaceId} />;
+    }
     return (
       <ResourcePanelShell
         editor={editor}
@@ -6215,6 +7317,22 @@ export default function WorkbenchEditorContent({
   }
 
   if (resourceKind === 'web') {
+    if (minimalPreview) {
+      return (
+        <WebSourcePreview
+          title={sourceTitle}
+          url={sourceUrl}
+          body={sourceMetadata.body || effectiveContent}
+          workspaceId={workspaceId}
+          aiContext={aiContext}
+          resource={resource}
+          editorId={editor.id}
+          onUpdateViewState={onUpdateViewState}
+          onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
+          enableSelectionActions={false}
+        />
+      );
+    }
     return (
       <ResourcePanelShell
         editor={editor}
@@ -6229,9 +7347,11 @@ export default function WorkbenchEditorContent({
           url={sourceUrl}
           body={sourceMetadata.body || effectiveContent}
           workspaceId={workspaceId}
+          aiContext={aiContext}
           resource={resource}
           editorId={editor.id}
           onUpdateViewState={onUpdateViewState}
+          onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
         />
       </ResourcePanelShell>
     );
@@ -6239,6 +7359,14 @@ export default function WorkbenchEditorContent({
 
   if (editor.type === 'video' || resourceKind === 'video') {
     const videoSourceUrl = sourceUrl || resourceSourceUrl;
+    if (minimalPreview) {
+      const embed = getEmbedInfo(videoSourceUrl);
+      return embed ? (
+        <EmbeddedVideoSourcePreview sourceUrl={videoSourceUrl} title={sourceTitle || resource.name} />
+      ) : (
+        <VideoFilePreview resource={resource} workspaceId={workspaceId} />
+      );
+    }
     return (
       <VideoSourcePanel
         editor={editor}
@@ -6252,6 +7380,19 @@ export default function WorkbenchEditorContent({
   }
 
   if (resourceKind === 'pdf' || resourceKind === 'document' || editor.type === 'resource') {
+    if (minimalPreview) {
+      return (
+        <DocumentPreview
+          resource={resource}
+          workspaceId={workspaceId}
+          aiContext={aiContext}
+          editorId={editor.id}
+          onUpdateViewState={onUpdateViewState}
+          onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
+          enableSelectionActions={false}
+        />
+      );
+    }
     return (
       <ResourcePanelShell
         editor={editor}
@@ -6264,14 +7405,32 @@ export default function WorkbenchEditorContent({
         <DocumentPreview
           resource={resource}
           workspaceId={workspaceId}
+          aiContext={aiContext}
           editorId={editor.id}
           onUpdateViewState={onUpdateViewState}
+          onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
         />
       </ResourcePanelShell>
     );
   }
 
   if (editor.type === 'code' && (resourceKind === 'code' || resourceKind === 'structured')) {
+    if (minimalPreview) {
+      return (
+        <TextEditingSurface
+          editor={editor}
+          resource={resource}
+          workspaceId={workspaceId}
+          aiContext={aiContext}
+          content={String(content ?? '')}
+          isLoading={isLoading}
+          onChangeContent={onChangeContent}
+          onUpdateViewState={onUpdateViewState}
+          onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
+          minimalPreview
+        />
+      );
+    }
     return (
       <ResourcePanelShell
         editor={editor}
@@ -6298,6 +7457,23 @@ export default function WorkbenchEditorContent({
     );
   }
 
+  if (minimalPreview) {
+    return (
+      <TextEditingSurface
+        editor={editor}
+        resource={resource}
+        workspaceId={workspaceId}
+        aiContext={aiContext}
+        content={String(content ?? '')}
+        isLoading={isLoading}
+        onChangeContent={onChangeContent}
+        onUpdateViewState={onUpdateViewState}
+        onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
+        minimalPreview
+      />
+    );
+  }
+
   return (
     <ResourcePanelShell
       editor={editor}
@@ -6310,10 +7486,14 @@ export default function WorkbenchEditorContent({
       <TextEditingSurface
         editor={editor}
         resource={resource}
+        workspaceId={workspaceId}
+        aiContext={aiContext}
         content={String(content ?? '')}
         isLoading={isLoading}
         onChangeContent={onChangeContent}
         onUpdateViewState={onUpdateViewState}
+        onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
+        minimalPreview={minimalPreview}
       />
     </ResourcePanelShell>
   );

@@ -33,6 +33,15 @@ interface AuthState {
   login: (identifier: string, password: string) => Promise<User>;
   register: (payload: { username: string; email: string; password: string }) => Promise<User>;
   hydrate: () => Promise<void>;
+  updateProfile: (payload: {
+    name: string;
+    profileImageUrl?: string | null;
+    bio?: string | null;
+    gender?: string | null;
+    dateOfBirth?: string | null;
+    notificationWebhookUrl?: string | null;
+  }) => Promise<User>;
+  updatePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -79,6 +88,15 @@ export const useAuthStore = create<AuthState>((set) => ({
       persistUser(null);
       set({ user: null, hydrated: true });
     }
+  },
+  updateProfile: async (payload) => {
+    const user = await authApi.updateProfile(payload);
+    persistUser(user);
+    set({ user, hydrated: true });
+    return user;
+  },
+  updatePassword: async (currentPassword, newPassword) => {
+    await authApi.updatePassword(currentPassword, newPassword);
   },
   logout: async () => {
     try {

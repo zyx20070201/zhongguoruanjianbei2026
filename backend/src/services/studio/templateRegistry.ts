@@ -39,6 +39,50 @@ export const STUDIO_TEMPLATES: StudioResourceTemplate[] = [
     ]
   },
   {
+    id: 'pagelm_cornell_notes',
+    goal: 'understand',
+    title: 'PageLM-style Cornell Notes',
+    shortTitle: 'PageLM Notes',
+    description: '用 Cornell-style 结构把用户选定 sources 整理成高密度学习笔记，便于先试验 PageLM 风格效果。',
+    generator: 'text',
+    renderer: 'markdown',
+    format: 'md',
+    filename: 'resource-understand-pagelm-notes.md',
+    outputLabel: 'PageLM-style Cornell Notes',
+    legacyResourceType: 'report',
+    promptFrame: '把选定资源整理成 Cornell-style 学习笔记：主题、详细笔记、总结、复习问题和对应答案。',
+    systemInstruction:
+      '只基于用户选定 sources 生成 Cornell-style 学习笔记。输出应包含：标题、详细笔记、简明总结、复习问题和对应答案。问题和答案必须一一对应，内容要服务于理解和复习，不要混入未选择来源。',
+    defaultOptions: { output: 'cornell_markdown_notes', sourceScope: 'selected_resources_only' },
+    tags: ['pagelm-style', 'cornell-notes', 'source-grounded'],
+    recommendedUse: '想试验 PageLM SmartNotes 风格整理效果时使用。',
+    recommendationRules: [
+      { id: 'pagelm-notes', reason: '当前上下文包含可整理的来源资料，可试用 Cornell-style 笔记。', priority: 68, when: ['has_sources'] }
+    ]
+  },
+  {
+    id: 'pure_markdown_notes',
+    goal: 'understand',
+    title: 'Pure Markdown Notes',
+    shortTitle: 'Pure Markdown',
+    description: '只把用户勾选 source 全文和用户要求直接交给模型，生成 Markdown 学习笔记。',
+    generator: 'text',
+    renderer: 'markdown',
+    format: 'md',
+    filename: 'resource-understand-pure-markdown-notes.md',
+    outputLabel: 'Pure Markdown Notes',
+    legacyResourceType: 'report',
+    promptFrame: '根据用户勾选的资源全文，直接整理成 Markdown 学习笔记。',
+    systemInstruction:
+      '只使用用户勾选的资源全文和用户文字要求，直接生成 Markdown 学习笔记；不要使用 AI Studio 通用上下文、检索摘要或学习者画像。',
+    defaultOptions: { output: 'pure_markdown_notes', sourceScope: 'selected_resources_only' },
+    tags: ['pure-markdown', 'source-fulltext', 'source-grounded'],
+    recommendedUse: '想测试“全文直接喂给模型整理笔记”的最小链路效果时使用。',
+    recommendationRules: [
+      { id: 'pure-markdown-notes', reason: '当前上下文包含可整理的来源资料，可直接用全文生成 Markdown 笔记。', priority: 69, when: ['has_sources'] }
+    ]
+  },
+  {
     id: 'resource_compare',
     goal: 'understand',
     title: 'Resource Compare',
@@ -225,6 +269,27 @@ export const STUDIO_TEMPLATES: StudioResourceTemplate[] = [
     tags: ['debug', 'lab'],
     recommendationRules: [
       { id: 'debug-weak', reason: '学生可能在实操迁移上存在困难，适合用 Debug Task 暴露误区。', priority: 64, when: ['weak_knowledge', 'code_context'] }
+    ]
+  },
+  {
+    id: 'visual_explainer',
+    goal: 'visualize',
+    title: 'Visual Explainer',
+    shortTitle: '视觉讲解',
+    description: '先生成完整 Markdown 答案，再切成讲解分镜，并为每个分镜生成可播放的局部动画步骤。',
+    generator: 'multimodal',
+    renderer: 'visual_explainer',
+    format: 'md',
+    filename: 'visualize-visual-explainer.md',
+    outputLabel: '视觉讲解动画',
+    promptFrame: '把问题回答成一个可播放的视觉讲解：先给完整 Markdown 答案，再拆分 section 分镜，并设计每个分镜内部的动画步骤。',
+    systemInstruction:
+      '生成通用视觉讲解资源。先保证 Markdown 答案完整、准确、结构清楚；再把答案拆成 4-7 个 section 分镜；每个 section 必须聚焦一个讲解目标，并包含 screenText、narration、visual objects、timeline steps 和可选检查问题。不要只做标题切分，要按语义和讲解节奏切分。',
+    defaultOptions: { sectionCount: 5, animationDepth: 'lightweight', rendererFamily: 'slides+motion' },
+    tags: ['visual-explainer', 'markdown-first', 'storyboard', 'animation'],
+    recommendationRules: [
+      { id: 'visual-explainer-general', reason: '该主题适合从纯文字回答升级为分镜式视觉讲解。', priority: 86, when: ['visual_preference'] },
+      { id: 'visual-explainer-source', reason: '当前资料可以先沉淀 Markdown，再转成可播放讲解。', priority: 74, when: ['has_sources'] }
     ]
   },
   {

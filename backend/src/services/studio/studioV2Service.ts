@@ -400,6 +400,7 @@ export class StudioV2Service {
               visualFramework: delivery.framework,
               source: generated.source,
               review,
+              studioMetadata: generated.metadata || {},
               ...(delivery.metadata || {})
             },
             content: delivery.content
@@ -436,7 +437,8 @@ export class StudioV2Service {
                 workflowTrace: trace,
                 metadata: {
                   contextSummary: usedContextSummary(contextShell.capsule),
-                  source: generated.source
+                  source: generated.source,
+                  studioMetadata: generated.metadata || {}
                 }
               }),
             (output) => `Persisted StudioArtifact ${output.artifactKey}.`,
@@ -568,6 +570,7 @@ export class StudioV2Service {
         renderer: template.renderer,
         runId: run.id,
         source: generated.source,
+        metadata: generated.metadata || {},
         contextCapsule: contextShell.capsule,
         contextPolicy: contextShell.contextPolicy,
         usedContextSummary: usedContextSummary(contextShell.capsule),

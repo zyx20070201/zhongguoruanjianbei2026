@@ -31,6 +31,7 @@ export type StudioRendererKind =
   | 'concept_graph'
   | 'slides'
   | 'code_lab'
+  | 'visual_explainer'
   | 'interactive_html'
   | 'manim_script'
   | 'remotion_source';
@@ -89,6 +90,7 @@ export type StudioArtifactKind =
   | 'flashcards'
   | 'code_lab'
   | 'slides'
+  | 'visual_explainer'
   | 'video_script'
   | 'interactive_demo'
   | 'animation_script'
@@ -215,6 +217,7 @@ export interface StudioGenerateV2Result {
   renderer: StudioRendererKind;
   runId: string;
   source: string;
+  metadata?: Record<string, unknown>;
   contextCapsule: ContextCapsule;
   contextPolicy?: ContextPolicyDecision;
   usedContextSummary: {

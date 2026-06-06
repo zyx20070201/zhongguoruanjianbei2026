@@ -20,6 +20,54 @@ router.get('/decks', async (req: Request, res: Response) => {
   }
 });
 
+router.post('/decks', async (req: Request, res: Response) => {
+  const { workspaceId, workbenchId, title, description, source, sourceFileIds, sourceRefs, settings, generationRunId, fileObjectId, cards } = req.body ?? {};
+  if (!workspaceId || typeof workspaceId !== 'string') {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+  if (!Array.isArray(cards) || !cards.length) {
+    return res.status(400).json({ error: 'cards are required' });
+  }
+
+  try {
+    const reusableDeck = await flashcardService.findDeckByGenerationRun(
+      workspaceId,
+      typeof generationRunId === 'string' && generationRunId ? generationRunId : null
+    );
+    if (reusableDeck) {
+      return res.status(200).json({ deck: reusableDeck, reused: true });
+    }
+
+    const deck = await flashcardService.createDeck({
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' && workbenchId ? workbenchId : null,
+      title: typeof title === 'string' && title.trim() ? title.trim() : 'AI Flashcards',
+      description: typeof description === 'string' ? description : '',
+      source: typeof source === 'string' && source.trim() ? source.trim() : 'ai_studio_manualized',
+      sourceFileIds: Array.isArray(sourceFileIds) ? sourceFileIds.map(String).filter(Boolean) : [],
+      sourceRefs: Array.isArray(sourceRefs) ? sourceRefs : [],
+      settings: settings && typeof settings === 'object' ? settings : {},
+      generationRunId: typeof generationRunId === 'string' && generationRunId ? generationRunId : null,
+      fileObjectId: typeof fileObjectId === 'string' && fileObjectId ? fileObjectId : null,
+      cards: cards.map((card) => ({
+        front: String(card?.front || ''),
+        back: String(card?.back || ''),
+        cardType: typeof card?.cardType === 'string' ? card.cardType : 'basic',
+        difficulty: typeof card?.difficulty === 'string' ? card.difficulty : 'medium',
+        concept: typeof card?.concept === 'string' ? card.concept : '',
+        explanation: typeof card?.explanation === 'string' ? card.explanation : '',
+        tags: Array.isArray(card?.tags) ? card.tags.map(String).filter(Boolean) : [],
+        sourceRefs: Array.isArray(card?.sourceRefs) ? card.sourceRefs : [],
+        metadata: card?.metadata && typeof card.metadata === 'object' ? card.metadata : {}
+      }))
+    });
+    return res.status(201).json({ deck });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to create flashcard deck';
+    return res.status(502).json({ error: message });
+  }
+});
+
 router.get('/decks/:deckId', async (req: Request, res: Response) => {
   const workspaceId = String(req.query.workspaceId || '');
   if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });

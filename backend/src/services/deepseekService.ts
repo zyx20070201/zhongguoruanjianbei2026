@@ -73,6 +73,21 @@ const timeoutSignal = (timeoutMs?: number, fallbackMs = REQUEST_TIMEOUT_MS) => {
   return AbortSignal.timeout(ms);
 };
 
+const combinedSignal = (...signals: Array<AbortSignal | undefined>) => {
+  const usable = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (usable.length === 0) return undefined;
+  if (usable.some((signal) => signal.aborted)) return AbortSignal.abort();
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  usable.forEach((signal) => signal.addEventListener('abort', abort, { once: true }));
+  return controller.signal;
+};
+
+type DeepSeekRequestOptions = { timeoutMs?: number; signal?: AbortSignal };
+
+const requestSignal = (options?: DeepSeekRequestOptions) =>
+  combinedSignal(options?.signal, timeoutSignal(options?.timeoutMs));
+
 const clipText = (value: string | undefined, maxLength: number) => {
   if (!value) return '';
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n\n[Content truncated]` : value;
@@ -204,7 +219,7 @@ export class DeepSeekService {
     }
   }
 
-  async chat(messages: ChatMessage[], context?: AiChatContext, options?: { timeoutMs?: number }) {
+  async chat(messages: ChatMessage[], context?: AiChatContext, options?: DeepSeekRequestOptions) {
     if (!this.isConfigured()) {
       throw new Error('DEEPSEEK_API_KEY is not configured');
     }
@@ -233,7 +248,7 @@ export class DeepSeekService {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`
       },
-      signal: timeoutSignal(options?.timeoutMs),
+      signal: requestSignal(options),
       body: JSON.stringify({
         model: this.model,
         messages: [
@@ -267,7 +282,7 @@ export class DeepSeekService {
     };
   }
 
-  async *chatStream(messages: ChatMessage[], context?: AiChatContext, options?: { timeoutMs?: number }): AsyncGenerator<string> {
+  async *chatStream(messages: ChatMessage[], context?: AiChatContext, options?: DeepSeekRequestOptions): AsyncGenerator<string> {
     if (!this.isConfigured()) {
       throw new Error('DEEPSEEK_API_KEY is not configured');
     }
@@ -296,7 +311,7 @@ export class DeepSeekService {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`
       },
-      signal: timeoutSignal(options?.timeoutMs),
+      signal: requestSignal(options),
       body: JSON.stringify({
         model: this.model,
         messages: [

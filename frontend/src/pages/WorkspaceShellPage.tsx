@@ -16,7 +16,6 @@ import {
   LayoutDashboard,
   LibraryBig,
   Loader2,
-  LogOut,
   MoreHorizontal,
   Plus,
   Sparkles,
@@ -28,12 +27,14 @@ import { fileSystemApi, DiscoveredResource } from '../services/fileSystemApi';
 import { learningApi, TerminalChatListItem } from '../services/learningApi';
 import { workbenchApi } from '../services/workbenchApi';
 import { useAuthStore } from '../store/authStore';
-import { FileSystemObject, LearningTerminalMessage, TerminalChatFile, Workspace, Workbench, WorkbenchItem } from '../types';
+import { EditorState, FileSystemObject, LearningTerminalMessage, ResourceReference, TerminalChatFile, User, Workspace, Workbench, WorkbenchItem } from '../types';
 import LearningTerminal from '../components/workspace/LearningTerminal';
 import { AddSourcesDialog } from '../components/workspace/AddSourcesDialog';
 import LearningIntelligenceDashboard, {
   IntelligenceSection
 } from '../components/workspace/LearningIntelligenceDashboard';
+import WorkbenchEditorContent from '../components/workbench/WorkbenchEditorContent';
+import { getResourceKind } from '../components/workbench/editorResource';
 
 type WorkspaceTab = 'workbenches' | 'files' | 'knowledge' | 'planning' | 'profile' | 'intelligence' | 'terminal';
 
@@ -58,6 +59,7 @@ interface CreateWorkspaceDraft {
   background: string;
   systemPrompt: string;
   files: File[];
+  fileRelativePaths: string[];
   urls: QueuedUrlSource[];
   texts: QueuedTextSource[];
   webQuery: string;
@@ -82,6 +84,8 @@ interface TerminalChatSession {
 
 type TerminalChatMode = 'chat' | 'agentic';
 
+type WorkspaceSettingsTab = 'account' | 'about';
+
 type TerminalSourceFile = {
   id: string;
   name: string;
@@ -98,6 +102,7 @@ const emptyDraft = (): CreateWorkspaceDraft => ({
   background: '',
   systemPrompt: '',
   files: [],
+  fileRelativePaths: [],
   urls: [],
   texts: [],
   webQuery: ''
@@ -109,7 +114,6 @@ const workspaceTabs: Array<{ id: WorkspaceTab; label: string }> = [
   { id: 'knowledge', label: 'Knowledge Graph' },
   { id: 'planning', label: 'Planning' },
   { id: 'profile', label: 'Profile' },
-  { id: 'intelligence', label: 'Intelligence' },
   { id: 'terminal', label: 'AI Terminal' }
 ];
 
@@ -591,6 +595,8 @@ export default function WorkspaceShellPage() {
   const hydrated = useAuthStore((state) => state.hydrated);
   const hydrate = useAuthStore((state) => state.hydrate);
   const logout = useAuthStore((state) => state.logout);
+  const updateProfile = useAuthStore((state) => state.updateProfile);
+  const updatePassword = useAuthStore((state) => state.updatePassword);
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceWorkbenches, setWorkspaceWorkbenches] = useState<Record<string, Workbench[]>>({});
@@ -612,6 +618,9 @@ export default function WorkspaceShellPage() {
   const [openWorkspaceMenuId, setOpenWorkspaceMenuId] = useState<string | null>(null);
   const [workspaceMenuRect, setWorkspaceMenuRect] = useState<DOMRect | null>(null);
   const [openWorkbenchMenuId, setOpenWorkbenchMenuId] = useState<string | null>(null);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<WorkspaceSettingsTab>('account');
   const [editingWorkbenchId, setEditingWorkbenchId] = useState<string | null>(null);
   const [editingWorkbenchTitle, setEditingWorkbenchTitle] = useState('');
   const [pinnedWorkbenchIds, setPinnedWorkbenchIds] = useState<Set<string>>(() => {
@@ -625,9 +634,11 @@ export default function WorkspaceShellPage() {
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [createWorkspaceError, setCreateWorkspaceError] = useState<string | null>(null);
+  const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
   const [createWorkbenchOpen, setCreateWorkbenchOpen] = useState(false);
   const [createWorkbenchError, setCreateWorkbenchError] = useState<string | null>(null);
   const [addSourcesOpen, setAddSourcesOpen] = useState(false);
+  const [previewFile, setPreviewFile] = useState<FileSystemObject | null>(null);
   const [creatingWorkbench, setCreatingWorkbench] = useState(false);
   const [terminalDraftPrompt, setTerminalDraftPrompt] = useState('');
   const [terminalDraftMode, setTerminalDraftMode] = useState<TerminalChatMode>('chat');
@@ -753,9 +764,10 @@ export default function WorkspaceShellPage() {
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest('[data-workspace-menu], [data-workbench-menu], [data-resource-menu]')) return;
+      if (target?.closest('[data-workspace-menu], [data-workbench-menu], [data-resource-menu], [data-user-menu]')) return;
       setOpenWorkspaceMenuId(null);
       setOpenWorkbenchMenuId(null);
+      setUserMenuOpen(false);
     };
 
     window.addEventListener('pointerdown', handlePointerDown);
@@ -1074,20 +1086,10 @@ export default function WorkspaceShellPage() {
     await refreshSelectedWorkspace();
   };
 
-  const openFileInWorkbench = async (fileId: string) => {
-    if (!selectedWorkspace) return;
-
-    let workbenchId = selectedWorkbenches[0]?.id;
-    if (!workbenchId) {
-      const created = await workbenchApi.create({
-        workspaceId: selectedWorkspace.id,
-        title: 'New Workbench'
-      });
-      workbenchId = created.id;
-      await loadWorkspaceShell();
-    }
-
-    navigate(`/workbenches/${workbenchId}?resourceId=${encodeURIComponent(fileId)}`);
+  const openFilePreview = (fileId: string) => {
+    const file = sourceFiles.find((item) => item.id === fileId);
+    if (!file) return;
+    setPreviewFile(file);
   };
 
   const openTerminalWithPrompt = (prompt: string) => {
@@ -1305,9 +1307,11 @@ export default function WorkspaceShellPage() {
 
   const editWorkspace = (workspaceId: string) => {
     setOpenWorkspaceMenuId(null);
-    navigate(`/workspaces/${workspaceId}`);
-    setActiveTab('intelligence');
-    setActiveIntelligenceSection('overview');
+    const workspace = workspaces.find((item) => item.id === workspaceId) || null;
+    if (!workspace) return;
+    setEditingWorkspace(workspace);
+    setCreateWorkspaceError(null);
+    setCreateWorkspaceOpen(true);
   };
 
   const exportWorkspace = (workspace: Workspace) => {
@@ -1389,7 +1393,8 @@ export default function WorkspaceShellPage() {
         resourceRole: 'source',
         resourceType: 'source',
         scope: 'workspace',
-        origin: 'upload'
+        origin: 'upload',
+        relativePaths: draft.fileRelativePaths
       });
     }
 
@@ -1453,6 +1458,38 @@ export default function WorkspaceShellPage() {
     }
   };
 
+  const submitEditWorkspace = async (draft: CreateWorkspaceDraft) => {
+    if (!editingWorkspace) return;
+    const name = draft.name.trim();
+    if (!name) return;
+
+    setCreatingWorkspace(true);
+    setCreateWorkspaceError(null);
+
+    try {
+      const workspace = await workspaceApi.updateWorkspace(editingWorkspace.id, {
+        name,
+        description: draft.background.trim(),
+        major: editingWorkspace.major || '',
+        aiTerminalConfig: draft.systemPrompt.trim()
+      });
+
+      setWorkspaces((current) =>
+        current.map((item) => item.id === workspace.id ? { ...item, ...workspace } : item)
+      );
+      setEditingWorkspace(null);
+      setCreateWorkspaceOpen(false);
+      if (routeWorkspaceId === workspace.id) {
+        await refreshSelectedWorkspace();
+      }
+    } catch (error: any) {
+      console.error('Failed to update workspace:', error);
+      setCreateWorkspaceError(error?.response?.data?.error || error?.message || '更新 workspace 失败');
+    } finally {
+      setCreatingWorkspace(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center bg-[#fbfbfa] text-[#202124]">
@@ -1467,13 +1504,12 @@ export default function WorkspaceShellPage() {
       <>
       <aside
         className="openwebui-sidebar relative z-50 my-auto flex h-screen max-h-[100dvh] shrink-0 flex-col justify-between overflow-x-hidden bg-gray-50/70 text-sm text-gray-900"
-        style={{ width: sidebarWidth }}
+        style={{ width: sidebarWidth, '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}
       >
         <button
           type="button"
           onClick={() => setSidebarVisible(false)}
           className="absolute right-[0.5625rem] top-2 z-30 flex size-[2.125rem] shrink-0 cursor-[w-resize] items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100/50 hover:text-gray-900"
-          title="Collapse sidebar"
           aria-label="Collapse sidebar"
         >
           <div className="self-center p-1.5">
@@ -1579,7 +1615,7 @@ export default function WorkspaceShellPage() {
                   setCreateWorkspaceOpen(true);
                 }}
                 className="absolute right-2 z-10 flex items-center self-center text-gray-600 invisible group-hover:visible"
-                title="New Workspace"
+                aria-label="New Workspace"
               >
                 <span className="rounded-lg p-0.5 touch-auto">
                   <OWPlusIcon className="size-3" strokeWidth={2.5} />
@@ -1607,7 +1643,7 @@ export default function WorkspaceShellPage() {
                             toggleWorkspaceExpanded(workspace.id);
                           }}
                           className="flex shrink-0 items-center justify-center rounded-lg p-1 text-gray-500 transition hover:bg-gray-200"
-                          title={isExpanded ? 'Collapse workspace' : 'Expand workspace'}
+                          aria-label={isExpanded ? 'Collapse workspace' : 'Expand workspace'}
                         >
                           <span className="p-[1px]">
                             {isExpanded ? <OWChevronDownIcon className="size-3" strokeWidth={2.5} /> : <OWChevronRightIcon className="size-3" strokeWidth={2.5} />}
@@ -1627,7 +1663,7 @@ export default function WorkspaceShellPage() {
                             void createWorkbenchInWorkspace(workspace.id, true);
                           }}
                           className="absolute right-8 z-10 invisible flex items-center self-center text-gray-500 group-hover/workspace:visible"
-                          title="New workbench in this workspace"
+                          aria-label="New workbench in this workspace"
                         >
                           <span className="rounded-lg p-1 touch-auto hover:bg-gray-200">
                             <OWPlusIcon className="size-3.5" />
@@ -1641,7 +1677,7 @@ export default function WorkspaceShellPage() {
                             setOpenWorkspaceMenuId((current) => current === workspace.id ? null : workspace.id);
                           }}
                           className="absolute right-2 z-10 invisible flex items-center self-center text-gray-500 group-hover/workspace:visible"
-                          title="Workspace menu"
+                          aria-label="Workspace menu"
                         >
                           <span className="rounded-lg p-1 touch-auto hover:bg-gray-200">
                             <OWEllipsisHorizontalIcon className="size-4" strokeWidth={2.5} />
@@ -1826,26 +1862,71 @@ export default function WorkspaceShellPage() {
           </section>
         </div>
 
-        <div className="sidebar sticky bottom-0 z-10 -mt-3 px-1.5 pb-2 pt-1.5">
-          <div className="sidebar-bg-gradient-to-t pointer-events-none absolute inset-0 -z-10 -mt-6 bg-gradient-to-t from-gray-50/70 from-50% to-transparent" />
-          <div className="flex flex-col font-primary">
-            <div className="flex w-full items-center rounded-2xl px-1.5 py-2 transition hover:bg-gray-100/50">
-              <div className="relative mr-3 self-center">
-                <div className="flex size-7 items-center justify-center rounded-full bg-gray-900 text-[11px] font-semibold text-white">
-                  {user?.username?.slice(0, 1).toUpperCase() || 'U'}
-                </div>
-                <span className="absolute -bottom-0.5 -right-0.5 inline-flex size-2.5 rounded-full border-2 border-white bg-green-500" />
-              </div>
-              <span className="min-w-0 flex-1 truncate self-center font-medium text-gray-850">{user?.username || 'User'}</span>
+        <div className="sidebar sticky bottom-0 z-10 -mt-3 w-full shrink-0 px-1.5 pb-2 pt-1.5" data-user-menu>
+          <div className="sidebar-bg-gradient-to-t pointer-events-none absolute inset-0 -z-10 -mt-6 bg-linear-to-t from-gray-50 to-transparent from-50%" />
+          {userMenuOpen ? (
+            <div className="w-[calc(var(--sidebar-width)-1rem)] rounded-2xl px-1 py-1 border border-gray-100 dark:border-gray-800 z-50 bg-white dark:bg-gray-850 dark:text-white shadow-lg text-sm absolute bottom-full left-1.5 mb-1">
               <button
+                className="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
                 type="button"
-                onClick={() => void logout().then(() => navigate('/', { replace: true }))}
-                className="flex size-7 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900"
-                title="Logout"
+                onClick={async () => {
+                  setUserMenuOpen(false);
+                  setSettingsTab('account');
+                  setSettingsOpen(true);
+                }}
               >
-                <LogOut className="size-4" />
+                <div className=" self-center mr-3">
+                  <OWSettingsIcon className="w-5 h-5" strokeWidth={1.5} />
+                </div>
+                <div className=" self-center truncate">Settings</div>
+              </button>
+
+              <hr className=" border-gray-50/30 dark:border-gray-800/30 my-1 p-0" />
+
+              <button
+                className="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+                type="button"
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  void logout().then(() => navigate('/', { replace: true }));
+                }}
+              >
+                <div className=" self-center mr-3">
+                  <OWSignOutIcon className="w-5 h-5" />
+                </div>
+                <div className=" self-center truncate">Sign Out</div>
               </button>
             </div>
+          ) : null}
+          <div className="flex w-full flex-col font-primary">
+            <button
+              type="button"
+              onClick={() => {
+                setOpenWorkspaceMenuId(null);
+                setOpenWorkbenchMenuId(null);
+                setUserMenuOpen((value) => !value);
+              }}
+              className=" flex items-center rounded-2xl py-2 px-1.5 w-full hover:bg-gray-100/50 dark:hover:bg-gray-900/50 transition"
+              aria-label="User menu"
+              aria-haspopup="menu"
+              aria-expanded={userMenuOpen}
+            >
+              <div className=" self-center mr-3 relative flex-shrink-0">
+                {user?.profileImageUrl ? (
+                  <img src={user.profileImageUrl} className="size-7 rounded-full object-cover" alt="Open User Profile Menu" />
+                ) : (
+                  <div className="flex size-7 items-center justify-center rounded-full bg-gray-900 text-[11px] font-semibold text-white">
+                    {user?.username?.slice(0, 1).toUpperCase() || 'U'}
+                  </div>
+                )}
+                <div className="absolute -bottom-0.5 -right-0.5">
+                  <span className="relative flex size-2.5">
+                    <span className="relative inline-flex size-2.5 rounded-full bg-green-500 border-2 border-white dark:border-gray-900" />
+                  </span>
+                </div>
+              </div>
+              <div className=" self-center font-medium truncate">{user?.username || 'User'}</div>
+            </button>
           </div>
         </div>
       </aside>
@@ -1865,7 +1946,6 @@ export default function WorkspaceShellPage() {
             type="button"
             onClick={() => setSidebarVisible(true)}
             className="flex flex-col flex-1 cursor-pointer"
-            title="Open sidebar"
             aria-label="Open sidebar"
           >
             <span className="flex rounded-xl transition hover:bg-gray-100">
@@ -1936,7 +2016,7 @@ export default function WorkspaceShellPage() {
                 workspaceId={selectedWorkspace.id}
                 files={sourceFiles}
                 onAdd={() => setAddSourcesOpen(true)}
-                onOpenFile={(fileId) => void openFileInWorkbench(fileId)}
+                onOpenFile={openFilePreview}
                 onChanged={refreshSelectedWorkspace}
               />
             ) : null}
@@ -2082,10 +2162,25 @@ export default function WorkspaceShellPage() {
         isOpen={createWorkspaceOpen}
         loading={creatingWorkspace}
         error={createWorkspaceError}
+        mode={editingWorkspace ? 'edit' : 'create'}
+        initialDraft={editingWorkspace ? {
+          name: editingWorkspace.name || '',
+          background: editingWorkspace.description || '',
+          systemPrompt: editingWorkspace.aiTerminalConfig || '',
+          files: [],
+          fileRelativePaths: [],
+          urls: [],
+          texts: [],
+          webQuery: ''
+        } : null}
         onClose={() => {
-          if (!creatingWorkspace) setCreateWorkspaceOpen(false);
+          if (!creatingWorkspace) {
+            setCreateWorkspaceOpen(false);
+            setEditingWorkspace(null);
+            setCreateWorkspaceError(null);
+          }
         }}
-        onSubmit={(draft) => void submitCreateWorkspace(draft)}
+        onSubmit={(draft) => void (editingWorkspace ? submitEditWorkspace(draft) : submitCreateWorkspace(draft))}
       />
 
       <WorkspaceSearchModal
@@ -2115,7 +2210,740 @@ export default function WorkspaceShellPage() {
         onDiscoverSources={discoverWorkspaceSources}
         onImportDiscoveredSources={importWorkspaceSources}
       />
+
+      <WorkspaceKnowledgePreviewModal
+        workspaceId={selectedWorkspace?.id || ''}
+        file={previewFile}
+        onClose={() => setPreviewFile(null)}
+      />
+
+      <WorkspaceSettingsModal
+        show={settingsOpen}
+        selectedTab={settingsTab}
+        user={user}
+        onSelectTab={setSettingsTab}
+        onSaveProfile={updateProfile}
+        onUpdatePassword={updatePassword}
+        onClose={() => setSettingsOpen(false)}
+      />
     </div>
+  );
+}
+
+function WorkspaceSettingsModal({
+  show,
+  selectedTab,
+  user,
+  onSelectTab,
+  onSaveProfile,
+  onUpdatePassword,
+  onClose
+}: {
+  show: boolean;
+  selectedTab: WorkspaceSettingsTab;
+  user: User | null;
+  onSelectTab: (tab: WorkspaceSettingsTab) => void;
+  onSaveProfile: (payload: {
+    name: string;
+    profileImageUrl?: string | null;
+    bio?: string | null;
+    gender?: string | null;
+    dateOfBirth?: string | null;
+    notificationWebhookUrl?: string | null;
+  }) => Promise<User>;
+  onUpdatePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!show) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose, show]);
+
+  if (!show) return null;
+
+  return createPortal(
+    <div
+      aria-modal="true"
+      role="dialog"
+      className="modal fixed top-0 right-0 left-0 bottom-0 bg-black/30 dark:bg-black/60 w-full h-screen max-h-[100dvh] p-3 flex justify-center z-[9999] overflow-y-auto overscroll-contain"
+      style={{ scrollbarGutter: 'stable' }}
+      onMouseDown={onClose}
+    >
+      <div
+        className="m-auto max-w-full w-[84rem] mx-2 shadow-3xl min-h-fit scrollbar-hidden bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm rounded-4xl border border-white dark:border-gray-850 text-gray-700 dark:text-gray-100"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="text-gray-700 dark:text-gray-100 mx-1">
+          <div className=" flex justify-between dark:text-gray-300 px-4 md:px-4.5 pt-4.5 pb-0.5 md:pb-2.5">
+            <div className=" text-lg font-medium self-center">Settings</div>
+            <button aria-label="Close settings modal" className="self-center" onClick={onClose}>
+              <OWXMarkIcon className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="flex flex-col md:flex-row w-full pt-1 pb-4">
+            <div
+              role="tablist"
+              id="settings-tabs-container"
+              className="tabs flex flex-row overflow-x-auto gap-2.5 mx-3 md:pr-4 md:gap-1 md:flex-col flex-1 md:flex-none md:w-50 md:min-h-[min(42rem,calc(100dvh-10rem))] md:max-h-[min(42rem,calc(100dvh-10rem))] dark:text-gray-200 text-sm text-left mb-1 md:mb-0 -translate-y-1"
+            >
+              <div className="hidden md:flex w-full rounded-full px-2.5 gap-2 bg-gray-100/80 dark:bg-gray-850/80 backdrop-blur-2xl my-1 mb-1.5" id="settings-search">
+                <div className="self-center rounded-l-xl bg-transparent">
+                  <OWSearchIcon className="size-3.5" strokeWidth={1.5} />
+                </div>
+                <label className="sr-only" htmlFor="search-input-settings-modal">Search</label>
+                <input
+                  className="w-full py-1 text-sm bg-transparent dark:text-gray-300 outline-hidden"
+                  id="search-input-settings-modal"
+                  placeholder="Search"
+                  readOnly
+                />
+              </div>
+
+              <SettingsTabButton id="account" active={selectedTab === 'account'} label="Account" icon={<OWUserCircleIcon strokeWidth={2} />} onClick={() => onSelectTab('account')} />
+              <SettingsTabButton id="about" active={selectedTab === 'about'} label="About" icon={<OWInfoCircleIcon strokeWidth={2} />} onClick={() => onSelectTab('about')} />
+            </div>
+
+            <div className="flex-1 px-3.5 md:pl-0 md:pr-4.5 md:min-h-[min(42rem,calc(100dvh-10rem))] max-h-[min(42rem,calc(100dvh-10rem))] overflow-y-auto">
+              {selectedTab === 'account' ? (
+                <OpenWebUIAccountPanel
+                  user={user}
+                  onSaveProfile={onSaveProfile}
+                  onUpdatePassword={onUpdatePassword}
+                />
+              ) : null}
+              {selectedTab === 'about' ? <OpenWebUIAboutPanel /> : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function SettingsTabButton({
+  id,
+  active,
+  label,
+  icon,
+  onClick
+}: {
+  id: WorkspaceSettingsTab;
+  active: boolean;
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      role="tab"
+      aria-controls={`tab-${id}`}
+      aria-selected={active}
+      className={`px-0.5 md:px-2.5 py-1 min-w-fit rounded-xl flex-1 md:flex-none flex text-left transition ${
+        active ? '' : 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'
+      }`}
+      onClick={onClick}
+    >
+      <div className=" self-center mr-2">{icon}</div>
+      <div className=" self-center">{label}</div>
+    </button>
+  );
+}
+
+function OpenWebUIAccountPanel({
+  user,
+  onSaveProfile,
+  onUpdatePassword
+}: {
+  user: User | null;
+  onSaveProfile: (payload: {
+    name: string;
+    profileImageUrl?: string | null;
+    bio?: string | null;
+    gender?: string | null;
+    dateOfBirth?: string | null;
+    notificationWebhookUrl?: string | null;
+  }) => Promise<User>;
+  onUpdatePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+}) {
+  const [profileImageUrl, setProfileImageUrl] = useState(user?.profileImageUrl ?? '');
+  const [name, setName] = useState(user?.username ?? '');
+  const [bio, setBio] = useState(user?.bio ?? '');
+  const [genderChoice, setGenderChoice] = useState(user?.gender && !['male', 'female'].includes(user.gender) ? 'custom' : user?.gender ?? '');
+  const [gender, setGender] = useState(user?.gender ?? '');
+  const [dateOfBirth, setDateOfBirth] = useState(user?.dateOfBirth ?? '');
+  const [webhookUrl, setWebhookUrl] = useState(user?.notificationWebhookUrl ?? '');
+  const [showPassword, setShowPassword] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileStatus, setProfileStatus] = useState<string | null>(null);
+  const [updatingPassword, setUpdatingPassword] = useState(false);
+  const [passwordStatus, setPasswordStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    setProfileImageUrl(user?.profileImageUrl ?? '');
+    setName(user?.username ?? '');
+    setBio(user?.bio ?? '');
+    const nextGender = user?.gender ?? '';
+    setGender(nextGender);
+    setGenderChoice(nextGender && !['male', 'female'].includes(nextGender) ? 'custom' : nextGender);
+    setDateOfBirth(user?.dateOfBirth ?? '');
+    setWebhookUrl(user?.notificationWebhookUrl ?? '');
+  }, [user?.bio, user?.dateOfBirth, user?.gender, user?.notificationWebhookUrl, user?.profileImageUrl, user?.username]);
+
+  const displayName = name || user?.username || 'User';
+  const handleSaveProfile = async () => {
+    setSavingProfile(true);
+    setProfileStatus(null);
+    try {
+      await onSaveProfile({
+        name: name.trim(),
+        profileImageUrl: profileImageUrl || null,
+        bio: bio || null,
+        gender: gender || null,
+        dateOfBirth: dateOfBirth || null,
+        notificationWebhookUrl: webhookUrl || null
+      });
+      setProfileStatus('Saved');
+      window.setTimeout(() => setProfileStatus(null), 1600);
+    } catch (error: any) {
+      setProfileStatus(error?.response?.data?.error || error?.message || 'Save failed');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleUpdatePassword = async () => {
+    if (newPassword !== newPasswordConfirm) {
+      setPasswordStatus("The passwords you entered don't quite match. Please double-check and try again.");
+      return;
+    }
+
+    setUpdatingPassword(true);
+    setPasswordStatus(null);
+    try {
+      await onUpdatePassword(currentPassword, newPassword);
+      setCurrentPassword('');
+      setNewPassword('');
+      setNewPasswordConfirm('');
+      setPasswordStatus('Successfully updated.');
+      window.setTimeout(() => setPasswordStatus(null), 1600);
+    } catch (error: any) {
+      setPasswordStatus(error?.response?.data?.error || error?.message || 'Update failed');
+    } finally {
+      setUpdatingPassword(false);
+    }
+  };
+
+  return (
+    <div id="tab-account" className="flex flex-col h-full justify-between text-sm">
+      <div className=" overflow-y-scroll max-h-[28rem] md:max-h-full">
+        <div className="space-y-1">
+          <div>
+            <div className="text-base font-medium">Your Account</div>
+            <div className="text-xs text-gray-500 mt-0.5">Manage your account information.</div>
+          </div>
+
+          <div className="flex space-x-5 my-4">
+            <OpenWebUIProfileImage
+              name={displayName}
+              email={user?.email ?? ''}
+              profileImageUrl={profileImageUrl}
+              onProfileImageUrlChange={setProfileImageUrl}
+            />
+
+            <div className="flex flex-1 flex-col">
+              <div className=" flex-1">
+                <div className="flex flex-col w-full">
+                  <div className=" mb-1 text-xs font-medium">Name</div>
+                  <div className="flex-1">
+                    <input
+                      className="w-full text-sm dark:text-gray-300 bg-transparent outline-hidden"
+                      type="text"
+                      value={name}
+                      aria-label="Name"
+                      required
+                      placeholder="Enter your name"
+                      onChange={(event) => setName(event.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col w-full mt-2">
+                  <div className=" mb-1 text-xs font-medium">Bio</div>
+                  <div className="flex-1">
+                    <textarea
+                      className="w-full text-sm dark:text-gray-300 bg-transparent outline-hidden min-h-[60px] resize-y"
+                      value={bio}
+                      aria-label="Bio"
+                      placeholder="Share your background and interests"
+                      onChange={(event) => setBio(event.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col w-full mt-2">
+                  <div className=" mb-1 text-xs font-medium">Gender</div>
+                  <div className="flex-1">
+                    <select
+                      className="w-full text-sm dark:text-gray-300 bg-transparent outline-hidden"
+                      value={genderChoice}
+                      aria-label="Gender"
+                      onChange={(event) => {
+                        setGenderChoice(event.target.value);
+                        setGender(event.target.value === 'custom' ? '' : event.target.value);
+                      }}
+                    >
+                      <option value="">Prefer not to say</option>
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                  </div>
+
+                  {genderChoice === 'custom' ? (
+                    <input
+                      className="w-full text-sm dark:text-gray-300 bg-transparent outline-hidden mt-1"
+                      type="text"
+                      required
+                      aria-label="Custom Gender"
+                      placeholder="Enter your gender"
+                      value={gender}
+                      onChange={(event) => setGender(event.target.value)}
+                    />
+                  ) : null}
+                </div>
+
+                <div className="flex flex-col w-full mt-2">
+                  <div className=" mb-1 text-xs font-medium">Birth Date</div>
+                  <div className="flex-1">
+                    <input
+                      className="w-full text-sm dark:text-gray-300 dark:placeholder:text-gray-300 bg-transparent outline-hidden"
+                      type="date"
+                      aria-label="Birth Date"
+                      value={dateOfBirth}
+                      required
+                      onChange={(event) => setDateOfBirth(event.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-2">
+          <div className="flex flex-col w-full">
+            <div className=" mb-1 text-xs font-medium">Notification Webhook</div>
+            <div className="flex-1">
+              <input
+                className="w-full text-sm outline-hidden"
+                type="url"
+                placeholder="Enter your webhook URL"
+                aria-label="Notification Webhook"
+                value={webhookUrl}
+                required
+                onChange={(event) => setWebhookUrl(event.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+
+        <hr className="border-gray-50 dark:border-gray-850/30 my-4" />
+
+        <form
+          className="flex flex-col text-sm"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleUpdatePassword();
+          }}
+        >
+          <div className="flex justify-between items-center text-sm">
+            <div className="  font-medium">Change Password</div>
+            <button className=" text-xs font-medium text-gray-500" type="button" onClick={() => setShowPassword((value) => !value)}>
+              {showPassword ? 'Hide' : 'Show'}
+            </button>
+          </div>
+
+          {showPassword ? (
+            <>
+              <div className=" py-2.5 space-y-1.5">
+                <SensitivePasswordField label="Current Password" value={currentPassword} placeholder="Enter your current password" autoComplete="current-password" onChange={setCurrentPassword} />
+                <SensitivePasswordField label="New Password" value={newPassword} placeholder="Enter your new password" autoComplete="new-password" onChange={setNewPassword} />
+                <SensitivePasswordField label="Confirm Password" value={newPasswordConfirm} placeholder="Confirm your new password" autoComplete="off" onChange={setNewPasswordConfirm} />
+              </div>
+
+              <div className="mt-3 flex justify-end">
+                <button
+                  className="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full disabled:cursor-wait disabled:opacity-60"
+                  disabled={updatingPassword}
+                >
+                  {updatingPassword ? 'Updating...' : 'Update password'}
+                </button>
+              </div>
+            </>
+          ) : null}
+        </form>
+        {passwordStatus ? <div className="mt-2 text-xs text-gray-500">{passwordStatus}</div> : null}
+      </div>
+
+      <div className="flex justify-end items-center gap-3 pt-3 text-sm font-medium">
+        {profileStatus ? <div className="text-xs text-gray-500">{profileStatus}</div> : null}
+        <button
+          type="button"
+          className="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full disabled:cursor-wait disabled:opacity-60"
+          disabled={savingProfile}
+          onClick={() => void handleSaveProfile()}
+        >
+          {savingProfile ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function OpenWebUIProfileImage({
+  name,
+  email,
+  profileImageUrl,
+  onProfileImageUrlChange
+}: {
+  name: string;
+  email: string;
+  profileImageUrl: string;
+  onProfileImageUrlChange: (value: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const imageSrc = profileImageUrl || generateInitialsImage(name);
+
+  const handleImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !['image/gif', 'image/webp', 'image/jpeg', 'image/png'].includes(file.type)) return;
+
+    const reader = new FileReader();
+    reader.onload = (readerEvent) => {
+      const img = new Image();
+      img.src = `${readerEvent.target?.result ?? ''}`;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        const aspectRatio = img.width / img.height;
+        const newWidth = aspectRatio > 1 ? 250 * aspectRatio : 250;
+        const newHeight = aspectRatio > 1 ? 250 : 250 / aspectRatio;
+        canvas.width = 250;
+        canvas.height = 250;
+        ctx.drawImage(img, (250 - newWidth) / 2, (250 - newHeight) / 2, newWidth, newHeight);
+        onProfileImageUrlChange(canvas.toDataURL('image/webp', 0.8));
+        if (inputRef.current) inputRef.current.value = '';
+      };
+    };
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <>
+      <input id="profile-image-input" ref={inputRef} type="file" hidden accept="image/*" onChange={handleImageChange} />
+      <div className="flex flex-col self-start group">
+        <div className="self-center flex">
+          <button className="relative rounded-full dark:bg-gray-700" type="button" onClick={() => inputRef.current?.click()}>
+            <img src={imageSrc} alt="profile" className=" rounded-full size-14 md:size-18 object-cover" />
+            <div className="absolute bottom-0 right-0 opacity-0 group-hover:opacity-100 transition">
+              <div className="p-1 rounded-full bg-white text-black border-gray-100 shadow">
+                <OWPencilSolidIcon className="size-3" />
+              </div>
+            </div>
+          </button>
+        </div>
+        <div className="flex flex-col w-full justify-center mt-2">
+          <button className=" text-xs text-center text-gray-500 rounded-lg py-0.5 opacity-0 group-hover:opacity-100 transition-all" type="button" onClick={() => onProfileImageUrlChange('')}>
+            Remove
+          </button>
+          <button className=" text-xs text-center text-gray-800 dark:text-gray-400 rounded-lg py-0.5 opacity-0 group-hover:opacity-100 transition-all" type="button" onClick={() => onProfileImageUrlChange(generateInitialsImage(name))}>
+            Initials
+          </button>
+          <button className=" text-xs text-center text-gray-800 dark:text-gray-400 rounded-lg py-0.5 opacity-0 group-hover:opacity-100 transition-all" type="button" onClick={() => onProfileImageUrlChange(`https://www.gravatar.com/avatar/${encodeURIComponent(email || name)}?d=identicon`)}>
+            Gravatar
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function SensitivePasswordField({
+  label,
+  value,
+  placeholder,
+  autoComplete,
+  onChange
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  autoComplete: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex flex-col w-full">
+      <div className=" mb-1 text-xs text-gray-500">{label}</div>
+      <div className="flex-1">
+        <input
+          className="w-full bg-transparent text-sm dark:text-gray-300 outline-hidden placeholder:opacity-30"
+          type="password"
+          value={value}
+          placeholder={placeholder}
+          autoComplete={autoComplete}
+          required
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function OpenWebUIAboutPanel() {
+  return (
+    <div id="tab-about" className="flex flex-col h-full justify-between space-y-3 text-sm mb-6">
+      <div className=" space-y-3 overflow-y-scroll max-h-[28rem] md:max-h-full">
+        <div>
+          <div className=" mb-2.5 text-sm font-medium flex space-x-2 items-center">
+            <div>Open WebUI Version</div>
+          </div>
+          <div className="flex w-full justify-between items-center">
+            <div className="flex flex-col text-xs text-gray-700 dark:text-gray-200">
+              <div className="flex gap-1">
+                <span>v0.0.0</span>
+              </div>
+
+              <button className=" underline flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-500">
+                <div>See what's new</div>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <hr className=" border-gray-100/30 dark:border-gray-850/30" />
+
+        <div className="flex space-x-1">
+          <a href="https://discord.gg/5rJgQTnV4s" target="_blank" rel="noreferrer">
+            <img alt="Discord" src="https://img.shields.io/badge/Discord-Open_WebUI-blue?logo=discord&logoColor=white" />
+          </a>
+          <a href="https://twitter.com/OpenWebUI" target="_blank" rel="noreferrer">
+            <img alt="X (formerly Twitter) Follow" src="https://img.shields.io/twitter/follow/OpenWebUI" />
+          </a>
+          <a href="https://github.com/open-webui/open-webui" target="_blank" rel="noreferrer">
+            <img alt="Github Repo" src="https://img.shields.io/github/stars/open-webui/open-webui?style=social&label=Star us on Github" />
+          </a>
+        </div>
+
+        <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+          Emoji graphics provided by <a href="https://github.com/jdecked/twemoji" target="_blank" rel="noreferrer">Twemoji</a>, licensed under{' '}
+          <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC-BY 4.0</a>.
+        </div>
+
+        <div>
+          <pre className="text-xs text-gray-400 dark:text-gray-500 whitespace-pre-wrap">{`Copyright (c) ${new Date().getFullYear()} `}<a href="https://openwebui.com" target="_blank" rel="noreferrer" className="underline">Open WebUI Inc.</a>{' '}<a href="https://github.com/open-webui/open-webui/blob/main/LICENSE" target="_blank" rel="noreferrer">All rights reserved.</a></pre>
+        </div>
+
+        <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+          Created by <a className=" text-gray-500 dark:text-gray-300 font-medium" href="https://github.com/tjbck" target="_blank" rel="noreferrer">Timothy J. Baek</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function generateInitialsImage(name = 'User') {
+  const initials = name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('') || 'U';
+
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="250" height="250" viewBox="0 0 250 250">
+      <rect width="250" height="250" rx="125" fill="#111827"/>
+      <text x="50%" y="52%" dominant-baseline="middle" text-anchor="middle" font-family="Arial, sans-serif" font-size="88" font-weight="700" fill="#ffffff">${initials}</text>
+    </svg>
+  `)}`;
+}
+
+function fileToResourceReference(file: FileSystemObject): ResourceReference {
+  return {
+    id: file.id,
+    name: getFileDisplayName(file),
+    path: file.path,
+    type: file.type || file.nodeType,
+    resourceType: file.resourceType,
+    scope: file.scope,
+    origin: file.origin,
+    ownerWorkbenchId: file.ownerWorkbenchId,
+    metadata: parseFileMetadata(file),
+    tags: file.tags,
+    extension: file.extension,
+    mimeType: file.mimeType,
+    fileCategory: file.fileCategory,
+    isBinary: file.isBinary,
+    size: file.size,
+    chunkCount: Number(file._count?.knowledgeChunks || file.knowledgeIndexJobs?.[0]?.chunkCount || 0),
+    knowledgeIndexJobs: file.knowledgeIndexJobs,
+    _count: file._count
+  };
+}
+
+function editorTypeForPreview(resource: ResourceReference): EditorState['type'] {
+  const kind = getResourceKind(resource);
+  if (kind === 'video') return 'video';
+  if (kind === 'pdf' || kind === 'document') return 'resource';
+  return 'code';
+}
+
+function shouldLoadPreviewContent(resource: ResourceReference) {
+  const kind = getResourceKind(resource);
+  return kind === 'markdown' || kind === 'note' || kind === 'code' || kind === 'structured' || kind === 'unknown' || kind === 'web';
+}
+
+function WorkspaceKnowledgePreviewModal({
+  workspaceId,
+  file,
+  onClose
+}: {
+  workspaceId: string;
+  file: FileSystemObject | null;
+  onClose: () => void;
+}) {
+  const resource = useMemo(() => (file ? fileToResourceReference(file) : null), [file]);
+  const [content, setContent] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!file) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+
+    const previousOverflow = document.body.style.overflow;
+    window.addEventListener('keydown', handleKeyDown);
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [file, onClose]);
+
+  useEffect(() => {
+    if (!workspaceId || !resource || !shouldLoadPreviewContent(resource)) {
+      setContent('');
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setContent('');
+    void fileSystemApi
+      .getContent(workspaceId, resource.id)
+      .then((response) => {
+        if (!cancelled) setContent(response.content || '');
+      })
+      .catch(() => {
+        if (!cancelled) setContent('');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resource, workspaceId]);
+
+  if (!file || !resource || !workspaceId) return null;
+
+  const editor: EditorState = {
+    id: `workspace-knowledge-preview-${file.id}`,
+    type: editorTypeForPreview(resource),
+    title: resource.name,
+    resourceId: resource.id,
+    resourcePath: resource.path,
+    x: 0,
+    y: 0,
+    w: 12,
+    h: 12,
+    zIndex: 1,
+    minimized: false,
+    viewState: { mode: 'preview' }
+  };
+
+  const sourceUrl = fileSystemApi.downloadUrl(workspaceId, resource.id);
+
+  return createPortal(
+    <div
+      aria-modal="true"
+      role="dialog"
+      className="modal fixed bottom-0 left-0 right-0 top-0 z-[9999] flex h-screen max-h-[100dvh] w-full justify-center overflow-y-auto overscroll-contain bg-black/30 p-3 animate-[openwebui-fade_10ms_ease-out]"
+      style={{ scrollbarGutter: 'stable' }}
+      onMouseDown={onClose}
+    >
+      <style>
+        {`@keyframes openwebui-fade { from { opacity: 0; } to { opacity: 1; } }
+          @keyframes openwebui-scale-up { from { transform: scale(0.985); opacity: 0; } to { transform: scale(1); opacity: 1; } }`}
+      </style>
+      <div
+        className="m-auto flex h-[min(860px,calc(100vh-24px))] min-h-fit w-[84rem] max-w-full flex-col overflow-hidden rounded-[32px] border border-white bg-white/95 text-gray-900 shadow-[0_24px_90px_rgba(0,0,0,0.24)] backdrop-blur-sm animate-[openwebui-scale-up_100ms_ease-out_forwards]"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-3 px-4.5 pb-2 pt-3 text-gray-900">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden pr-4">
+            <a
+              href={sourceUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="block max-w-full truncate text-lg font-medium hover:underline"
+              title={resource.name}
+            >
+              {resource.name}
+            </a>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="self-center rounded-lg p-1 text-gray-700 transition hover:bg-gray-100 hover:text-gray-900"
+            aria-label="Close knowledge preview"
+          >
+            <OWXMarkIcon className="size-5" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 border-t border-gray-100 bg-white">
+          <WorkbenchEditorContent
+            editor={editor}
+            resource={resource}
+            workspaceId={workspaceId}
+            content={content}
+            isLoading={loading}
+            onChangeContent={() => undefined}
+            onSaveContent={() => undefined}
+            onBindResource={() => undefined}
+            onUpdateViewState={() => undefined}
+            minimalPreview
+          />
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -3377,7 +4205,7 @@ function WorkbenchSidebarItem({
           onOpenMenu();
         }}
         className={`absolute right-1 top-[4px] z-10 mr-1.5 flex items-center self-center bg-gradient-to-l from-gray-100 from-80% to-transparent py-1 pl-5 pr-0.5 text-gray-500 transition ${openMenu ? 'visible' : 'invisible group-hover/workbench:visible'}`}
-        title="Workbench menu"
+        aria-label="Workbench menu"
       >
         <span className="self-center transition">
           <OWEllipsisHorizontalIcon className="size-4" strokeWidth={2.5} />
@@ -3453,6 +4281,52 @@ function OWSearchIcon({ className = 'size-4', strokeWidth = 1.5 }: { className?:
   return (
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={strokeWidth} stroke="currentColor" aria-hidden="true" className={className}>
       <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+    </svg>
+  );
+}
+
+function OWSettingsIcon({ className = 'w-5 h-5', strokeWidth = 1.5 }: { className?: string; strokeWidth?: number }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={strokeWidth} stroke="currentColor" aria-hidden="true" className={className}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 011.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 01-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.397.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 01-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.505-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.107-1.204l-.527-.738a1.125 1.125 0 01.12-1.45l.773-.773a1.125 1.125 0 011.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  );
+}
+
+function OWSignOutIcon({ className = 'w-5 h-5' }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={className}>
+      <path fillRule="evenodd" d="M3 4.25A2.25 2.25 0 015.25 2h5.5A2.25 2.25 0 0113 4.25v2a.75.75 0 01-1.5 0v-2a.75.75 0 00-.75-.75h-5.5a.75.75 0 00-.75.75v11.5c0 .414.336.75.75.75h5.5a.75.75 0 00.75-.75v-2a.75.75 0 011.5 0v2A2.25 2.25 0 0110.75 18h-5.5A2.25 2.25 0 013 15.75V4.25z" clipRule="evenodd" aria-hidden="true" />
+      <path fillRule="evenodd" d="M6 10a.75.75 0 01.75-.75h9.546l-1.048-.943a.75.75 0 111.004-1.114l2.5 2.25a.75.75 0 010 1.114l-2.5 2.25a.75.75 0 11-1.004-1.114l1.048-.943H6.75A.75.75 0 016 10z" clipRule="evenodd" />
+    </svg>
+  );
+}
+
+function OWUserCircleIcon({ className = 'w-4 h-4', strokeWidth = 1.5 }: { className?: string; strokeWidth?: number }) {
+  return (
+    <svg className={className} aria-hidden="true" xmlns="http://www.w3.org/2000/svg" strokeWidth={strokeWidth} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.271 18.3457C4.271 18.3457 6.50002 15.5 12 15.5C17.5 15.5 19.7291 18.3457 19.7291 18.3457" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 12C13.6569 12 15 10.6569 15 9C15 7.34315 13.6569 6 12 6C10.3431 6 9 7.34315 9 9C9 10.6569 10.3431 12 12 12Z" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function OWInfoCircleIcon({ className = 'w-4 h-4', strokeWidth = 1.5 }: { className?: string; strokeWidth?: number }) {
+  return (
+    <svg className={className} aria-hidden="true" xmlns="http://www.w3.org/2000/svg" strokeWidth={strokeWidth} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path d="M12 11.5V16.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 7.51L12.01 7.49889" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function OWPencilSolidIcon({ className = 'size-3' }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={className}>
+      <path d="m2.695 14.762-1.262 3.155a.5.5 0 0 0 .65.65l3.155-1.262a4 4 0 0 0 1.343-.886L17.5 5.501a2.121 2.121 0 0 0-3-3L3.58 13.419a4 4 0 0 0-.885 1.343Z" />
     </svg>
   );
 }
@@ -3803,12 +4677,16 @@ function CreateWorkspaceModal({
   isOpen,
   loading,
   error,
+  mode,
+  initialDraft,
   onClose,
   onSubmit
 }: {
   isOpen: boolean;
   loading: boolean;
   error: string | null;
+  mode: 'create' | 'edit';
+  initialDraft: CreateWorkspaceDraft | null;
   onClose: () => void;
   onSubmit: (draft: CreateWorkspaceDraft) => void;
 }) {
@@ -3823,6 +4701,14 @@ function CreateWorkspaceModal({
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const folderInput = folderInputRef.current;
+    if (!folderInput) return;
+    folderInput.setAttribute('webkitdirectory', '');
+    folderInput.setAttribute('directory', '');
+  }, []);
 
   useEffect(() => {
     if (!isOpen) {
@@ -3836,10 +4722,21 @@ function CreateWorkspaceModal({
       setSelectedSourceIds({});
       setIsDiscovering(false);
       setDiscoveryError(null);
+      return;
     }
-  }, [isOpen]);
+    setDraft(initialDraft ? {
+      ...initialDraft,
+      files: initialDraft.files || [],
+      fileRelativePaths: initialDraft.fileRelativePaths || [],
+      urls: initialDraft.urls || [],
+      texts: initialDraft.texts || [],
+      webQuery: initialDraft.webQuery || ''
+    } : emptyDraft());
+  }, [initialDraft, isOpen]);
 
   if (!isOpen) return null;
+
+  const isEditMode = mode === 'edit';
 
   const addUrl = () => {
     const url = urlDraft.trim();
@@ -3960,7 +4857,7 @@ function CreateWorkspaceModal({
         className="m-auto flex max-h-[min(820px,calc(100vh-24px))] min-h-fit w-full max-w-[42rem] flex-col overflow-hidden rounded-[32px] border border-white bg-white/95 shadow-[0_24px_90px_rgba(0,0,0,0.24)] backdrop-blur-sm animate-[openwebui-scale-up_100ms_ease-out_forwards]"
       >
         <div className="flex justify-between px-5 pb-1 pt-4 text-gray-900">
-          <h2 className="self-center text-lg font-medium">Create Workspace</h2>
+          <h2 className="self-center text-lg font-medium">{isEditMode ? 'Edit Workspace' : 'Create Workspace'}</h2>
           <button type="button" onClick={onClose} disabled={loading} className="self-center rounded-xl p-1 text-gray-700 hover:bg-gray-100 disabled:opacity-50">
             <OWXMarkIcon className="size-5" />
           </button>
@@ -4007,7 +4904,7 @@ function CreateWorkspaceModal({
               </label>
             </div>
 
-            <div className="my-2">
+            {!isEditMode ? <div className="my-2">
               <div className="mb-2">
                 <div className="flex w-full justify-between mb-1">
                   <div className="self-center text-xs font-medium text-gray-500">Knowledge</div>
@@ -4018,14 +4915,15 @@ function CreateWorkspaceModal({
                   <div className="flex flex-wrap items-center gap-2 mb-2.5">
                     {draft.files.map((file, index) => (
                       <CreateWorkspaceKnowledgeItem
-                        key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
-                        name={file.name}
+                        key={`${draft.fileRelativePaths[index] || file.name}-${file.size}-${file.lastModified}-${index}`}
+                        name={draft.fileRelativePaths[index] || file.name}
                         type="File"
                         size={file.size}
                         onRemove={() =>
                           setDraft((current) => ({
                             ...current,
-                            files: current.files.filter((_, itemIndex) => itemIndex !== index)
+                            files: current.files.filter((_, itemIndex) => itemIndex !== index),
+                            fileRelativePaths: current.fileRelativePaths.filter((_, itemIndex) => itemIndex !== index)
                           }))
                         }
                       />
@@ -4067,13 +4965,38 @@ function CreateWorkspaceModal({
                   onChange={(event) => {
                     const files = Array.from(event.target.files || []);
                     if (files.length) {
-                      setDraft((current) => ({ ...current, files: [...current.files, ...files] }));
+                      setDraft((current) => ({
+                        ...current,
+                        files: [...current.files, ...files],
+                        fileRelativePaths: [...current.fileRelativePaths, ...files.map(() => '')]
+                      }));
+                    }
+                    event.target.value = '';
+                  }}
+                />
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files || []);
+                    if (files.length) {
+                      setDraft((current) => ({
+                        ...current,
+                        files: [...current.files, ...files],
+                        fileRelativePaths: [
+                          ...current.fileRelativePaths,
+                          ...files.map((file) => file.webkitRelativePath || file.name)
+                        ]
+                      }));
                     }
                     event.target.value = '';
                   }}
                 />
                 <div className="flex flex-wrap flex-row text-sm gap-1">
                   <KnowledgePill onClick={() => fileInputRef.current?.click()} icon={<OWArrowUpCircleIcon className="size-4" />} label="Upload Files" />
+                  <KnowledgePill onClick={() => folderInputRef.current?.click()} icon={<Folder className="size-4" />} label="Upload Folder" />
                   <KnowledgePill onClick={() => setKnowledgeDialog('web')} icon={<OWSearchIcon className="size-4" />} label="Search Web" />
                   <KnowledgePill onClick={() => setKnowledgeDialog('url')} icon={<OWGlobeAltIcon className="size-4" />} label="Paste URL" />
                   <KnowledgePill onClick={() => setKnowledgeDialog('text')} icon={<OWBarsArrowUpIcon className="size-4" />} label="Paste Text" />
@@ -4082,7 +5005,7 @@ function CreateWorkspaceModal({
                   {knowledgeSummary || 'Attach files, web pages, search topics, or pasted notes.'}
                 </p>
               </div>
-            </div>
+            </div> : null}
           </div>
           {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
         </div>
@@ -4092,13 +5015,13 @@ function CreateWorkspaceModal({
             Cancel
           </button>
           <button type="submit" disabled={!draft.name.trim() || loading} className="inline-flex h-9 items-center gap-2 rounded-full bg-black px-3.5 text-sm font-medium text-white transition hover:bg-gray-950 disabled:cursor-not-allowed disabled:opacity-50">
-            Save
+            {isEditMode ? 'Update' : 'Save'}
             {loading ? <Loader2 className="size-4 animate-spin" /> : null}
           </button>
         </div>
       </form>
 
-      <KnowledgeSourceDialog
+      {!isEditMode ? <KnowledgeSourceDialog
         type={knowledgeDialog}
         webQuery={draft.webQuery}
         urlDraft={urlDraft}
@@ -4125,7 +5048,7 @@ function CreateWorkspaceModal({
           }))
         }
         onAddSelectedWebSources={addSelectedWebSources}
-      />
+      /> : null}
     </div>
   );
 }

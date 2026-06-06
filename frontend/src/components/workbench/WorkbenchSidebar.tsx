@@ -1,40 +1,29 @@
 import {
   ChevronDown,
-  Code,
-  Ellipsis,
-  File,
   CheckCircle2,
-  FileText,
-  FileSpreadsheet,
-  FileCode2,
-  FileImage,
-  FileJson2,
-  FileVideo,
-  FileArchive,
-  FolderKanban,
-  FolderOpen,
-  Home,
-  Image,
-  LibraryBig,
-  MessageCirclePlus,
-  PencilLine,
-  Search,
   Target,
-  Upload,
-  WandSparkles
+  Upload
 } from 'lucide-react';
-import { PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useDrag, useDrop } from 'react-dnd';
-import { EditorState, ResourceReference, Workbench } from '../../types';
+import {
+  OpenWebUISidebarIcon,
+  OWDocumentPageIcon,
+  OWEllipsisHorizontalIcon,
+  OWPencilSquareIcon,
+  OWSearchIcon,
+  OWWorkspaceIcon
+} from '../common/openWebUIIcons';
+import { EditorState, ResourceReference } from '../../types';
 
 interface WorkbenchSidebarProps {
   editors: EditorState[];
   resources: ResourceReference[];
-  workbenches: Workbench[];
   plans?: WorkbenchSidebarPlan[];
   currentWorkbenchId: string;
   activeEditorId: string | null;
   currentWorkbenchTitle: string;
+  isExpanded: boolean;
   onActivateEditor: (editorId: string) => void;
   onResourceOpen: (resource: ResourceReference) => void;
   onNewChat: () => void;
@@ -45,9 +34,8 @@ interface WorkbenchSidebarProps {
   onSearch: () => void;
   onResourceDuplicate: (resource: ResourceReference) => void;
   onResourceDelete: (resource: ResourceReference) => void;
-  onResourceDropToPane: (resource: ResourceReference) => void;
   onResourceReorder: (orderedIds: string[]) => void;
-  onOpenWorkbench: (workbenchId: string) => void;
+  onToggleSidebar: () => void;
   onPlanStepStatusChange?: (
     planId: string,
     stepId: string,
@@ -67,9 +55,6 @@ interface WorkbenchSidebarProps {
     planId: string,
     feedback: { stepId?: string | null; category: 'too_hard' | 'too_easy' | 'blocked' | 'resource_mismatch' | 'replan' | 'other'; note?: string; rating?: number | null }
   ) => void | Promise<void>;
-  width: number;
-  onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  variant?: 'pinned' | 'preview';
 }
 
 interface WorkbenchSidebarPlan {
@@ -91,7 +76,8 @@ interface WorkbenchSidebarPlan {
 }
 
 type ResourceSectionKey = 'source' | 'workspace' | 'generated';
-type SidebarSectionState = Record<ResourceSectionKey, boolean>;
+type WorkbenchSidebarSectionKey = ResourceSectionKey | 'plans';
+type SidebarVisualState = 'collapsed' | 'opening' | 'expanded' | 'closing';
 type DragResourceItem = {
   type: 'WORKBENCH_RESOURCE';
   resourceId: string;
@@ -99,6 +85,7 @@ type DragResourceItem = {
 };
 
 const WORKBENCH_RESOURCE_ITEM_TYPE = 'WORKBENCH_RESOURCE';
+const SIDEBAR_SLIDE_MS = 250;
 
 const getResourceSection = (resource: ResourceReference): ResourceSectionKey => {
   const resourceType = (resource.resourceType || resource.type || '').toLowerCase();
@@ -118,56 +105,23 @@ const getResourceSection = (resource: ResourceReference): ResourceSectionKey => 
   return 'workspace';
 };
 
-const getResourceIcon = (resource: ResourceReference) => {
-  const extension = (resource.extension || resource.name.split('.').pop() || '').toLowerCase();
-  const section = getResourceSection(resource);
-
-  if (section === 'generated') return <FolderKanban className="h-4 w-4" />;
-  if (section === 'source' && resource.origin === 'web') return <LibraryBig className="h-4 w-4" />;
-  if (['ts', 'tsx', 'js', 'jsx', 'py', 'java', 'cpp', 'c', 'html', 'css', 'yaml', 'yml'].includes(extension)) return <FileCode2 className="h-4 w-4" />;
-  if (extension === 'json') return <FileJson2 className="h-4 w-4" />;
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(extension)) return <FileImage className="h-4 w-4" />;
-  if (['pdf'].includes(extension)) return <FileText className="h-4 w-4" />;
-  if (['csv', 'xlsx', 'xls', 'tsv'].includes(extension)) return <FileSpreadsheet className="h-4 w-4" />;
-  if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(extension)) return <FileVideo className="h-4 w-4" />;
-  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(extension)) return <FileArchive className="h-4 w-4" />;
-  if (['md', 'markdown', 'txt'].includes(extension) || resource.fileCategory?.includes('note')) {
-    return <FileText className="h-4 w-4" />;
-  }
-  if (section === 'source') return <LibraryBig className="h-4 w-4" />;
-  if (['xml', 'sql'].includes(extension)) return <Code className="h-4 w-4" />;
-  return <File className="h-4 w-4 text-[#8b8f95]" />;
+const formatFileSize = (size?: number) => {
+  if (!size) return '-';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 };
 
-const getResourceMeta = (resource: ResourceReference) => {
-  const extension = (resource.extension || resource.name.split('.').pop() || '').toLowerCase();
-  if (resource.origin === 'web') return 'Web source';
-  if (resource.origin === 'upload') return extension ? `Uploaded ${extension.toUpperCase()}` : 'Uploaded file';
-  if (resource.resourceType === 'generated') return 'AI generated';
+const getResourceSize = (resource: ResourceReference) => {
+  const value = (resource as ResourceReference & { size?: number }).size ?? resource.metadata?.size;
+  return typeof value === 'number' ? value : undefined;
+};
+
+const getResourceCapsuleType = (resource: ResourceReference, sectionKey: ResourceSectionKey) => {
+  if (sectionKey === 'source') return 'Source';
   if (resource.resourceType === 'note' || resource.fileCategory?.includes('note')) return 'Note';
-  return extension ? extension.toUpperCase() : resource.type;
-};
-
-const getSourceHost = (resource: ResourceReference) => {
-  const sourceUrl = String(resource.metadata?.sourceUrl || '');
-  if (!sourceUrl) return '';
-  try {
-    const parsed = new URL(sourceUrl);
-    return parsed.hostname.replace(/^www\./, '');
-  } catch {
-    return '';
-  }
-};
-
-const getFaviconUrl = (resource: ResourceReference) => {
-  const sourceUrl = String(resource.metadata?.sourceUrl || '');
-  if (!sourceUrl) return '';
-  try {
-    const parsed = new URL(sourceUrl);
-    return `https://www.google.com/s2/favicons?domain=${parsed.hostname}&sz=64`;
-  } catch {
-    return '';
-  }
+  if (sectionKey === 'generated') return 'Generated';
+  return 'File';
 };
 
 const formatPlanDate = (value?: string) => {
@@ -335,7 +289,6 @@ function safeStageList(value: unknown) {
 
 function ResourceRow({
   resource,
-  index,
   sectionKey,
   isActive,
   isMenuOpen,
@@ -349,7 +302,6 @@ function ResourceRow({
   onReorder
 }: {
   resource: ResourceReference;
-  index: number;
   sectionKey: ResourceSectionKey;
   isActive: boolean;
   isMenuOpen: boolean;
@@ -362,8 +314,8 @@ function ResourceRow({
   onResourceDelete: (resource: ResourceReference) => void;
   onReorder: (next: ResourceReference[]) => void;
 }) {
-  const faviconUrl = getFaviconUrl(resource);
-  const sourceHost = getSourceHost(resource);
+  const fileSize = getResourceSize(resource);
+  const capsuleType = getResourceCapsuleType(resource, sectionKey);
   const [{ isDragging }, dragRef] = useDrag<DragResourceItem, void, { isDragging: boolean }>(
     () => ({
       type: WORKBENCH_RESOURCE_ITEM_TYPE,
@@ -392,7 +344,7 @@ function ResourceRow({
 
   return (
     <div
-      className={`group/resource relative ${isDragging ? 'opacity-40' : 'opacity-100'}`}
+      className={`relative ${isDragging ? 'opacity-40' : 'opacity-100'}`}
       ref={(node) => {
         dragRef(node);
         dropRef(node);
@@ -404,27 +356,24 @@ function ResourceRow({
           if (hasOpenEditor) onActivateEditor();
           onResourceOpen(resource);
         }}
-        className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 ${
-          isActive ? 'bg-white text-[#202124]' : 'text-[#3d4147] hover:bg-white/70'
+        className={`relative group/resource w-full flex items-center gap-3 bg-white border border-gray-50/30 rounded-xl p-2 text-left ${
+          isActive ? 'ring-1 ring-gray-100' : ''
         }`}
       >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-[#8a8e94]">
-          {sectionKey === 'source' && faviconUrl ? (
-            <img src={faviconUrl} alt="" className="h-4 w-4 rounded-sm" />
-          ) : (
-            getResourceIcon(resource)
-          )}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium">{resource.name}</span>
-          <span className="block truncate text-[11px] text-[#9a9ea4]">
-            {sourceHost || getResourceMeta(resource)}
-          </span>
-        </span>
-        {hasOpenEditor ? (
-          <span className="shrink-0 text-[10px] font-medium text-[#9ba0a6]">Open</span>
-        ) : null}
-        <span className="shrink-0 text-[10px] text-[#b0b4bb]">{index + 1}</span>
+        <div className="pl-1.5">
+          <OWDocumentPageIcon className="size-4" />
+        </div>
+
+        <div className="flex flex-col justify-center -space-y-0.5 px-1 w-full min-w-0">
+          <div className="text-sm flex justify-between items-center">
+            <div className="font-medium line-clamp-1 flex-1 pr-1">{resource.name}</div>
+
+            <div className="text-gray-500 text-xs capitalize shrink-0">
+              {fileSize ? formatFileSize(fileSize) : capsuleType}
+            </div>
+          </div>
+        </div>
+        {hasOpenEditor ? <span className="sr-only">Open</span> : null}
       </button>
       <button
         type="button"
@@ -435,10 +384,11 @@ function ResourceRow({
           event.stopPropagation();
           onSetOpenResourceMenuId(isMenuOpen ? null : resource.id);
         }}
-        className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-md text-[#9a9ea4] opacity-0 transition-all duration-150 hover:bg-white hover:text-[#303338] group-hover/resource:opacity-100"
+        className="absolute -right-1 -top-1 rounded-full border border-gray-50 bg-white text-black invisible transition group-hover/resource:visible"
         title="More"
+        aria-label="More Options"
       >
-        <Ellipsis className="h-4 w-4" />
+        <OWEllipsisHorizontalIcon className="size-4" />
       </button>
       {isMenuOpen ? (
         <div
@@ -481,14 +431,24 @@ function ResourceRow({
   );
 }
 
+const getWorkbenchEmoji = (title: string) => {
+  const normalized = title.toLowerCase();
+  if (/sql|database|db|query|table|relation|关系|数据|表/.test(normalized)) return '🧮';
+  if (/code|program|算法|开发|工程|debug/.test(normalized)) return '💻';
+  if (/math|calculus|algebra|数学|代数/.test(normalized)) return '📐';
+  if (/read|paper|note|文献|阅读|笔记/.test(normalized)) return '📘';
+  if (/plan|roadmap|目标|计划/.test(normalized)) return '🎯';
+  if (/write|essay|draft|写作|论文/.test(normalized)) return '✍️';
+  return '✨';
+};
+
 export default function WorkbenchSidebar({
   editors,
   resources,
-  workbenches,
   plans = [],
-  currentWorkbenchId,
   activeEditorId,
   currentWorkbenchTitle,
+  isExpanded,
   onActivateEditor,
   onResourceOpen,
   onNewChat,
@@ -499,20 +459,15 @@ export default function WorkbenchSidebar({
   onSearch,
   onResourceDuplicate,
   onResourceDelete,
-  onResourceDropToPane,
   onResourceReorder,
-  onOpenWorkbench,
+  onToggleSidebar,
   onPlanStepStatusChange,
   onPlanAction,
   onPlanStepUpdate,
-  onPlanFeedback,
-  width,
-  onResizeStart,
-  variant = 'pinned'
+  onPlanFeedback
 }: WorkbenchSidebarProps) {
-  const [isWorkbenchMenuOpen, setIsWorkbenchMenuOpen] = useState(false);
-  const [isAiNewMenuOpen, setIsAiNewMenuOpen] = useState(false);
-  const [activeSection, setActiveSection] = useState<'home' | 'source' | 'workspace' | 'generated' | 'plans'>('home');
+  const [activeSection, setActiveSection] = useState<WorkbenchSidebarSectionKey>('source');
+  const [visualState, setVisualState] = useState<SidebarVisualState>(isExpanded ? 'expanded' : 'collapsed');
   const [openResourceMenuId, setOpenResourceMenuId] = useState<string | null>(null);
   const [openPlanStepMenuId, setOpenPlanStepMenuId] = useState<string | null>(null);
   const [openPlanActionMenu, setOpenPlanActionMenu] = useState(false);
@@ -521,7 +476,28 @@ export default function WorkbenchSidebar({
   const [planActionError, setPlanActionError] = useState<string | null>(null);
   const [expandedPlanStepId, setExpandedPlanStepId] = useState<string | null>(null);
   const [showArchivedSteps, setShowArchivedSteps] = useState(false);
-  const aiNewMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (isExpanded) {
+      setVisualState((current) => (current === 'expanded' ? current : 'opening'));
+      const timer = window.setTimeout(() => setVisualState('expanded'), SIDEBAR_SLIDE_MS);
+      return () => window.clearTimeout(timer);
+    }
+
+    setVisualState((current) => {
+      if (current === 'collapsed') return current;
+      return 'closing';
+    });
+    const timer = window.setTimeout(() => setVisualState('collapsed'), SIDEBAR_SLIDE_MS);
+    return () => window.clearTimeout(timer);
+  }, [isExpanded]);
+
+  useEffect(() => {
+    if (visualState !== 'closing') return;
+    setOpenResourceMenuId(null);
+    setOpenPlanActionMenu(false);
+    setOpenPlanStepMenuId(null);
+  }, [visualState]);
 
   useEffect(() => {
     if (!openResourceMenuId) return;
@@ -544,35 +520,17 @@ export default function WorkbenchSidebar({
     return () => window.removeEventListener('pointerdown', closeMenu);
   }, [openPlanActionMenu]);
 
-  useEffect(() => {
-    if (!isAiNewMenuOpen) return;
-    const closeMenu = (event: PointerEvent) => {
-      if (aiNewMenuRef.current?.contains(event.target as Node)) return;
-      setIsAiNewMenuOpen(false);
-    };
-    window.addEventListener('pointerdown', closeMenu);
-    return () => window.removeEventListener('pointerdown', closeMenu);
-  }, [isAiNewMenuOpen]);
-
-  const actionItems = [
-    { label: 'New note', icon: FileText, onClick: onNewNote },
-    { label: 'New plan', icon: Target, onClick: onNewPlan },
-    { label: 'New chat', icon: MessageCirclePlus, onClick: onNewChat }
-  ];
-  const isPreview = variant === 'preview';
   const resourceActionClass =
-    'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[#85898f] transition-all duration-200 ease-out hover:-translate-y-px hover:bg-white hover:text-[#25282d] hover:shadow-[0_5px_14px_rgba(0,0,0,0.07)]';
+    'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 hover:text-gray-900';
 
   const sectionTabs: Array<{
-    key: 'home' | 'source' | 'workspace' | 'generated' | 'plans';
+    key: WorkbenchSidebarSectionKey;
     title: string;
-    icon: typeof Home;
   }> = [
-    { key: 'home', title: 'Home', icon: Home },
-    { key: 'source', title: 'Sources', icon: LibraryBig },
-    { key: 'workspace', title: 'Files', icon: FolderOpen },
-    { key: 'generated', title: 'Generates', icon: FolderKanban },
-    { key: 'plans', title: 'Plans', icon: Target }
+    { key: 'source', title: 'Sources' },
+    { key: 'workspace', title: 'Files' },
+    { key: 'generated', title: 'Generates' },
+    { key: 'plans', title: 'Plans' }
   ];
 
   const resourceSections: Array<{
@@ -669,41 +627,10 @@ export default function WorkbenchSidebar({
       setPlanActionError(error?.message || 'Failed to record feedback.');
     }
   };
-  const shouldShowResourceSearch = activeSection === 'home' || activeSection === 'source';
-  const shouldShowChats = activeSection === 'home';
-  const resourcesBySection = resourceSections.reduce<Record<ResourceSectionKey, ResourceReference[]>>(
-    (groups, section) => {
-      groups[section.key] = resources
-        .filter((resource) => getResourceSection(resource) === section.key)
-        .sort((left, right) => left.name.localeCompare(right.name));
-      return groups;
-    },
-    { source: [], workspace: [], generated: [] }
-  );
+  const shouldShowResourceSearch = activeSection === 'source';
   const activeResourceId = activeEditorId
     ? editors.find((editor) => editor.id === activeEditorId)?.resourceId
     : null;
-  const [sectionState, setSectionState] = useState<SidebarSectionState>({
-    source: true,
-    workspace: true,
-    generated: true
-  });
-  const sectionStorageKey = `workbench:sidebar:sections:${currentWorkbenchId}`;
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(sectionStorageKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<SidebarSectionState>;
-      setSectionState((current) => ({
-        source: typeof parsed.source === 'boolean' ? parsed.source : current.source,
-        workspace: typeof parsed.workspace === 'boolean' ? parsed.workspace : current.workspace,
-        generated: typeof parsed.generated === 'boolean' ? parsed.generated : current.generated
-      }));
-    } catch {
-      // ignore invalid local sidebar state
-    }
-  }, [sectionStorageKey]);
 
   const [orderedResources, setOrderedResources] = useState<ResourceReference[]>([]);
   useEffect(() => {
@@ -716,15 +643,6 @@ export default function WorkbenchSidebar({
     },
     { source: [], workspace: [], generated: [] }
   );
-
-  const persistSectionState = (nextState: SidebarSectionState) => {
-    setSectionState(nextState);
-    try {
-      window.localStorage.setItem(sectionStorageKey, JSON.stringify(nextState));
-    } catch {
-      // ignore write failures
-    }
-  };
 
   const renderResourceList = (
     section: (typeof resourceSections)[number],
@@ -742,8 +660,8 @@ export default function WorkbenchSidebar({
     }
 
     return (
-      <div className="space-y-0.5">
-        {visibleResources.map((resource, index) => {
+      <div className="my-2 grid grid-cols-1 gap-2">
+        {visibleResources.map((resource) => {
           const boundEditor = editors.find((editor) => editor.resourceId === resource.id);
           const isActive = activeResourceId === resource.id;
 
@@ -751,7 +669,6 @@ export default function WorkbenchSidebar({
             <ResourceRow
               key={resource.id}
               resource={resource}
-              index={index}
               sectionKey={section.key}
               isActive={isActive}
               isMenuOpen={openResourceMenuId === resource.id}
@@ -784,148 +701,265 @@ export default function WorkbenchSidebar({
     );
   };
 
+  const workbenchEmoji = getWorkbenchEmoji(currentWorkbenchTitle);
+  const isExpandedSidebarVisible = visualState !== 'collapsed';
+  const shouldShowCollapsedRail = visualState === 'collapsed';
+  const shouldReserveExpandedWidth = visualState !== 'collapsed';
+  const sidebarSlideClass = visualState === 'closing' ? 'openwebui-sidebar-slide-out' : 'openwebui-sidebar-slide-in';
+  const shouldRenderExpandedContent = isExpandedSidebarVisible;
+
+  const collapsedRail = shouldShowCollapsedRail ? (
+      <div
+        className="z-10 flex h-full shrink-0 flex-col justify-between border-r-[0.5px] border-gray-50 bg-white px-2 pb-2 pt-[7px] text-black transition-all hover:bg-gray-50/30"
+        id="sidebar"
+      >
+        <div className="flex flex-col">
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            className="flex rounded-xl transition hover:bg-gray-100"
+            title="Open Sidebar"
+            aria-label="Open Sidebar"
+          >
+            <div className="flex size-9 items-center justify-center self-center">
+              <span className="flex size-6 translate-y-px items-center justify-center rounded-full bg-white text-[13px] leading-none text-gray-900 shadow-sm ring-1 ring-gray-200">
+                {workbenchEmoji}
+              </span>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={onNewChat}
+            className="flex rounded-xl transition hover:bg-gray-100"
+            title="New chat"
+            aria-label="New chat"
+          >
+            <div className="flex size-9 items-center justify-center self-center">
+              <OWPencilSquareIcon className="size-[1.125rem]" strokeWidth={2} />
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={onSearch}
+            className="flex rounded-xl transition hover:bg-gray-100"
+            title="Search"
+            aria-label="Search"
+          >
+            <div className="flex size-9 items-center justify-center self-center">
+              <OWSearchIcon className="size-[1.125rem]" strokeWidth={2} />
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={onNewNote}
+            className="flex rounded-xl transition hover:bg-gray-100"
+            title="New note"
+            aria-label="New note"
+          >
+            <div className="flex size-9 items-center justify-center self-center">
+              <OWDocumentPageIcon className="size-[1.125rem]" strokeWidth={2} />
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenAIStudio}
+            className="flex rounded-xl transition hover:bg-gray-100"
+            title="AI Studio"
+            aria-label="AI Studio"
+          >
+            <div className="flex size-9 items-center justify-center self-center">
+              <OWWorkspaceIcon className="size-[1.125rem]" strokeWidth={2} />
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={onNewPlan}
+            className="flex rounded-xl transition hover:bg-gray-100"
+            title="New plan"
+            aria-label="New plan"
+          >
+            <div className="flex size-9 items-center justify-center self-center">
+              <Target className="size-[1.125rem]" strokeWidth={2} />
+            </div>
+          </button>
+        </div>
+      </div>
+  ) : null;
+
   return (
-    <aside
-      className={`workspace-slide-right relative flex shrink-0 flex-col overflow-hidden border bg-[rgba(250,250,248,0.96)] backdrop-blur-xl transition-[width,box-shadow,background-color,border-color] duration-300 ease-out ${
-        isPreview
-          ? 'h-full rounded-xl border-[#dddcd7] shadow-[0_18px_44px_rgba(0,0,0,0.12)]'
-          : 'h-full rounded-none border-[#e2e1dc] shadow-none'
-      }`}
-      style={{ width }}
+    <div
+      className="relative z-50 h-full shrink-0 overflow-hidden"
+      style={{ width: shouldReserveExpandedWidth ? 292 : 56 }}
     >
-      {isWorkbenchMenuOpen && (
+    {collapsedRail}
+    {isExpandedSidebarVisible ? (
+    <aside
+      className={`openwebui-shell openwebui-sidebar ${sidebarSlideClass} absolute inset-y-0 left-0 my-auto flex h-full max-h-[100dvh] w-[292px] select-none flex-col justify-between overflow-x-hidden border-r-[0.5px] border-gray-50 bg-gray-50/70 text-sm text-gray-900`}
+      id="sidebar"
+      data-state={isExpanded}
+    >
+      {shouldRenderExpandedContent ? (
         <button
           type="button"
-          className="absolute inset-0 z-20 cursor-default"
-          onClick={() => setIsWorkbenchMenuOpen(false)}
-          aria-label="Close workbench menu"
-        />
-      )}
-
+          onClick={onToggleSidebar}
+          className="absolute right-[0.5625rem] top-2 z-30 flex size-[2.125rem] shrink-0 cursor-[w-resize] items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100/50 hover:text-gray-900"
+          title="Close Sidebar"
+          aria-label="Close Sidebar"
+        >
+          <div className="self-center p-1.5">
+            <OpenWebUISidebarIcon className="size-5" />
+          </div>
+        </button>
+      ) : null}
       <div className="relative z-10 min-h-0 flex-1 overflow-hidden">
-        <div className="flex h-full min-h-0 flex-col overflow-hidden px-3 py-3">
-          <div className="relative mb-3">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden pb-2 pt-[7px]">
+          <div
+            className={`sidebar sticky top-0 z-10 flex min-h-12 w-full shrink-0 justify-between space-x-1 px-[0.5625rem] pb-1.5 pt-2 text-gray-600 ${
+              shouldRenderExpandedContent ? '-mb-3 pr-12' : 'mb-0'
+            }`}
+          >
             <button
               type="button"
-              onClick={() => setIsWorkbenchMenuOpen((value) => !value)}
-              className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-all duration-200 ease-out hover:bg-white/75 hover:shadow-[0_7px_24px_rgba(0,0,0,0.045)]"
+              onClick={onToggleSidebar}
+              className="no-drag-region flex h-[2.125rem] w-[2.125rem] shrink-0 items-center justify-center rounded-xl transition hover:bg-gray-100/50"
+              title={shouldRenderExpandedContent ? currentWorkbenchTitle : 'Open Sidebar'}
+              aria-label={shouldRenderExpandedContent ? currentWorkbenchTitle : 'Open Sidebar'}
             >
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#f0efea] text-[#686c72]">
-                <FileText className="h-4 w-4" />
-              </div>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-semibold text-[#2b2f33]">
+              <span className="flex size-6 translate-y-px items-center justify-center rounded-full bg-white text-[13px] leading-none text-gray-900 shadow-sm ring-1 ring-gray-200">
+                {workbenchEmoji}
+              </span>
+            </button>
+
+            {shouldRenderExpandedContent ? (
+              <div
+                className="flex min-w-0 flex-1 px-0.5 text-left"
+                title={currentWorkbenchTitle}
+              >
+                <span id="sidebar-webui-name" className="self-center truncate font-primary font-medium text-gray-850">
                   {currentWorkbenchTitle}
                 </span>
-                <span className="block truncate text-xs text-[#95989d]">
-                  Switch workbench
-                </span>
-              </span>
-              <ChevronDown
-                className={`h-4 w-4 shrink-0 text-[#8f9399] transition-transform ${
-                  isWorkbenchMenuOpen ? 'rotate-180' : ''
-                }`}
-              />
-            </button>
-
-            {isWorkbenchMenuOpen && (
-              <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-[#e5e4de] bg-white p-1.5 shadow-[0_24px_60px_rgba(0,0,0,0.14)]">
-                {workbenches.map((item) => {
-                  const isCurrent = item.id === currentWorkbenchId;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setIsWorkbenchMenuOpen(false);
-                        if (!isCurrent) onOpenWorkbench(item.id);
-                      }}
-                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-all duration-200 ease-out ${
-                      isCurrent ? 'bg-[#f3f2ee]' : 'hover:bg-[#f7f7f5]'
-                    }`}
-                    >
-                      <FileText className="h-4 w-4 shrink-0 text-[#8e9298]" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-[#2b2f33]">
-                          {item.title}
-                        </span>
-                        <span className="block truncate text-xs text-[#9a9da2]">
-                          {item.panelCount ?? item.state?.editors?.length ?? 0} tabs
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
               </div>
-            )}
+            ) : null}
+
+            <div className="sidebar-bg-gradient-to-b pointer-events-none invisible absolute inset-0 -z-10 -mb-6 bg-gradient-to-b from-gray-50/70 from-50% to-transparent" />
           </div>
 
-          <section className="mb-3 flex shrink-0 items-center gap-1 px-1">
-            <div className="flex min-w-0 flex-1 items-center justify-start gap-1">
-              {sectionTabs.map((section) => {
-                const Icon = section.icon;
-                const isActive = activeSection === section.key;
-                return (
+          {shouldRenderExpandedContent ? (
+            <>
+              <div className="pb-1.5">
+                <div className="px-[0.4375rem] flex justify-center text-gray-800">
                   <button
-                    key={section.key}
                     type="button"
-                    onClick={() => setActiveSection(section.key)}
-                    className={`flex h-9 items-center justify-center overflow-hidden rounded-xl transition-all duration-300 ease-out ${
-                      isActive
-                        ? 'w-[104px] bg-white px-3 text-[#202124] shadow-[0_8px_24px_rgba(0,0,0,0.07)]'
-                        : 'w-9 px-0 text-[#7a7e84] hover:bg-white/70 hover:text-[#202124]'
-                    }`}
-                    title={section.title}
+                    onClick={onNewChat}
+                    className="group flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left outline-none transition hover:bg-gray-100"
+                    aria-label="New chat"
                   >
-                    <Icon className="h-4 w-4 shrink-0" />
-                    <span
-                      className={`whitespace-nowrap text-sm font-semibold transition-all duration-300 ease-out ${
-                        isActive ? 'ml-2 max-w-[72px] opacity-100' : 'ml-0 max-w-0 opacity-0'
-                      }`}
-                    >
-                      {section.title}
-                    </span>
+                    <div className="self-center">
+                      <OWPencilSquareIcon className="size-[1.125rem]" strokeWidth={2} />
+                    </div>
+                    <div className="flex flex-1 self-center translate-y-[0.5px]">
+                      <div className="self-center font-primary text-sm">New Chat</div>
+                    </div>
                   </button>
-                );
-              })}
-            </div>
-            <button
-              type="button"
-              onClick={onSearch}
-              className="ml-auto inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[#7a7e84] transition-all duration-200 ease-out hover:bg-white/70 hover:text-[#202124]"
-              title="Search"
-            >
-              <Search className="h-4 w-4" />
-            </button>
-          </section>
+                </div>
 
-          {activeSection === 'home' && (
-            <nav className="space-y-1">
-              {actionItems.map((item) => {
-                const Icon = item.icon;
-                return (
+                <div className="px-[0.4375rem] flex justify-center text-gray-800">
                   <button
-                    key={item.label}
-                    onClick={item.onClick}
-                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-[#464a50] transition-all duration-200 ease-out hover:translate-x-0.5 hover:bg-white/75"
+                    type="button"
+                    onClick={onSearch}
+                    className="group flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left outline-none transition hover:bg-gray-100"
+                    aria-label="Search"
                   >
-                    <Icon className="h-4 w-4 text-[#74787e]" />
-                    {item.label}
+                    <div className="self-center">
+                      <OWSearchIcon className="size-[1.125rem]" strokeWidth={2} />
+                    </div>
+                    <div className="flex flex-1 self-center translate-y-[0.5px]">
+                      <div className="self-center font-primary text-sm">Search</div>
+                    </div>
                   </button>
-                );
-              })}
-            </nav>
-          )}
+                </div>
 
-          <section className="mt-3 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden pb-3">
+                <div className="px-[0.4375rem] flex justify-center text-gray-800">
+                  <button
+                    type="button"
+                    onClick={onNewNote}
+                    className="flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left transition hover:bg-gray-100"
+                    aria-label="New note"
+                  >
+                    <div className="self-center">
+                      <OWDocumentPageIcon className="size-[1.125rem]" strokeWidth={2} />
+                    </div>
+                    <div className="flex flex-1 self-center translate-y-[0.5px]">
+                      <div className="self-center font-primary text-sm">Notes</div>
+                    </div>
+                  </button>
+                </div>
+
+                <div className="px-[0.4375rem] flex justify-center text-gray-800">
+                  <button
+                    type="button"
+                    onClick={onOpenAIStudio}
+                    className="flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left transition hover:bg-gray-100"
+                    aria-label="AI Studio"
+                  >
+                    <div className="self-center">
+                      <OWWorkspaceIcon className="size-[1.125rem]" strokeWidth={2} />
+                    </div>
+                    <div className="flex flex-1 self-center translate-y-[0.5px]">
+                      <div className="self-center font-primary text-sm">AI Studio</div>
+                    </div>
+                  </button>
+                </div>
+
+                <div className="px-[0.4375rem] flex justify-center text-gray-800">
+                  <button
+                    type="button"
+                    onClick={onNewPlan}
+                    className="flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left transition hover:bg-gray-100"
+                    aria-label="New plan"
+                  >
+                    <div className="self-center">
+                      <Target className="size-[1.125rem]" strokeWidth={2} />
+                    </div>
+                    <div className="flex flex-1 self-center translate-y-[0.5px]">
+                      <div className="self-center font-primary text-sm">New Plan</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <section className="mb-3 flex shrink-0 items-center gap-1 px-[0.4375rem] pt-1">
+                <div className="flex gap-1 scrollbar-none overflow-x-auto w-fit text-center text-sm font-medium rounded-full bg-transparent py-1 touch-auto pointer-events-auto">
+                  {sectionTabs.map((section) => {
+                    const isActive = activeSection === section.key;
+                    return (
+                      <button
+                        key={section.key}
+                        type="button"
+                        onClick={() => setActiveSection(section.key)}
+                        aria-current={isActive ? 'page' : undefined}
+                        className={`min-w-fit p-1.5 ${isActive ? '' : 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none`}
+                        title={section.title}
+                      >
+                        {section.title}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            </>
+          ) : null}
+
+          {shouldRenderExpandedContent ? (
+          <section className="mt-2 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden pb-3">
             {shouldShowResourceSearch && (
-            <div className="px-1">
+            <div className="px-[0.4375rem]">
               <button
                 type="button"
                 onClick={onUploadResources}
                 className="flex h-10 w-full items-center gap-2 rounded-xl border border-[#e7e6e1] bg-white/80 px-3 text-left text-sm text-[#666b72] transition-all duration-200 ease-out hover:-translate-y-px hover:border-[#d9d8d2] hover:bg-white hover:shadow-[0_8px_22px_rgba(0,0,0,0.055)]"
               >
-                <Search className="h-4 w-4 text-[#8a8e94]" />
+                <OWSearchIcon className="h-4 w-4 text-[#8a8e94]" strokeWidth={2} />
                 <span className="min-w-0 flex-1 truncate">Search or upload resources</span>
                 <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[#7f8388] hover:bg-[#f3f2ee]">
                   <Upload className="h-4 w-4" />
@@ -934,46 +968,9 @@ export default function WorkbenchSidebar({
             </div>
             )}
 
-            {activeSection === 'home' && (
-              <div className="min-h-0 px-1">
-                <div className="space-y-0.5">
-                  {resourceSections.map((section) => {
-                    const count = resourcesBySection[section.key].length;
-                    const expanded = sectionState[section.key];
-                    return (
-                      <div key={section.key} className="min-w-0">
-                        <div className="group flex items-center rounded-lg hover:bg-white/60">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const next = { ...sectionState, [section.key]: !expanded };
-                              persistSectionState(next);
-                            }}
-                            className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] text-[#4a4e54]"
-                          >
-                            <ChevronDown className={`h-3.5 w-3.5 text-[#9ba0a6] transition-transform ${expanded ? '' : '-rotate-90'}`} />
-                            {section.key === 'source' ? (
-                              <LibraryBig className="h-4 w-4 text-[#74787e]" />
-                            ) : section.key === 'workspace' ? (
-                              <FolderOpen className="h-4 w-4 text-[#74787e]" />
-                            ) : (
-                              <FolderKanban className="h-4 w-4 text-[#74787e]" />
-                            )}
-                            <span className="min-w-0 flex-1 truncate">{section.title}</span>
-                            <span className="text-[11px] font-medium text-[#98a0a8]">{count}</span>
-                          </button>
-                        </div>
-                        {expanded ? <div className="pl-5">{renderResourceList(section, { compact: false })}</div> : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
             {activeResourceSection && (
-              <div className="flex min-h-0 flex-col overflow-visible px-1">
-                <div className="mb-2 flex items-center justify-between px-2">
+              <div className="flex min-h-0 flex-col overflow-visible px-[0.4375rem]">
+                <div className="mb-2 flex items-center justify-between px-2.5">
                   <h2 className="text-sm font-medium text-[#464a50]">{activeResourceSection.title}</h2>
                   {activeResourceSection.key === 'source' ? (
                     <button
@@ -1315,57 +1312,11 @@ export default function WorkbenchSidebar({
             )}
 
           </section>
-
-          {shouldShowChats && (
-            <div ref={aiNewMenuRef} className="relative shrink-0 border-t border-[#ecebe6] px-1 pt-3">
-              {isAiNewMenuOpen ? (
-                <div className="absolute bottom-[58px] left-1 right-1 z-30 overflow-hidden rounded-2xl border border-[#e5e4de] bg-white p-1.5 shadow-[0_18px_46px_rgba(0,0,0,0.14)]">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsAiNewMenuOpen(false);
-                      onNewChat();
-                    }}
-                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-[#3f4247] transition hover:bg-[#f6f6f4]"
-                  >
-                    <MessageCirclePlus className="h-4 w-4 text-[#6f7379]" />
-                    New chat
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsAiNewMenuOpen(false);
-                      onOpenAIStudio();
-                    }}
-                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-[#3f4247] transition hover:bg-[#f6f6f4]"
-                  >
-                    <WandSparkles className="h-4 w-4 text-[#6f7379]" />
-                    AI Studio
-                  </button>
-                </div>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => setIsAiNewMenuOpen((value) => !value)}
-                className="flex h-12 w-full items-center justify-center gap-3 rounded-2xl border border-[#e0dfda] bg-white text-sm font-semibold text-[#3f4247] shadow-[0_8px_28px_rgba(0,0,0,0.06)] transition-all duration-200 ease-out hover:-translate-y-px hover:bg-[#fbfbfa] hover:shadow-[0_12px_32px_rgba(0,0,0,0.08)]"
-                title="New"
-              >
-                <PencilLine className="h-4 w-4 text-[#6f7379]" />
-                New
-                <span className="rounded-lg bg-[#f0efed] px-1.5 py-0.5 text-xs font-semibold text-[#8a8e94]">
-                  AI
-                </span>
-              </button>
-            </div>
-          )}
+          ) : null}
         </div>
       </div>
-
-      <div
-        className="absolute right-0 top-0 h-full w-2 cursor-col-resize bg-transparent"
-        onPointerDown={onResizeStart}
-        title="Resize sidebar"
-      />
     </aside>
+    ) : null}
+    </div>
   );
 }

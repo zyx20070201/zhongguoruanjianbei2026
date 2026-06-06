@@ -114,6 +114,31 @@ body {
   color: #ffffff;
 }
 
+.pdfViewer .textLayer ::selection {
+  background: rgba(90, 166, 255, 0.35);
+  color: transparent;
+}
+
+.pdfViewer .textLayer ::-moz-selection {
+  background: rgba(90, 166, 255, 0.35);
+  color: transparent;
+}
+
+.pdfViewer,
+.pdfViewer .page,
+.pdfViewer .canvasWrapper,
+.pdfViewer .textLayer,
+.pdfViewer .textLayer *,
+.pdfViewer canvas {
+  box-sizing: content-box;
+}
+
+.pdfViewer .textLayer,
+.pdfViewer .textLayer * {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 @keyframes workspace-fade-up {
   from {
     opacity: 0;
@@ -135,6 +160,28 @@ body {
   to {
     opacity: 1;
     transform: translateX(0);
+  }
+}
+
+@keyframes openwebui-sidebar-slide-x-in {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes openwebui-sidebar-slide-x-out {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(-100%);
+    opacity: 0;
   }
 }
 
@@ -183,6 +230,30 @@ body {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes openwebui-fly-and-scale {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0) scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes openwebui-folder-dropdown-unfold {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0) scaleY(0.92);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scaleY(1);
   }
 }
 
@@ -427,14 +498,103 @@ body {
   font-family: 'Archivo', 'Vazirmatn', sans-serif;
 }
 
+.font-primary {
+  font-family: 'Archivo', 'Vazirmatn', sans-serif;
+}
+
 .openwebui-shell .text-gray-850 {
   color: #050505;
+}
+
+.w-70 {
+  width: 17.5rem;
+}
+
+.w-50 {
+  width: 12.5rem;
+}
+
+@media (min-width: 768px) {
+  .md\:w-50 {
+    width: 12.5rem;
+  }
+}
+
+.outline-hidden {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.bg-linear-to-t {
+  background-image: linear-gradient(to top, var(--tw-gradient-stops));
+}
+
+.rounded-4xl {
+  border-radius: 2rem;
+}
+
+.shadow-3xl {
+  box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+}
+
+.size-4\.5 {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.size-5\.5 {
+  width: 1.375rem;
+  height: 1.375rem;
+}
+
+.size-8\.5 {
+  width: 2.125rem;
+  height: 2.125rem;
+}
+
+.size-14 {
+  width: 3.5rem;
+  height: 3.5rem;
+}
+
+@media (min-width: 768px) {
+  .md\:size-18 {
+    width: 4.5rem;
+    height: 4.5rem;
+  }
+}
+
+.dark .dark\:bg-gray-850 {
+  background-color: #1f1f1f;
+}
+
+.bg-gray-850 {
+  background-color: #1f1f1f;
+}
+
+.hover\:bg-gray-850:hover {
+  background-color: #1f1f1f;
+}
+
+.dark .dark\:border-gray-850 {
+  border-color: #1f1f1f;
 }
 
 .openwebui-shell .sidebar {
   background: transparent;
   border: 0;
   box-shadow: none;
+}
+
+.openwebui-sidebar-slide-in {
+  animation: openwebui-sidebar-slide-x-in 250ms cubic-bezier(0.33, 1, 0.68, 1) both;
+  will-change: transform, opacity;
+}
+
+.openwebui-sidebar-slide-out {
+  animation: openwebui-sidebar-slide-x-out 250ms cubic-bezier(0.33, 1, 0.68, 1) both;
+  pointer-events: none;
+  will-change: transform, opacity;
 }
 
 .openwebui-shell #sidebar-chat-item {
@@ -836,6 +996,34 @@ body {
   border: 1px solid #f0c5bd;
   background: #fff1ef;
   color: #9b4334;
+}
+
+.openwebui-sensitive-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.openwebui-sensitive-input input {
+  padding-right: 2rem;
+}
+
+.openwebui-sensitive-toggle {
+  position: absolute;
+  right: 0;
+  display: inline-flex;
+  height: 1.5rem;
+  width: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  color: #6b7280;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.openwebui-sensitive-toggle:hover {
+  background-color: rgba(55, 65, 81, 0.06);
+  color: #111827;
 }
 
 @media (max-width: 640px) {

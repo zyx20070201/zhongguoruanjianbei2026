@@ -21,6 +21,22 @@ export const authApi = {
     return response.data.user;
   },
 
+  updateProfile: async (data: {
+    name: string;
+    profileImageUrl?: string | null;
+    bio?: string | null;
+    gender?: string | null;
+    dateOfBirth?: string | null;
+    notificationWebhookUrl?: string | null;
+  }): Promise<User> => {
+    const response = await client.put('/auth/profile', data);
+    return response.data.user;
+  },
+
+  updatePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+    await client.put('/auth/password', { currentPassword, newPassword });
+  },
+
   logout: async (): Promise<void> => {
     await client.post('/auth/logout');
   }

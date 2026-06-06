@@ -17,7 +17,12 @@ const statements = [
 
 const userColumns = [
   ['emailVerifiedAt', 'DATETIME'],
-  ['passwordChangedAt', 'DATETIME']
+  ['passwordChangedAt', 'DATETIME'],
+  ['profileImageUrl', 'TEXT'],
+  ['bio', 'TEXT'],
+  ['gender', 'TEXT'],
+  ['dateOfBirth', 'TEXT'],
+  ['notificationWebhookUrl', 'TEXT']
 ] as const;
 
 export const ensureAuthSecuritySchema = async () => {

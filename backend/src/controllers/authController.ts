@@ -7,12 +7,45 @@ import { clearAuthCookie, getAuthCookieValue, setAuthCookie } from '../middlewar
 import { hashPassword, verifyPassword } from '../utils/password';
 
 const isValidUsername = (value: string) => /^[A-Za-z0-9_]{3,24}$/.test(value);
+const nullableString = (value: unknown, maxLength: number) => {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  return text.slice(0, maxLength);
+};
 
-const toSafeUser = (user: { id: string; username: string; email: string | null }) => ({
+type SafeUserRow = {
+  id: string;
+  username: string;
+  email: string | null;
+  profileImageUrl?: string | null;
+  bio?: string | null;
+  gender?: string | null;
+  dateOfBirth?: string | null;
+  notificationWebhookUrl?: string | null;
+};
+
+const toSafeUser = (user: SafeUserRow) => ({
   id: user.id,
   username: user.username,
-  email: user.email
+  email: user.email,
+  profileImageUrl: user.profileImageUrl ?? null,
+  bio: user.bio ?? null,
+  gender: user.gender ?? null,
+  dateOfBirth: user.dateOfBirth ?? null,
+  notificationWebhookUrl: user.notificationWebhookUrl ?? null
 });
+
+const getSafeUserById = async (userId: string) => {
+  const users = await prisma.$queryRaw<SafeUserRow[]>`
+    SELECT "id", "username", "email", "profileImageUrl", "bio", "gender", "dateOfBirth", "notificationWebhookUrl"
+    FROM "User"
+    WHERE "id" = ${userId}
+    LIMIT 1
+  `;
+  return users[0] ? toSafeUser(users[0]) : null;
+};
+
 export const register = async (req: Request, res: Response) => {
   const { username, email, password } = req.body;
 
@@ -58,7 +91,7 @@ export const register = async (req: Request, res: Response) => {
   const session = authSessionService.create(user.id);
   setAuthCookie(res, session.id, session.expiresAt);
 
-  res.status(201).json({ user: toSafeUser(user) });
+  res.status(201).json({ user: await getSafeUserById(user.id) });
 };
 
 export const login = async (req: Request, res: Response) => {
@@ -84,7 +117,7 @@ export const login = async (req: Request, res: Response) => {
   const session = authSessionService.create(user.id);
   setAuthCookie(res, session.id, session.expiresAt);
 
-  res.json({ user: toSafeUser(user) });
+  res.json({ user: await getSafeUserById(user.id) });
 };
 
 export const getCurrentUser = async (req: Request, res: Response) => {
@@ -92,14 +125,85 @@ export const getCurrentUser = async (req: Request, res: Response) => {
     throw unauthorized();
   }
 
-  const users = await prisma.$queryRaw<Array<{ id: string; username: string; email: string | null }>>`
-    SELECT "id", "username", "email"
-    FROM "User"
+  const user = await getSafeUserById(req.authUser.id);
+
+  res.json({ user: user || toSafeUser(req.authUser) });
+};
+
+export const updateUserProfile = async (req: Request, res: Response) => {
+  if (!req.authUser) {
+    throw unauthorized();
+  }
+
+  const name = nullableString(req.body?.name ?? req.body?.username, 64);
+  if (!name) {
+    throw badRequest('请填写用户名');
+  }
+  if (!isValidUsername(name)) {
+    throw badRequest('用户名需为 3-24 位，只能包含字母、数字或下划线', 'INVALID_USERNAME');
+  }
+
+  const existingUser = await prisma.user.findFirst({
+    where: {
+      username: name,
+      NOT: { id: req.authUser.id }
+    }
+  });
+  if (existingUser) {
+    throw conflict('用户名已被使用', 'USERNAME_EXISTS');
+  }
+
+  const profileImageUrl = nullableString(req.body?.profileImageUrl ?? req.body?.profile_image_url, 2_000_000);
+  const bio = nullableString(req.body?.bio, 5000);
+  const gender = nullableString(req.body?.gender, 120);
+  const dateOfBirth = nullableString(req.body?.dateOfBirth ?? req.body?.date_of_birth, 32);
+  const notificationWebhookUrl = nullableString(
+    req.body?.notificationWebhookUrl ?? req.body?.notification_webhook_url,
+    2048
+  );
+
+  await prisma.$executeRaw`
+    UPDATE "User"
+    SET
+      "username" = ${name},
+      "profileImageUrl" = ${profileImageUrl},
+      "bio" = ${bio},
+      "gender" = ${gender},
+      "dateOfBirth" = ${dateOfBirth},
+      "notificationWebhookUrl" = ${notificationWebhookUrl},
+      "updatedAt" = CURRENT_TIMESTAMP
     WHERE "id" = ${req.authUser.id}
-    LIMIT 1
   `;
 
-  res.json({ user: toSafeUser(users[0] || req.authUser) });
+  res.json({ user: await getSafeUserById(req.authUser.id) });
+};
+
+export const updateUserPassword = async (req: Request, res: Response) => {
+  if (!req.authUser) {
+    throw unauthorized();
+  }
+
+  const currentPassword = String(req.body?.currentPassword ?? '');
+  const newPassword = String(req.body?.newPassword ?? '');
+  if (!currentPassword || !newPassword) {
+    throw badRequest('请填写当前密码和新密码');
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: req.authUser.id } });
+  if (!user || !verifyPassword(currentPassword, user.password)) {
+    throw unauthorized('当前密码错误', 'INVALID_CURRENT_PASSWORD');
+  }
+
+  validatePasswordStrength(newPassword);
+  await prisma.user.update({
+    where: { id: req.authUser.id },
+    data: {
+      password: hashPassword(newPassword),
+      passwordChangedAt: new Date()
+    }
+  });
+
+  res.json({ success: true });
 };
 
 export const logout = async (req: Request, res: Response) => {

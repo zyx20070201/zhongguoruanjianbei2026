@@ -119,6 +119,16 @@ const CONTEXT_MEMORY_CACHE_TTL_MS = Number(process.env.AI_CONTEXT_MEMORY_CACHE_T
 const CONTEXT_HISTORY_CACHE_TTL_MS = Number(process.env.AI_CONTEXT_HISTORY_CACHE_TTL_MS || 45_000);
 const CONTEXT_LEARNER_CACHE_TTL_MS = Number(process.env.AI_CONTEXT_LEARNER_CACHE_TTL_MS || 60_000);
 
+const isAbortError = (error: unknown) =>
+  Boolean(error && typeof error === 'object' && (error as any).name === 'AbortError');
+
+const throwIfAborted = (signal?: AbortSignal) => {
+  if (!signal?.aborted) return;
+  const error = new Error('AI stream aborted');
+  error.name = 'AbortError';
+  throw error;
+};
+
 const savedMemoryContextCache = new Map<string, ContextCacheEntry<string>>();
 const retrievedHistoryCache = new Map<string, ContextCacheEntry<RetrievedConversationMemory[]>>();
 const learnerContextCache = new Map<string, ContextCacheEntry<LearnerStateAgentContext>>();
@@ -959,7 +969,9 @@ class ExplainAgent {
     taskType: TaskType;
     context: BuiltContext;
     retrievedChunks: RetrievedChunk[];
+    signal?: AbortSignal;
   }): AsyncGenerator<string> {
+    throwIfAborted(input.signal);
     if (!aiModelProviderService.isConfigured({ useCase: 'chat' })) {
       yield await this.answer(input);
       return;
@@ -1016,7 +1028,11 @@ class ExplainAgent {
       `资料片段:\n${sourceText || '无可用资料片段'}`
     ].join('\n');
 
-    for await (const delta of aiModelProviderService.chatStream([{ role: 'user', content: prompt }], chatModelOptions(input.context))) {
+    for await (const delta of aiModelProviderService.chatStream([{ role: 'user', content: prompt }], {
+      ...chatModelOptions(input.context),
+      signal: input.signal
+    })) {
+      throwIfAborted(input.signal);
       yield delta;
     }
   }
@@ -1039,12 +1055,17 @@ class QualityAgent {
     const answer = input.answer.trim();
     const isModelKnowledge = input.context.capsule.mode === 'model_knowledge';
     const hasSources = /来源|source|文件|第\s*\d+\s*页|行\s*\d+/i.test(answer);
-    const hasGrounding = input.retrievedChunks.length > 0;
     const hasViewportIntent = /这里|这段|这一页|这页|这个表格|这段代码|当前可见/i.test(input.query);
     const viewportContent = input.context.capsule.viewport?.content?.trim() || '';
     const selectionContent = input.context.capsule.selection?.content?.trim() || '';
+    const groundingText = [
+      selectionContent,
+      viewportContent,
+      input.retrievedChunks.map((chunk) => chunk.content).join('\n')
+    ].filter(Boolean).join('\n');
+    const hasGrounding = Boolean(groundingText.trim());
     const hasPriorityContext = Boolean(selectionContent || viewportContent);
-    const materialTerms = new Set(contentTerms(input.retrievedChunks.map((chunk) => chunk.content).join('\n')));
+    const materialTerms = new Set(contentTerms(groundingText));
     const answerTerms = contentTerms(answer);
     const overlap = answerTerms.filter((term) => materialTerms.has(term)).length;
 
@@ -1282,8 +1303,10 @@ export class MultiAgentOrchestrator {
 
   async chatStream(
     input: { messages: ChatMessage[]; context: ClientWorkbenchContext },
-    emit: (event: string, data: unknown) => void
+    emit: (event: string, data: unknown) => void,
+    options: { signal?: AbortSignal } = {}
   ) {
+    throwIfAborted(options.signal);
     const query = latestUserMessage(input.messages);
     if (!query) throw new Error('At least one user message is required');
 
@@ -1357,7 +1380,8 @@ export class MultiAgentOrchestrator {
       });
       let answer = '';
       try {
-        for await (const delta of this.explainAgent.answerStream({ query, taskType, context, retrievedChunks })) {
+        for await (const delta of this.explainAgent.answerStream({ query, taskType, context, retrievedChunks, signal: options.signal })) {
+          throwIfAborted(options.signal);
           answer += delta;
           emit('delta', delta);
         }
@@ -1372,9 +1396,11 @@ export class MultiAgentOrchestrator {
           durationMs
         });
       } catch (error) {
+        if (options.signal?.aborted || isAbortError(error)) throw error;
         await learningRunService.failStep(explainStep.id, error);
         throw error;
       }
+      throwIfAborted(options.signal);
       const strippedAnswer = stripUnrequestedSelfCheck(answer, query);
       if (strippedAnswer !== answer) {
         emit('replace', strippedAnswer);
@@ -1382,6 +1408,7 @@ export class MultiAgentOrchestrator {
       }
       emit('timeline', logger.getTimeline());
 
+      throwIfAborted(options.signal);
       const quality = await logger.step(
         'QualityAgent',
         '检查依据、跑题、来源、幻觉与练习泄露风险',
@@ -1545,6 +1572,7 @@ export class MultiAgentOrchestrator {
       })();
       return result;
     } catch (error) {
+      if (options.signal?.aborted || isAbortError(error)) return undefined as any;
       await learningRunService.failRun(run.id, error);
       throw error;
     }

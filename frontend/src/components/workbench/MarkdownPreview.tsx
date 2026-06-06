@@ -84,7 +84,7 @@ const renderInline = (
           className={
             isMessage
               ? 'rounded-md bg-gray-100 px-1 py-0.5 font-mono text-[0.875em] text-gray-900'
-              : 'rounded bg-[var(--wb-sidebar-alt)] px-1.5 py-0.5 font-mono text-[0.92em] text-[#d7e7ff]'
+              : 'rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[0.92em] text-[#25272b]'
           }
         >
           {part.slice(1, -1)}
@@ -150,7 +150,7 @@ function CodeBlock({
     <div
       data-md-block={blockIndex}
       className={`group overflow-hidden rounded-xl border ${
-        isMessage ? 'border-gray-100 bg-gray-50' : 'border-[var(--wb-border)] bg-[var(--wb-panel)]'
+        isMessage ? 'border-gray-100 bg-gray-50' : 'border-[#eeeeeb] bg-white'
       } ${highlighted ? 'ring-1 ring-[#d3a900]/30' : ''}`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-black/5 px-3 py-2">
@@ -191,7 +191,7 @@ function CodeBlock({
             spellCheck={false}
           />
         ) : (
-          <pre className={`${isMessage ? 'text-gray-900' : 'text-[#d7e7ff]'} overflow-x-auto p-3 font-mono text-xs leading-5`}>
+          <pre className={`${isMessage ? 'text-gray-900' : 'text-[#25272b]'} overflow-x-auto p-3 font-mono text-xs leading-5`}>
             <code dangerouslySetInnerHTML={{ __html: escapeHtml(value) }} />
           </pre>
         )
@@ -436,7 +436,7 @@ export default function MarkdownPreview({
       className={
         isMessage
           ? 'openwebui-markdown flex flex-col gap-3 text-gray-900'
-          : 'h-full overflow-auto bg-[var(--wb-editor)] p-6'
+          : 'h-full overflow-auto bg-white p-6'
       }
       onScroll={reportViewport}
       onMouseEnter={reportViewport}

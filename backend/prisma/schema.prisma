@@ -16,6 +16,11 @@ model User {
   username  String   @unique
   email     String?  @unique
   password  String // In real app, hashed
+  profileImageUrl String?
+  bio       String?
+  gender    String?
+  dateOfBirth String?
+  notificationWebhookUrl String?
   emailVerifiedAt DateTime?
   passwordChangedAt DateTime?
   createdAt DateTime @default(now())

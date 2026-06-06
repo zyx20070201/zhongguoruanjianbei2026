@@ -1,5 +1,8 @@
 import { AiModelProviderId, ProviderChatMessage, aiModelProviderService } from '../aiModelProviderService';
+import prisma from '../../config/db';
 import { quizQualityService } from '../quizQualityService';
+import { FileSystemService } from '../fileSystemService';
+import { documentTextExtractionService } from '../documentTextExtractionService';
 import { ContextCapsule } from '../../types/contextSystem';
 import {
   StudioGenerationContext,
@@ -16,9 +19,35 @@ import {
   practiceContractInstruction,
   reconcileQuizWithPracticeContract
 } from './practiceRequest';
+import {
+  buildVisualExplainerMarkdownSourceBlocks,
+  buildVisualExplainerFromStages,
+  buildFallbackVisualExplainer,
+  extractVisualExplainerMarkdownDraft,
+  normalizeVisualExplainerContentMap,
+  normalizeVisualExplainerRendererBlocks,
+  normalizeVisualExplainerSectionPlan,
+  normalizeVisualExplainerSlideText,
+  normalizeVisualExplainerVisualIntent,
+  validateVisualExplainerPayload,
+  VISUAL_EXPLAINER_CONTENT_MAP_SCHEMA_HINT,
+  VISUAL_EXPLAINER_RENDERER_BLOCK_SCHEMA_HINT,
+  VISUAL_EXPLAINER_SCHEMA_HINT,
+  VISUAL_EXPLAINER_SECTION_PLAN_SCHEMA_HINT,
+  VISUAL_EXPLAINER_SLIDE_TEXT_SCHEMA_HINT,
+  VISUAL_EXPLAINER_VISUAL_INTENT_SCHEMA_HINT,
+  visualExplainerContentMapPrompt,
+  visualExplainerMarkdownPrompt,
+  visualExplainerRendererBlocksPrompt,
+  visualExplainerSectionPlanPrompt,
+  visualExplainerSlideTextPrompt,
+  visualExplainerVisualIntentPrompt
+} from './visualExplainer';
 
 const STUDIO_MODEL_TIMEOUT_MS = Number(process.env.STUDIO_MODEL_TIMEOUT_MS || 240000);
+const VISUAL_EXPLAINER_STAGE_TIMEOUT_MS = Number(process.env.VISUAL_EXPLAINER_STAGE_TIMEOUT_MS || 45000);
 const DEFAULT_STUDIO_FALLBACK_PROVIDERS: AiModelProviderId[] = ['deepseek', 'claude', 'openai', 'gemini'];
+const providerCircuit = new Map<AiModelProviderId, { disabledUntil: number; reason: string }>();
 
 const clip = (value: string | null | undefined, maxLength = 1200) => {
   const text = String(value || '').trim();
@@ -46,9 +75,12 @@ const evidenceSnippets = (capsule: ContextCapsule, max = 8) =>
     .map((item) => clip(item, 700))
     .slice(0, max);
 
+const isResourceNotesLikeTemplate = (templateId: string) =>
+  templateId === 'resource_to_notes' || templateId === 'pagelm_cornell_notes' || templateId === 'pure_markdown_notes';
+
 const topicFromContext = (context: StudioGenerationContext) => {
   const prompt = latestPrompt(context).replace(/^根据当前资料生成个性化学习资源$/i, '').trim();
-  if (context.template.id === 'resource_to_notes' || context.template.id === 'resource_compare') {
+  if (isResourceNotesLikeTemplate(context.template.id) || context.template.id === 'resource_compare') {
     const citationTopic = context.capsule.citations[0]?.label?.replace(/\.[a-z0-9]+$/i, '').trim();
     if (citationTopic) return citationTopic;
     const activeFileTopic = context.capsule.activeFile?.fileName?.replace(/\.[a-z0-9]+$/i, '').trim();
@@ -83,6 +115,44 @@ const studioFallbackProviders = (primary: AiModelProviderId) => {
   return candidates.filter((provider, index, list) => provider !== primary && list.indexOf(provider) === index);
 };
 
+const providerCooldownMs = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/no available channel/i.test(message)) return Number(process.env.AI_PROVIDER_NO_CHANNEL_COOLDOWN_MS || 10 * 60 * 1000);
+  if (/status 429/i.test(message)) return Number(process.env.AI_PROVIDER_RATE_LIMIT_COOLDOWN_MS || 2 * 60 * 1000);
+  if (/fetch failed|network|socket|econnreset|econnrefused|etimedout|terminated|timeout|abort|und_err|status 5\d\d/i.test(message)) {
+    return Number(process.env.AI_PROVIDER_TRANSIENT_COOLDOWN_MS || 60 * 1000);
+  }
+  return 0;
+};
+
+const recordProviderFailure = (provider: AiModelProviderId, error: unknown) => {
+  const cooldownMs = providerCooldownMs(error);
+  if (!cooldownMs) return;
+  const message = error instanceof Error ? error.message : String(error);
+  providerCircuit.set(provider, {
+    disabledUntil: Date.now() + cooldownMs,
+    reason: clip(message, 180)
+  });
+};
+
+const recordProviderSuccess = (provider: AiModelProviderId) => {
+  providerCircuit.delete(provider);
+};
+
+const studioProviderCandidates = (primary: AiModelProviderId, errors: string[]) => {
+  const candidates = [primary, ...studioFallbackProviders(primary)].filter((provider, index, list) => list.indexOf(provider) === index);
+  return candidates.filter((provider) => {
+    if (!aiModelProviderService.isConfigured({ provider, useCase: 'studio' })) return false;
+    const circuit = providerCircuit.get(provider);
+    if (circuit && circuit.disabledUntil > Date.now()) {
+      errors.push(`${provider}: temporarily disabled (${circuit.reason})`);
+      return false;
+    }
+    if (circuit) providerCircuit.delete(provider);
+    return true;
+  });
+};
+
 const describeModelError = (provider: AiModelProviderId, error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   return `${provider}: ${message}`;
@@ -90,41 +160,34 @@ const describeModelError = (provider: AiModelProviderId, error: unknown) => {
 
 const chatWithStudioFallback = async (
   messages: ProviderChatMessage[],
-  context: StudioGenerationContext
+  context: StudioGenerationContext,
+  options: { includeVisualEvidence?: boolean; timeoutMs?: number } = {}
 ) => {
   const primary = aiModelProviderService.provider({ useCase: 'studio' });
   const errors: string[] = [];
+  const visualEvidence = options.includeVisualEvidence === false ? undefined : context.capsule.visualEvidence;
+  const timeoutMs = options.timeoutMs || STUDIO_MODEL_TIMEOUT_MS;
 
-  try {
-    return await aiModelProviderService.chat(messages, undefined, {
-      timeoutMs: STUDIO_MODEL_TIMEOUT_MS,
-      useCase: 'studio',
-      visualEvidence: context.capsule.visualEvidence
-    });
-  } catch (error) {
-    errors.push(describeModelError(primary, error));
-    if (!isRecoverableModelError(error)) throw error;
-  }
-
-  for (const provider of studioFallbackProviders(primary)) {
-    if (!aiModelProviderService.isConfigured({ provider, useCase: 'studio' })) continue;
+  for (const provider of studioProviderCandidates(primary, errors)) {
     try {
       const result = await aiModelProviderService.chat(messages, undefined, {
-        provider,
-        timeoutMs: STUDIO_MODEL_TIMEOUT_MS,
+        provider: provider === primary ? undefined : provider,
+        timeoutMs,
         useCase: 'studio',
-        visualEvidence: context.capsule.visualEvidence
+        visualEvidence
       });
+      recordProviderSuccess(provider);
       return {
         ...result,
         usage: {
           ...(result.usage || {}),
-          fallbackFrom: primary,
-          fallbackErrors: errors
+          ...(provider !== primary ? { fallbackFrom: primary } : {}),
+          ...(errors.length ? { fallbackErrors: errors } : {})
         }
       };
     } catch (error) {
       errors.push(describeModelError(provider, error));
+      recordProviderFailure(provider, error);
       if (!isRecoverableModelError(error)) break;
     }
   }
@@ -138,43 +201,35 @@ const jsonWithStudioFallback = async <T>(
     instruction: string;
     schema: Record<string, unknown>;
     input: Record<string, unknown>;
-  }
+  },
+  options: { includeVisualEvidence?: boolean; timeoutMs?: number } = {}
 ) => {
   const primary = aiModelProviderService.provider({ useCase: 'studio' });
   const errors: string[] = [];
+  const visualEvidence = options.includeVisualEvidence === false ? undefined : context.capsule.visualEvidence;
+  const timeoutMs = options.timeoutMs || STUDIO_MODEL_TIMEOUT_MS;
 
-  try {
-    return await aiModelProviderService.json<T>({
-      ...params,
-      context: { visualEvidence: context.capsule.visualEvidence },
-      timeoutMs: STUDIO_MODEL_TIMEOUT_MS,
-      useCase: 'studio'
-    });
-  } catch (error) {
-    errors.push(describeModelError(primary, error));
-    if (!isRecoverableModelError(error)) throw error;
-  }
-
-  for (const provider of studioFallbackProviders(primary)) {
-    if (!aiModelProviderService.isConfigured({ provider, useCase: 'studio' })) continue;
+  for (const provider of studioProviderCandidates(primary, errors)) {
     try {
       const result = await aiModelProviderService.json<T>({
         ...params,
-        provider,
-        context: { visualEvidence: context.capsule.visualEvidence },
-        timeoutMs: STUDIO_MODEL_TIMEOUT_MS,
+        provider: provider === primary ? undefined : provider,
+        context: { visualEvidence },
+        timeoutMs,
         useCase: 'studio'
       });
+      recordProviderSuccess(provider);
       return {
         ...result,
         usage: {
           ...(result.usage || {}),
-          fallbackFrom: primary,
-          fallbackErrors: errors
+          ...(provider !== primary ? { fallbackFrom: primary } : {}),
+          ...(errors.length ? { fallbackErrors: errors } : {})
         }
       };
     } catch (error) {
       errors.push(describeModelError(provider, error));
+      recordProviderFailure(provider, error);
       if (!isRecoverableModelError(error)) break;
     }
   }
@@ -241,6 +296,39 @@ const fallbackMarkdown = (context: StudioGenerationContext, sections: string[]) 
 const fallbackTextResource = (context: StudioGenerationContext) => {
   const topic = topicFromContext(context);
   const snippets = evidenceSnippets(context.capsule, 4);
+  if (context.template.id === 'pure_markdown_notes') {
+    return fallbackMarkdown(context, [
+      '## 知识总览',
+      snippets.length
+        ? snippets.map((snippet, index) => `- 资料片段 ${index + 1}：${snippet}`).join('\n')
+        : `- 当前围绕「${topic}」的可用资源证据不足，请选择或上传更多 sources。`,
+      '',
+      '## 分节笔记',
+      snippets.length
+        ? snippets.map((snippet, index) => `### 片段 ${index + 1}\n${snippet}`).join('\n\n')
+        : `### ${topic}\n暂无可展开全文。`,
+      '',
+      '## 复习问题',
+      '- 这份资料的核心主题是什么？',
+      '- 哪些定义、步骤或例子需要回到原文复习？'
+    ]);
+  }
+  if (context.template.id === 'pagelm_cornell_notes') {
+    return renderPageLmCornellMarkdown(context, {
+      title: topic,
+      notes: snippets.length
+        ? snippets.map((snippet, index) => `Source note ${index + 1}: ${snippet}`).join('\n\n')
+        : `The selected sources did not provide enough extractable text for detailed Cornell notes on "${topic}".`,
+      summary: snippets.length
+        ? `These notes organize the selected material around ${topic}.`
+        : 'Evidence is insufficient; choose a text-rich source and generate again.',
+      questions: ['What is the central idea of this source?', 'Which details need review before applying the concept?'],
+      answers: [
+        snippets[0] || topic,
+        snippets[1] || 'Return to the original source and verify definitions, examples, and steps.'
+      ]
+    });
+  }
   if (context.template.id === 'resource_to_notes') {
     return fallbackMarkdown(context, [
       '## 资源摘要',
@@ -367,6 +455,168 @@ const sourceRefs = (capsule: ContextCapsule) =>
     sourceId: citation.sourceId,
     snippet: citation.preview || citation.supportSnippets?.[0]?.text || ''
   }));
+
+type PageLmCornellNotesPayload = {
+  title?: string;
+  notes?: string;
+  summary?: string;
+  questions?: unknown[];
+  answers?: unknown[];
+};
+
+const pageLmCornellNotesSchema = {
+  type: 'object',
+  required: ['title', 'notes', 'summary', 'questions', 'answers'],
+  properties: {
+    title: { type: 'string' },
+    notes: { type: 'string' },
+    summary: { type: 'string' },
+    questions: { type: 'array', items: { type: 'string' } },
+    answers: { type: 'array', items: { type: 'string' } }
+  }
+};
+
+const cleanCornellText = (value: unknown, maxLength = 12000) =>
+  clip(String(value || '').replace(/\r\n/g, '\n').trim(), maxLength);
+
+const normalizeCornellList = (value: unknown, maxItems = 12) =>
+  (Array.isArray(value) ? value : [])
+    .map((item) => cleanCornellText(item, 900))
+    .filter(Boolean)
+    .slice(0, maxItems);
+
+const selectedResourceIdsForContext = (context: StudioGenerationContext) =>
+  [
+    ...new Set(
+      (context.input.context.selectedResourceIds || [])
+        .filter((value): value is string => typeof value === 'string' && Boolean(value))
+    )
+  ];
+
+const videoAnalysisText = (file: any) => {
+  try {
+    const metadata = file.metadataJson ? JSON.parse(file.metadataJson) : {};
+    const analysis = metadata.videoAnalysis && typeof metadata.videoAnalysis === 'object' ? metadata.videoAnalysis : null;
+    if (!analysis) return '';
+    const transcript = Array.isArray(analysis.transcript)
+      ? analysis.transcript.map((item: any) => `[${item.start ?? ''}] ${item.text || item.content || ''}`).join('\n')
+      : '';
+    const chapters = Array.isArray(analysis.chapters)
+      ? analysis.chapters.map((item: any) => `${item.title || ''}\n${item.summary || ''}`).join('\n\n')
+      : '';
+    const keyPoints = Array.isArray(analysis.keyPoints)
+      ? analysis.keyPoints.map((item: any) => `${item.concept || item.title || ''}: ${item.explanation || item.summary || ''}`).join('\n')
+      : '';
+    return [analysis.title ? `Title: ${analysis.title}` : '', analysis.summary || '', chapters, keyPoints, transcript]
+      .filter(Boolean)
+      .join('\n\n');
+  } catch {
+    return '';
+  }
+};
+
+const readSelectedSourceFullText = async (workspaceId: string, file: any) => {
+  const videoText = videoAnalysisText(file);
+  if (videoText.trim()) return videoText;
+  try {
+    return await FileSystemService.getFileContent(workspaceId, file.id);
+  } catch {
+    const extracted = await documentTextExtractionService.extract(file).catch(() => null);
+    return extracted?.text || '';
+  }
+};
+
+const selectedSourceFullTexts = async (context: StudioGenerationContext) => {
+  const ids = selectedResourceIdsForContext(context);
+  if (!ids.length) return [];
+  const files = await prisma.fileSystemObject.findMany({
+    where: {
+      workspaceId: context.input.workspaceId,
+      id: { in: ids },
+      nodeType: 'file'
+    }
+  });
+  const byId = new Map(files.map((file) => [file.id, file] as const));
+  return Promise.all(
+    ids.map(async (id, index) => {
+      const file = byId.get(id);
+      if (!file) {
+        return { id, name: `Selected source ${index + 1}`, path: '', content: '' };
+      }
+      const content = await readSelectedSourceFullText(context.input.workspaceId, file);
+      return {
+        id: file.id,
+        name: file.name,
+        path: file.path,
+        content: String(content || '').trim()
+      };
+    })
+  );
+};
+
+const renderPageLmCornellMarkdown = (
+  context: StudioGenerationContext,
+  payload: PageLmCornellNotesPayload
+) => {
+  const title = cleanCornellText(payload.title, 120) || topicFromContext(context) || 'PageLM Notes';
+  const notes = cleanCornellText(payload.notes, 20000);
+  const summary = cleanCornellText(payload.summary, 4000);
+  const questions = normalizeCornellList(payload.questions);
+  const answers = normalizeCornellList(payload.answers);
+  const count = Math.max(questions.length, answers.length);
+  const qna = Array.from({ length: count })
+    .map((_, index) => {
+      const question = questions[index] || `Review question ${index + 1}`;
+      const answer = answers[index] || '';
+      return [`### ${index + 1}. ${question}`, answer ? `Answer: ${answer}` : 'Answer:'].join('\n');
+    })
+    .join('\n\n');
+
+  return [
+    `# ${title}`,
+    '',
+    '## Cornell Notes',
+    notes || 'No detailed notes were generated from the selected sources.',
+    '',
+    '## Summary',
+    summary || 'No summary was generated.',
+    '',
+    '## Review Questions',
+    qna || '- No review questions were generated.',
+    '',
+    '## Sources',
+    citationList(context.capsule)
+  ].join('\n');
+};
+
+const selectedSourcesMarkdownBlock = (sources: Awaited<ReturnType<typeof selectedSourceFullTexts>>) =>
+  sources.map((source, index) => [
+    `## Source ${index + 1}: ${source.name}`,
+    source.path ? `Path: ${source.path}` : '',
+    '',
+    source.content || '(empty source text)'
+  ].filter(Boolean).join('\n')).join('\n\n---\n\n');
+
+const pureMarkdownNotesPrompt = (
+  userRequirement: string,
+  sources: Awaited<ReturnType<typeof selectedSourceFullTexts>>
+) => [
+  '请根据下面用户勾选的资料全文，整理成一份高质量 Markdown 学习笔记。',
+  '',
+  '要求：',
+  '- 只使用下面的资料全文和用户要求。',
+  '- 直接输出 Markdown，不要输出 JSON，不要解释生成过程。',
+  '- 不要写成摘要，要写成可学习、可复习、可继续编辑的笔记。',
+  '- 尽量保留原文结构、标题层级、术语、定义、步骤、公式、例子和关键细节。',
+  '- 如果原文很短，可以补充必要解释、例子、易错点和复习问题，让笔记比原文更适合学习。',
+  '- 笔记长度原则上不要短于原文；不要过度压缩。',
+  '- 推荐结构：标题、知识总览、分节笔记、关键概念、例子/步骤/公式、易错点、复习问题。',
+  '',
+  userRequirement ? `用户要求：\n${userRequirement}` : '用户要求：整理成学习笔记。',
+  '',
+  '# 用户勾选资料全文',
+  selectedSourcesMarkdownBlock(sources)
+].join('\n');
 
 const fallbackQuiz = (context: StudioGenerationContext) => {
   const topic = topicFromContext(context);
@@ -709,17 +959,38 @@ const fallbackByGenerator: Record<StudioGeneratorKind, (context: StudioGeneratio
   assessment: fallbackQuiz,
   memory: fallbackFlashcards,
   code_lab: fallbackCodeLab,
-  multimodal: (context) => context.template.id === 'slide_deck' ? fallbackSlides(context) : fallbackMarkdown(context, [
-    '## 分镜脚本',
-    `主题：${latestPrompt(context)}`,
-    '',
-    '| 时间 | 画面 | 旁白 | 互动 |',
-    '| --- | --- | --- | --- |',
-    '| 0:00-0:30 | 展示问题场景 | 引出学习目标 | 让学生预测答案 |',
-    '| 0:30-2:00 | 拆解核心概念 | 解释定义和条件 | 暂停自测 |',
-    '| 2:00-4:00 | 动画演示步骤 | 展示关键变化 | 选择下一步 |',
-    '| 4:00-5:00 | 总结易错点 | 给出复盘任务 | 完成一道小题 |'
-  ]),
+  multimodal: (context) => {
+    if (context.template.id === 'slide_deck') return fallbackSlides(context);
+    const storyboardMarkdown = fallbackMarkdown(context, [
+      '## 分镜脚本',
+      `主题：${latestPrompt(context)}`,
+      '',
+      '| 时间 | 画面 | 旁白 | 互动 |',
+      '| --- | --- | --- | --- |',
+      '| 0:00-0:30 | 展示问题场景 | 引出学习目标 | 让学生预测答案 |',
+      '| 0:30-2:00 | 拆解核心概念 | 解释定义和条件 | 暂停自测 |',
+      '| 2:00-4:00 | 动画演示步骤 | 展示关键变化 | 选择下一步 |',
+      '| 4:00-5:00 | 总结易错点 | 给出复盘任务 | 完成一道小题 |'
+    ]);
+    if (context.template.id === 'visual_explainer') {
+      const answerMarkdown = fallbackMarkdown(context, [
+        '## 核心回答',
+        `围绕「${latestPrompt(context)}」先给出完整解释，保留结论、背景、步骤、例子和检查问题。`,
+        '',
+        '## 关键结构',
+        '- 第一部分建立问题和核心结论。',
+        '- 第二部分拆解概念或机制。',
+        '- 第三部分用步骤、对比或例子说明变化。',
+        '- 最后一部分总结自检问题。',
+        '',
+        '## 视觉化方向',
+        '- 每个 section 聚焦一个讲解目标。',
+        '- section 内部用出现、高亮、连接、注释表达动画。'
+      ]);
+      return JSON.stringify(buildFallbackVisualExplainer(context, answerMarkdown), null, 2);
+    }
+    return storyboardMarkdown;
+  },
   planning: (context) =>
     context.template.id === 'study_plan' ? fallbackStudyPlan(context) : fallbackMarkdown(context, [
       '## 学习目标',
@@ -788,6 +1059,9 @@ const buildSchemaHint = (template: StudioResourceTemplate) => {
         }
       ]
     };
+  }
+  if (template.renderer === 'visual_explainer') {
+    return VISUAL_EXPLAINER_SCHEMA_HINT;
   }
   if (
     template.renderer === 'interactive_html' ||
@@ -884,6 +1158,42 @@ const applyPracticeContract = (
   } as StudioStructuredArtifact;
 };
 
+interface VisualExplainerPipelineStage {
+  id: string;
+  label: string;
+  status: 'completed' | 'fallback';
+  provider?: string;
+  model?: string;
+  durationMs: number;
+  summary: string;
+  error?: string;
+  fallbackErrors?: string[];
+}
+
+const fallbackVisualMarkdownDraft = (context: StudioGenerationContext) => [
+  `# ${latestPrompt(context)}`,
+  '',
+  '## 核心回答',
+  `围绕「${latestPrompt(context)}」先给出完整解释，并保留结论、背景、步骤、例子和检查问题。`,
+  '',
+  '## 关键结构',
+  '- 先建立问题和核心结论。',
+  '- 再拆解概念、机制或条件。',
+  '- 接着用步骤、对比或例子说明变化。',
+  '- 最后总结自检问题。',
+  '',
+  '## 视觉化方向',
+  '- 每个 section 聚焦一个讲解目标。',
+  '- section 内部用出现、高亮、连接、注释表达动画。'
+].join('\n');
+
+const fallbackErrorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+const fallbackErrorsFromUsage = (usage: unknown): string[] => {
+  const errors = (usage && typeof usage === 'object' ? (usage as any).fallbackErrors : null);
+  return Array.isArray(errors) ? errors.map((item) => String(item)).filter(Boolean) : [];
+};
+
 const generateWithModel = async (context: StudioGenerationContext): Promise<StudioGeneratorResult> => {
   if (!aiModelProviderService.isConfigured({ useCase: 'studio' })) {
     const fallbackContent = fallbackByGenerator[context.template.generator](context);
@@ -963,6 +1273,295 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
       structured,
       source: response.provider === 'deepseek' ? 'deepseek-json' : `${response.provider}-json`,
       metadata: { model: response.model, usage: response.usage }
+    };
+  }
+
+  if (context.template.id === 'pure_markdown_notes') {
+    const selectedSources = await selectedSourceFullTexts(context);
+    const userRequirement = String(context.input.options?.userRequirement || context.input.prompt || '').trim();
+    const response = await chatWithStudioFallback(
+      [
+        {
+          role: 'user',
+          content: pureMarkdownNotesPrompt(userRequirement, selectedSources)
+        }
+      ],
+      context,
+      { includeVisualEvidence: false }
+    );
+    const content = response.reply.trim();
+    const structured = normalizeStudioArtifact(context, content);
+    return {
+      content: renderStudioArtifact(structured),
+      structured,
+      source: response.provider,
+      metadata: {
+        model: response.model,
+        usage: response.usage,
+        selectedSourceCount: selectedSources.length,
+        selectedSourceChars: selectedSources.reduce((sum, source) => sum + source.content.length, 0),
+        pureMarkdown: true
+      }
+    };
+  }
+
+  if (context.template.id === 'pagelm_cornell_notes') {
+    const selectedSources = await selectedSourceFullTexts(context);
+    const userRequirement = String(context.input.options?.userRequirement || context.input.prompt || '').trim();
+    const response = await jsonWithStudioFallback<PageLmCornellNotesPayload>(context, {
+      instruction: [
+        'You are a Cornell-style study notes generator.',
+        '',
+        'Goal: produce detailed study notes from the selected source text and the user request.',
+        '',
+        'Output only valid JSON. Do not include Markdown fences or prose outside JSON.',
+        '',
+        'Schema:',
+        '{"title":"string","notes":"string","summary":"string","questions":["string"],"answers":["string"]}',
+        '',
+        'Rules:',
+        '- Use only the selected source text plus the user request.',
+        '- The notes field should be detailed and useful for learning: include definitions, concepts, steps, examples, formulas, contrasts, and important details when present.',
+        '- The summary field should be concise.',
+        '- Each question must have the answer at the same index in answers.',
+        '- If the sources do not contain enough information, say so in summary and keep the notes conservative.'
+      ].join('\n'),
+      schema: pageLmCornellNotesSchema,
+      input: {
+        userRequest: userRequirement,
+        selectedSources: selectedSources.map((source, index) => ({
+          index: index + 1,
+          id: source.id,
+          name: source.name,
+          path: source.path,
+          text: source.content
+        }))
+      }
+    }, { includeVisualEvidence: false });
+    const content = renderPageLmCornellMarkdown(context, response.data || {});
+    const structured = normalizeStudioArtifact(context, content);
+    return {
+      content: renderStudioArtifact(structured),
+      structured,
+      source: response.provider === 'deepseek' ? 'deepseek-json' : `${response.provider}-json`,
+      metadata: {
+        model: response.model,
+        usage: response.usage,
+        selectedSourceCount: selectedSources.length,
+        selectedSourceChars: selectedSources.reduce((sum, source) => sum + source.content.length, 0),
+        pageLmStylePayload: response.data
+      }
+    };
+  }
+
+  if (context.template.renderer === 'visual_explainer') {
+    const userPrompt = latestPrompt(context);
+    const visualStages: VisualExplainerPipelineStage[] = [];
+    let markdownDraft = '';
+    let markdownDraftProvider = 'fallback';
+    let markdownDraftModel = '';
+    let markdownUsage: unknown = null;
+
+    const markdownStartedAt = Date.now();
+    try {
+      const markdownResponse = await chatWithStudioFallback(
+        [
+          {
+            role: 'user',
+            content: visualExplainerMarkdownPrompt(userPrompt)
+          }
+        ],
+        context,
+        { includeVisualEvidence: false, timeoutMs: VISUAL_EXPLAINER_STAGE_TIMEOUT_MS }
+      );
+      markdownDraft = extractVisualExplainerMarkdownDraft(markdownResponse.reply.trim());
+      markdownDraftProvider = markdownResponse.provider;
+      markdownDraftModel = markdownResponse.model;
+      markdownUsage = markdownResponse.usage;
+      visualStages.push({
+        id: 'markdown',
+        label: 'Markdown Draft',
+        status: 'completed',
+        provider: markdownResponse.provider,
+        model: markdownResponse.model,
+        durationMs: Date.now() - markdownStartedAt,
+        summary: 'Generated raw Markdown answer.',
+        fallbackErrors: fallbackErrorsFromUsage(markdownResponse.usage)
+      });
+    } catch (error) {
+      markdownDraft = fallbackVisualMarkdownDraft(context);
+      visualStages.push({
+        id: 'markdown',
+        label: 'Markdown Draft',
+        status: 'fallback',
+        durationMs: Date.now() - markdownStartedAt,
+        summary: 'Used deterministic Markdown draft because model generation failed.',
+        error: fallbackErrorText(error)
+      });
+    }
+
+    const runVisualJsonStage = async <T>(
+      id: string,
+      label: string,
+      instruction: string,
+      schema: Record<string, unknown>,
+      input: Record<string, unknown>,
+      normalize: (value: unknown) => T
+    ): Promise<T> => {
+      const startedAt = Date.now();
+      try {
+        const response = await jsonWithStudioFallback<Record<string, unknown>>(context, {
+          instruction,
+          schema,
+          input
+        }, { includeVisualEvidence: false, timeoutMs: VISUAL_EXPLAINER_STAGE_TIMEOUT_MS });
+        const value = normalize(response.data);
+        visualStages.push({
+          id,
+          label,
+          status: 'completed',
+          provider: response.provider,
+          model: response.model,
+          durationMs: Date.now() - startedAt,
+          summary: `${label} generated structured output.`,
+          fallbackErrors: fallbackErrorsFromUsage(response.usage)
+        });
+        return value;
+      } catch (error) {
+        const value = normalize({});
+        visualStages.push({
+          id,
+          label,
+          status: 'fallback',
+          durationMs: Date.now() - startedAt,
+          summary: `${label} used local normalization fallback.`,
+          error: fallbackErrorText(error)
+        });
+        return value;
+      }
+    };
+
+    const contentMap = await runVisualJsonStage(
+      'content_map',
+      'Content Map',
+      visualExplainerContentMapPrompt,
+      VISUAL_EXPLAINER_CONTENT_MAP_SCHEMA_HINT,
+      {
+        userPrompt,
+        markdownDraft
+      },
+      (value) => normalizeVisualExplainerContentMap(context, value, markdownDraft)
+    );
+
+    const markdownBlocks = buildVisualExplainerMarkdownSourceBlocks(markdownDraft);
+    const markdownBlockReferences = markdownBlocks.map((block) => ({
+      id: block.id,
+      title: block.title,
+      sourcePreview: block.sourcePreview,
+      keyPoints: block.keyPoints
+    }));
+
+    const sectionPlan = await runVisualJsonStage(
+      'section_plan',
+      'Section Plan',
+      visualExplainerSectionPlanPrompt,
+      VISUAL_EXPLAINER_SECTION_PLAN_SCHEMA_HINT,
+      {
+        userPrompt,
+        markdownBlocks: markdownBlockReferences,
+        contentMap
+      },
+      (value) => normalizeVisualExplainerSectionPlan(context, value, markdownDraft, contentMap, markdownBlocks)
+    );
+
+    const slideText = await runVisualJsonStage(
+      'slide_text',
+      'Slide Text',
+      visualExplainerSlideTextPrompt,
+      VISUAL_EXPLAINER_SLIDE_TEXT_SCHEMA_HINT,
+      {
+        userPrompt,
+        markdownDraft: clip(markdownDraft, 7000),
+        contentMap,
+        sectionPlan
+      },
+      (value) => normalizeVisualExplainerSlideText(value, sectionPlan)
+    );
+
+    const visualIntent = await runVisualJsonStage(
+      'visual_intent',
+      'Visual Intent',
+      visualExplainerVisualIntentPrompt,
+      VISUAL_EXPLAINER_VISUAL_INTENT_SCHEMA_HINT,
+      {
+        userPrompt,
+        sectionPlan,
+        slideText
+      },
+      (value) => normalizeVisualExplainerVisualIntent(value, sectionPlan, slideText)
+    );
+
+    const rendererBlocks = await runVisualJsonStage(
+      'renderer_blocks',
+      'Renderer Blocks',
+      visualExplainerRendererBlocksPrompt,
+      VISUAL_EXPLAINER_RENDERER_BLOCK_SCHEMA_HINT,
+      {
+        userPrompt,
+        markdownDraft: clip(markdownDraft, 6000),
+        contentMap,
+        sectionPlan,
+        slideText,
+        visualIntent
+      },
+      (value) => normalizeVisualExplainerRendererBlocks(value, sectionPlan, slideText, visualIntent)
+    );
+
+    const validationStartedAt = Date.now();
+    const payload = buildVisualExplainerFromStages(
+      context,
+      markdownDraft,
+      contentMap,
+      sectionPlan,
+      slideText,
+      visualIntent,
+      rendererBlocks
+    );
+    const validation = validateVisualExplainerPayload(payload);
+    visualStages.push({
+      id: 'validation',
+      label: 'Validation',
+      status: validation.valid ? 'completed' : 'fallback',
+      durationMs: Date.now() - validationStartedAt,
+      summary: validation.valid
+        ? 'Validated final visual explainer payload.'
+        : `Validated with ${validation.warnings.length} warnings.`,
+      error: validation.valid ? undefined : validation.warnings.slice(0, 3).join(' | ')
+    });
+
+    const rawContent = JSON.stringify(payload, null, 2);
+    const structured = normalizeStudioArtifact(context, rawContent);
+    const fallbackStages = visualStages.filter((stage) => stage.status === 'fallback').map((stage) => stage.id);
+    return {
+      content: renderStudioArtifact(structured),
+      structured,
+      source: `${markdownDraftProvider}-visual-pipeline${fallbackStages.length ? '-partial-fallback' : ''}`,
+      warnings: [
+        ...fallbackStages.map((stage) => `Visual Explainer stage used fallback: ${stage}`),
+        ...validation.warnings
+      ],
+      metadata: {
+        model: markdownDraftModel,
+        usage: markdownUsage,
+        markdownDraftProvider,
+        markdownDraftModel,
+        visualExplainerPipeline: {
+          schemaVersion: 'visual_explainer.pipeline.v1',
+          stages: visualStages,
+          fallbackStages,
+          validation
+        }
+      }
     };
   }
 

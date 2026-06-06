@@ -1,9 +1,12 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, InputHTMLAttributes, useEffect, useState } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
 import { Navigate, useNavigate } from 'react-router-dom';
+import { Toaster, toast } from 'sonner';
 import { useAuthStore } from '../store/authStore';
 
-type AuthMode = 'login' | 'register';
+type AuthMode = 'signin' | 'signup';
+
+const WEBUI_NAME = 'Synapse Link';
 
 const getErrorMessage = (error: unknown, fallback: string) => {
   if (error && typeof error === 'object' && 'response' in error) {
@@ -15,8 +18,26 @@ const getErrorMessage = (error: unknown, fallback: string) => {
   return fallback;
 };
 
+const isConnectionError = (error: unknown) => {
+  if (!navigator.onLine) return true;
+  if (!error || typeof error !== 'object') return false;
+
+  const maybeAxiosError = error as {
+    code?: string;
+    message?: string;
+    response?: unknown;
+  };
+
+  return (
+    !maybeAxiosError.response &&
+    (maybeAxiosError.code === 'ERR_NETWORK' ||
+      maybeAxiosError.code === 'ECONNABORTED' ||
+      maybeAxiosError.message?.toLowerCase().includes('network'))
+  );
+};
+
 export default function LoginPage() {
-  const [mode, setMode] = useState<AuthMode>('login');
+  const [mode, setMode] = useState<AuthMode>('signin');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
@@ -24,7 +45,6 @@ export default function LoginPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [confirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const { user, loading, hydrated, login, register, hydrate } = useAuthStore();
 
@@ -32,24 +52,37 @@ export default function LoginPage() {
     void hydrate();
   }, [hydrate]);
 
+  useEffect(() => {
+    if (!navigator.onLine) toast.warning('Connection lost. Reconnecting...');
+
+    const handleOffline = () => toast.warning('Connection lost. Reconnecting...');
+    const handleOnline = () => toast.success('Reconnected');
+
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, []);
+
   const switchMode = (nextMode: AuthMode) => {
     setMode(nextMode);
-    setError(null);
   };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    setError(null);
 
     try {
-      if (mode === 'login') {
+      if (mode === 'signin') {
         await login(identifier.trim(), password);
         navigate('/workspaces', { replace: true });
         return;
       }
 
       if (password !== confirmPassword) {
-        setError('两次输入的密码不一致');
+        toast.error('两次输入的密码不一致');
         return;
       }
 
@@ -60,153 +93,187 @@ export default function LoginPage() {
       });
       navigate('/workspaces', { replace: true });
     } catch (submitError) {
-      setError(
+      if (isConnectionError(submitError)) toast.warning('Connection lost. Reconnecting...');
+      toast.error(
         getErrorMessage(
           submitError,
-          mode === 'login'
-            ? '登录失败，请检查账号和密码'
+          mode === 'signin'
+            ? 'The email or password provided is incorrect.\nPlease check for typos and try logging in again.'
             : '注册失败，请稍后再试'
         )
       );
     }
   };
 
-  const isRegister = mode === 'register';
-  const isLogin = mode === 'login';
-  const title = isLogin ? '登录到 AI 学习工作台' : '创建 AI 学习工作台账号';
+  const isSignin = mode === 'signin';
 
   if (hydrated && user) {
     return <Navigate to="/workspaces" replace />;
   }
 
   return (
-    <div className="notion-auth-page flex min-h-full flex-1 items-center justify-center overflow-hidden text-[#111111]">
-      <main className="notion-auth-main mx-auto flex w-full max-w-[760px] flex-col items-center px-6">
-        <section className="notion-auth-card w-full max-w-[520px]">
-          <section className="w-full text-center">
-            <h1 className="notion-auth-title">{title}</h1>
-          </section>
+    <div className="w-full h-screen max-h-[100dvh] text-white relative" id="auth-page">
+      <div className="w-full h-full absolute top-0 left-0 bg-white dark:bg-black"></div>
+      <div className="w-full absolute top-0 left-0 right-0 h-8 drag-region" />
 
-          <form onSubmit={handleSubmit} className="notion-auth-form w-full">
-            {(isLogin || isRegister) && (
-              <NotionField
-                label={isLogin ? '邮箱或用户名' : '用户名'}
-                type={isLogin ? 'text' : 'text'}
-                value={isLogin ? identifier : username}
-                placeholder={isLogin ? '请输入邮箱或用户名' : '请输入 3-24 位用户名'}
-                onChange={isLogin ? setIdentifier : setUsername}
-              />
-            )}
+      <Toaster richColors position="top-right" closeButton />
 
-            {isRegister && (
-              <div className="mt-4">
-                <NotionField
-                  label="邮箱"
-                  type="email"
-                  value={email}
-                  placeholder="请输入邮箱"
-                  onChange={setEmail}
-                />
-              </div>
-            )}
+      <div
+        className="fixed bg-transparent min-h-screen w-full flex justify-center font-primary z-50 text-black dark:text-white"
+        id="auth-container"
+      >
+        <div className="w-full px-10 min-h-screen flex flex-col text-center">
+          <div className="my-auto flex flex-col justify-center items-center">
+            <div className="sm:max-w-md my-auto pb-10 w-full dark:text-gray-100">
+              <form className="flex flex-col justify-center" onSubmit={handleSubmit}>
+                <div className="mb-1">
+                  <div className="text-2xl font-medium">
+                    {isSignin ? `登录到 ${WEBUI_NAME}` : `注册到 ${WEBUI_NAME}`}
+                  </div>
+                </div>
 
-            {(isLogin || isRegister) && (
-              <div className="mt-4">
-                <NotionField
-                  label="密码"
-                  type="password"
-                  value={password}
-                  placeholder="请输入密码"
-                  onChange={setPassword}
-                  revealable
-                  revealed={passwordVisible}
-                  onToggleReveal={() => setPasswordVisible((visible) => !visible)}
-                />
-              </div>
-            )}
+                <div className="flex flex-col mt-4">
+                  {!isSignin && (
+                    <div className="mb-2">
+                      <label htmlFor="name" className="text-sm font-medium text-left mb-1 block">
+                        用户名
+                      </label>
+                      <input
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value)}
+                        type="text"
+                        id="name"
+                        className="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
+                        autoComplete="name"
+                        placeholder="请输入 3-24 位用户名"
+                        required
+                      />
+                    </div>
+                  )}
 
-            {isRegister && (
-              <div className="mt-4">
-                <NotionField
-                  label="确认密码"
-                  type="password"
-                  value={confirmPassword}
-                  placeholder="请再次输入密码"
-                  onChange={setConfirmPassword}
-                  revealable
-                  revealed={confirmPasswordVisible}
-                  onToggleReveal={() => setConfirmPasswordVisible((visible) => !visible)}
-                />
-              </div>
-            )}
+                  <div className="mb-2">
+                    <label htmlFor="email" className="text-sm font-medium text-left mb-1 block">
+                      {isSignin ? '邮箱或用户名' : '邮箱'}
+                    </label>
+                    <input
+                      value={isSignin ? identifier : email}
+                      onChange={(event) => {
+                        if (isSignin) setIdentifier(event.target.value);
+                        else setEmail(event.target.value);
+                      }}
+                      type={isSignin ? 'text' : 'email'}
+                      id="email"
+                      className="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
+                      autoComplete={isSignin ? 'username' : 'email'}
+                      name="email"
+                      placeholder={isSignin ? '请输入邮箱或用户名' : '请输入邮箱'}
+                      required
+                    />
+                  </div>
 
-            {error && <div className="notion-auth-message notion-auth-message-error mt-4">{error}</div>}
+                  <div>
+                    <label htmlFor="password" className="text-sm font-medium text-left mb-1 block">
+                      密码
+                    </label>
+                    <SensitiveInput
+                      value={password}
+                      onChange={setPassword}
+                      type="password"
+                      id="password"
+                      className="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
+                      placeholder="请输入密码"
+                      autoComplete={isSignin ? 'current-password' : 'new-password'}
+                      name="password"
+                      required
+                      revealed={passwordVisible}
+                      onToggleReveal={() => setPasswordVisible((visible) => !visible)}
+                    />
+                  </div>
 
-            <button type="submit" disabled={loading} className="notion-auth-primary mt-5">
-              {loading ? '请稍候...' : isLogin ? '登录' : '注册'}
-            </button>
-          </form>
+                  {!isSignin && (
+                    <div className="mt-2">
+                      <label htmlFor="confirm-password" className="text-sm font-medium text-left mb-1 block">
+                        确认密码
+                      </label>
+                      <SensitiveInput
+                        value={confirmPassword}
+                        onChange={setConfirmPassword}
+                        type="password"
+                        id="confirm-password"
+                        className="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
+                        placeholder="请再次输入密码"
+                        autoComplete="new-password"
+                        name="confirm-password"
+                        required
+                        revealed={confirmPasswordVisible}
+                        onToggleReveal={() => setConfirmPasswordVisible((visible) => !visible)}
+                      />
+                    </div>
+                  )}
+                </div>
 
-          <div className="notion-auth-switch text-center text-[#8f8f8f]">
-            {isLogin ? '还没有账号？' : '已有账号？'}{' '}
-            <button
-              type="button"
-              onClick={() => switchMode(isLogin ? 'register' : 'login')}
-              className="underline underline-offset-2 hover:text-[#2f2f2f]"
-            >
-              {isLogin ? '立即注册' : '去登录'}
-            </button>
+                <div className="mt-5">
+                  <button
+                    className="bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-medium text-sm py-2.5 disabled:pointer-events-none disabled:opacity-60"
+                    type="submit"
+                    disabled={loading}
+                  >
+                    {loading ? '请稍候...' : isSignin ? '登录' : '创建账号'}
+                  </button>
+
+                  <div className="mt-4 text-sm text-center">
+                    {isSignin ? '还没有账号？' : '已有账号？'}
+
+                    <button
+                      className="font-medium underline"
+                      type="button"
+                      onClick={() => {
+                        switchMode(isSignin ? 'signup' : 'signin');
+                      }}
+                    >
+                      {isSignin ? '立即注册' : '去登录'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
           </div>
-        </section>
-      </main>
+        </div>
+      </div>
     </div>
   );
 }
 
-function NotionField({
-  label,
-  type,
+function SensitiveInput({
   value,
-  placeholder,
   onChange,
-  revealable = false,
-  revealed = false,
-  onToggleReveal
+  revealed,
+  onToggleReveal,
+  className,
+  ...inputProps
 }: {
-  label: string;
-  type: string;
   value: string;
-  placeholder: string;
   onChange: (value: string) => void;
-  revealable?: boolean;
-  revealed?: boolean;
-  onToggleReveal?: () => void;
-}) {
-  const inputType = revealable ? (revealed ? 'text' : 'password') : type;
-
+  revealed: boolean;
+  onToggleReveal: () => void;
+} & Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'>) {
   return (
-    <label className="block text-left">
-      <span className="notion-auth-field-label">{label}</span>
-      <span className="notion-auth-input-shell">
-        <input
-          type={inputType}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={placeholder}
-          required
-          className="notion-auth-input"
-        />
-        {revealable && (
-          <button
-            type="button"
-            className="notion-auth-reveal"
-            onClick={onToggleReveal}
-            aria-label={revealed ? '隐藏密码' : '显示密码'}
-          >
-            {revealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </button>
-        )}
-      </span>
-    </label>
+    <div className="openwebui-sensitive-input">
+      <input
+        {...inputProps}
+        type={revealed ? 'text' : 'password'}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={className}
+      />
+      <button
+        type="button"
+        className="openwebui-sensitive-toggle"
+        onClick={onToggleReveal}
+        aria-label={revealed ? '隐藏密码' : '显示密码'}
+      >
+        {revealed ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+      </button>
+    </div>
   );
 }

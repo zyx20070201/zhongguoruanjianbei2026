@@ -4,6 +4,7 @@ const STUDIO_READ_TIMEOUT_MS = 45000;
 const STUDIO_GENERATE_TIMEOUT_MS = 420000;
 const STUDIO_JUDGE_TIMEOUT_MS = 90000;
 const STUDIO_CODE_RUN_TIMEOUT_MS = 60000;
+const FLASHCARD_WRITE_TIMEOUT_MS = 45000;
 
 export interface AiChatMessage {
   role: 'user' | 'assistant';
@@ -21,6 +22,9 @@ export interface AiChatAttachment {
   size: number;
   kind: AiChatAttachmentKind;
   createdAt: string;
+  displayType?: 'file' | 'doc' | 'note' | 'chat' | 'collection' | 'folder' | 'selection' | 'webpage';
+  sourceLabel?: string;
+  locator?: Record<string, any>;
   textContent?: string;
   summary?: string;
   parsedTextHash?: string;
@@ -75,6 +79,7 @@ export type AiContextMode =
 export type AiStudioResourceType =
   | 'report'
   | 'slide_deck'
+  | 'visual_explainer'
   | 'mind_map'
   | 'flashcards'
   | 'quiz'
@@ -481,6 +486,18 @@ export interface FlashcardDeck {
   cardCount: number;
 }
 
+export interface CreateFlashcardDeckCardPayload {
+  front: string;
+  back: string;
+  cardType?: string;
+  difficulty?: 'easy' | 'medium' | 'hard' | string;
+  concept?: string;
+  explanation?: string;
+  tags?: string[];
+  sourceRefs?: FlashcardSourceRef[];
+  metadata?: Record<string, any>;
+}
+
 export interface AiSourceInspectorItem {
   sourceId: string;
   sourceType: 'selection' | 'viewport' | 'active_file' | 'retrieval' | 'pinned';
@@ -606,7 +623,8 @@ export const aiApi = {
       messages: AiChatMessage[];
       context?: AiChatContext;
     },
-    handlers: AiStreamHandlers = {}
+    handlers: AiStreamHandlers = {},
+    options: { signal?: AbortSignal } = {}
   ): Promise<AiStreamResult> => {
     const response = await fetch(`${getApiBaseUrl()}/ai/chat/stream`, {
       method: 'POST',
@@ -614,6 +632,7 @@ export const aiApi = {
         'Content-Type': 'application/json',
         Accept: 'text/event-stream'
       },
+      signal: options.signal,
       body: JSON.stringify(payload)
     });
 
@@ -805,6 +824,7 @@ export const aiApi = {
     renderer?: string;
     runId: string;
     source: string;
+    metadata?: Record<string, unknown>;
     contextCapsule?: unknown;
     contextPolicy?: unknown;
     review?: AiStudioReviewReport;
@@ -873,6 +893,25 @@ export const aiApi = {
     workbenchId?: string;
   }): Promise<{ decks: FlashcardDeck[] }> => {
     const response = await client.get('/flashcards/decks', { params: payload });
+    return response.data;
+  },
+
+  createFlashcardDeck: async (payload: {
+    workspaceId: string;
+    workbenchId?: string | null;
+    title: string;
+    description?: string;
+    source?: string;
+    sourceFileIds?: string[];
+    sourceRefs?: FlashcardSourceRef[];
+    settings?: Record<string, any>;
+    generationRunId?: string | null;
+    fileObjectId?: string | null;
+    cards: CreateFlashcardDeckCardPayload[];
+  }): Promise<{ deck: FlashcardDeck; reused?: boolean }> => {
+    const response = await client.post('/flashcards/decks', payload, {
+      timeout: FLASHCARD_WRITE_TIMEOUT_MS
+    });
     return response.data;
   },
 

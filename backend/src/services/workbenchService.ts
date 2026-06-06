@@ -447,7 +447,11 @@ const mapFileResource = (resource: any) => ({
   tags: parseTags(resource.tags),
   extension: resource.extension,
   mimeType: resource.mimeType,
-  fileCategory: resource.fileCategory
+  fileCategory: resource.fileCategory,
+  size: resource.size,
+  chunkCount: Number(resource._count?.knowledgeChunks || resource.knowledgeIndexJobs?.[0]?.chunkCount || 0),
+  knowledgeIndexJobs: resource.knowledgeIndexJobs,
+  _count: resource._count
 });
 
 const toSummary = (record: WorkbenchRecord, resourceCount = 0): WorkbenchSummary => {
@@ -700,6 +704,13 @@ export class WorkbenchService {
         workbenchBindings: {
           where: { workbenchId: id },
           orderBy: [{ orderIndex: 'asc' }, { updatedAt: 'desc' }]
+        },
+        knowledgeIndexJobs: {
+          orderBy: { updatedAt: 'desc' },
+          take: 1
+        },
+        _count: {
+          select: { knowledgeChunks: true }
         }
       },
       orderBy: [{ updatedAt: 'desc' }, { name: 'asc' }]

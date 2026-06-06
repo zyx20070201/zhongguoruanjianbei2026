@@ -107,7 +107,9 @@ class CodeExecutionService {
           language_id: LANGUAGE_IDS[language],
           source_code: sourceCode,
           stdin,
-          redirect_stderr_to_stdout: false
+          redirect_stderr_to_stdout: false,
+          enable_per_process_and_thread_time_limit: true,
+          enable_per_process_and_thread_memory_limit: true
         }),
         signal: AbortSignal.timeout(JUDGE0_TIMEOUT_MS)
       });

@@ -82,6 +82,7 @@ export interface ResourceReference {
   name: string;
   path: string;
   type: string;
+  resourceRole?: string;
   resourceType?: string;
   scope?: string;
   origin?: string;
@@ -92,6 +93,22 @@ export interface ResourceReference {
   mimeType?: string;
   fileCategory?: string;
   isBinary?: boolean;
+  size?: number;
+  chunkCount?: number;
+  knowledgeIndexJobs?: Array<{
+    id: string;
+    status: string;
+    extractor?: string | null;
+    errorMessage?: string | null;
+    chunkCount?: number;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  }>;
+  _count?: {
+    knowledgeChunks?: number;
+  };
 }
 
 export interface WorkbenchResourceGroups {
@@ -213,6 +230,11 @@ export interface User {
   id: string;
   username: string;
   email?: string | null;
+  profileImageUrl?: string | null;
+  bio?: string | null;
+  gender?: string | null;
+  dateOfBirth?: string | null;
+  notificationWebhookUrl?: string | null;
 }
 
 export type WorkspaceStatus = 'active' | 'review' | 'idle' | 'archived';

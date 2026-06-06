@@ -149,6 +149,19 @@ const parseMetadataInput = (value: unknown): Record<string, unknown> | undefined
   }
 };
 
+const parseRelativePathsInput = (value: unknown): string[] => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((item) => String(item || ''));
+  if (typeof value !== 'string') return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map((item) => String(item || '')) : [];
+  } catch {
+    return [value];
+  }
+};
+
 // 1. Get File Tree
 export const getFileTree = async (req: Request, res: Response) => {
   try {
@@ -548,7 +561,8 @@ export const uploadFiles = async (req: Request, res: Response) => {
     const workspaceId = getSingleParam(req.params.workspaceId);
     // When using multer, files are in req.files
     const files = (req as any).files as any[];
-    const { parentId, parentPath, workbenchId, resourceRole, resourceType, scope, origin, metadata } = req.body;
+    const { parentId, parentPath, workbenchId, resourceRole, resourceType, scope, origin, metadata, relativePaths } = req.body;
+    const parsedRelativePaths = parseRelativePathsInput(relativePaths);
     
     validateWorkspaceId(workspaceId);
 
@@ -557,12 +571,12 @@ export const uploadFiles = async (req: Request, res: Response) => {
     }
     
     const results = [];
-    for (const file of files) {
+    for (const [index, file] of files.entries()) {
       const normalizedName = normalizePossiblyMojibakeName(file.originalname);
       try {
         const created = await FileSystemService.handleUploadedFile(
           workspaceId,
-          { ...file, originalname: normalizedName },
+          { ...file, originalname: normalizedName, relativePath: parsedRelativePaths[index] },
           parentId,
           parentPath,
           {

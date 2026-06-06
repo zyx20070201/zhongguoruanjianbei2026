@@ -254,18 +254,28 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
 
+  const controller = new AbortController();
+  let ended = false;
+
+  req.on('close', () => {
+    if (!ended) controller.abort();
+  });
+
   const send = (event: string, data: unknown) => {
+    if (controller.signal.aborted || res.writableEnded) return;
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
   try {
-    await multiAgentOrchestrator.chatStream({ messages, context }, send);
+    await multiAgentOrchestrator.chatStream({ messages, context }, send, { signal: controller.signal });
   } catch (error: any) {
+    if (controller.signal.aborted || error?.name === 'AbortError') return;
     const message = error instanceof Error ? error.message : 'AI request failed';
     send('error', { error: message });
   } finally {
-    res.end();
+    ended = true;
+    if (!res.writableEnded) res.end();
   }
 });
 

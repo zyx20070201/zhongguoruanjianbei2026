@@ -28,6 +28,7 @@ export interface ProviderChatOptions {
   useCase?: AiProviderUseCase;
   model?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   attachments?: ChatSessionAttachmentContext[];
   visualEvidence?: VisualEvidenceItem[];
   systemPrompt?: string;
@@ -56,6 +57,19 @@ const timeoutSignal = (timeoutMs?: number, fallbackMs = DEFAULT_TIMEOUT_MS) => {
   if (!Number.isFinite(ms) || ms <= 0) return undefined;
   return AbortSignal.timeout(ms);
 };
+
+const combinedSignal = (...signals: Array<AbortSignal | undefined>) => {
+  const usable = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (usable.length === 0) return undefined;
+  if (usable.some((signal) => signal.aborted)) return AbortSignal.abort();
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  usable.forEach((signal) => signal.addEventListener('abort', abort, { once: true }));
+  return controller.signal;
+};
+
+const requestSignal = (options: Pick<ProviderChatOptions, 'timeoutMs' | 'signal'>) =>
+  combinedSignal(options.signal, timeoutSignal(options.timeoutMs));
 
 const clip = (value: string | undefined, maxLength = 12000) => {
   const text = String(value || '').trim();
@@ -256,6 +270,7 @@ class AiModelProviderService {
         'useCase' in contextOrOptions ||
         'model' in contextOrOptions ||
         'timeoutMs' in contextOrOptions ||
+        'signal' in contextOrOptions ||
         'attachments' in contextOrOptions ||
         'visualEvidence' in contextOrOptions ||
         'systemPrompt' in contextOrOptions);
@@ -282,7 +297,7 @@ class AiModelProviderService {
             : message
         )
       : messages;
-    const result = await deepseekService.chat(projectedMessages as any, undefined, { timeoutMs: options.timeoutMs });
+    const result = await deepseekService.chat(projectedMessages as any, undefined, { timeoutMs: options.timeoutMs, signal: options.signal });
     return { reply: result.reply, model: result.model, provider: 'deepseek', usage: result.usage as any };
   }
 
@@ -304,7 +319,7 @@ class AiModelProviderService {
               : message
           )
         : messages;
-      for await (const delta of deepseekService.chatStream(projectedMessages as any, undefined, { timeoutMs: options.timeoutMs })) {
+      for await (const delta of deepseekService.chatStream(projectedMessages as any, undefined, { timeoutMs: options.timeoutMs, signal: options.signal })) {
         yield delta;
       }
       return;
@@ -418,7 +433,7 @@ class AiModelProviderService {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`
         },
-        signal: timeoutSignal(options.timeoutMs),
+        signal: requestSignal(options),
         body: JSON.stringify({
           model,
           messages: this.openaiChatCompletionMessages(messages, options),
@@ -441,7 +456,7 @@ class AiModelProviderService {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`
       },
-      signal: timeoutSignal(options.timeoutMs),
+      signal: requestSignal(options),
       body: JSON.stringify({
         model,
         instructions: options.systemPrompt || DEFAULT_SYSTEM_PROMPT,
@@ -472,7 +487,7 @@ class AiModelProviderService {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`
         },
-        signal: timeoutSignal(options.timeoutMs),
+        signal: requestSignal(options),
         body: JSON.stringify({
           model,
           messages: this.openaiChatCompletionMessages(messages, options),
@@ -501,7 +516,7 @@ class AiModelProviderService {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`
       },
-      signal: timeoutSignal(options.timeoutMs),
+      signal: requestSignal(options),
       body: JSON.stringify({
         model,
         instructions: options.systemPrompt || DEFAULT_SYSTEM_PROMPT,
@@ -597,7 +612,7 @@ class AiModelProviderService {
     const response = await fetch(`${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: timeoutSignal(options.timeoutMs),
+      signal: requestSignal(options),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: options.systemPrompt || DEFAULT_SYSTEM_PROMPT }] },
         contents
@@ -622,7 +637,7 @@ class AiModelProviderService {
     const response = await fetch(`${baseUrl}/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: timeoutSignal(options.timeoutMs),
+      signal: requestSignal(options),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: options.systemPrompt || DEFAULT_SYSTEM_PROMPT }] },
         contents
@@ -680,7 +695,7 @@ class AiModelProviderService {
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01'
       },
-      signal: timeoutSignal(options.timeoutMs),
+      signal: requestSignal(options),
       body: JSON.stringify({
         model,
         max_tokens: Number(process.env.CLAUDE_MAX_TOKENS || 4096),
@@ -712,7 +727,7 @@ class AiModelProviderService {
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01'
       },
-      signal: timeoutSignal(options.timeoutMs),
+      signal: requestSignal(options),
       body: JSON.stringify({
         model,
         max_tokens: Number(process.env.CLAUDE_MAX_TOKENS || 4096),

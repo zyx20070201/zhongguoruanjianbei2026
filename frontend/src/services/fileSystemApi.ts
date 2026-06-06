@@ -361,6 +361,7 @@ export interface ResourceCreateOptions {
   scope?: 'workspace' | 'workbench' | string;
   origin?: string;
   metadata?: Record<string, unknown>;
+  relativePaths?: string[];
 }
 
 export interface WorkbenchNoteRevision {
@@ -531,6 +532,7 @@ export const fileSystemApi = {
     if (options?.scope) formData.append('scope', options.scope);
     if (options?.origin) formData.append('origin', options.origin);
     if (options?.metadata) formData.append('metadata', JSON.stringify(options.metadata));
+    if (options?.relativePaths) formData.append('relativePaths', JSON.stringify(options.relativePaths));
 
     const response = await client.post(`/files/workspace/${workspaceId}/upload`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },

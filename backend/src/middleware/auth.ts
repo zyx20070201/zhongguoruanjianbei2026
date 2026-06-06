@@ -46,10 +46,22 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: 'Authentication required' });
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: session.userId },
-    select: { id: true, username: true, email: true }
-  });
+  const users = await prisma.$queryRaw<Array<{
+    id: string;
+    username: string;
+    email: string | null;
+    profileImageUrl: string | null;
+    bio: string | null;
+    gender: string | null;
+    dateOfBirth: string | null;
+    notificationWebhookUrl: string | null;
+  }>>`
+    SELECT "id", "username", "email", "profileImageUrl", "bio", "gender", "dateOfBirth", "notificationWebhookUrl"
+    FROM "User"
+    WHERE "id" = ${session.userId}
+    LIMIT 1
+  `;
+  const user = users[0];
 
   if (!user) {
     authSessionService.destroy(getAuthCookieValue(req));

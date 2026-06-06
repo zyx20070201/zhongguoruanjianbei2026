@@ -2,8 +2,6 @@ import {
   Columns2,
   FileText,
   Globe,
-  PanelLeftClose,
-  PanelLeftOpen,
   Plus,
   X
 } from 'lucide-react';
@@ -15,7 +13,7 @@ import {
   EditorState,
   ResourceReference
 } from '../../types';
-import { AiChatContext } from '../../services/aiApi';
+import { AiChatContext, AiChatMessage } from '../../services/aiApi';
 import {
   collectLeafIds,
   createLeaf,
@@ -23,7 +21,7 @@ import {
   normalizeLeaf,
   WorkbenchDropPlacement
 } from '../../utils/workbenchLayout';
-import WorkbenchEditorContent from './WorkbenchEditorContent';
+import WorkbenchEditorContent, { WorkbenchContextSelectionActionDetail } from './WorkbenchEditorContent';
 import { getLanguageLabel } from './editorResource';
 
 type WorkbenchEditorTabDragItem = { editorId: string; sourcePaneId: string };
@@ -49,7 +47,7 @@ interface WorkbenchEditorProps {
   documentSaveStateByResourceId?: DocumentSaveStateByResourceId;
   onActivateEditor: (editorId: string, paneId?: string | null) => void;
   onCloseEditor: (editorId: string) => void;
-  onBindResource: (editorId: string) => void;
+  onBindResource: (editorId: string, anchorRect?: DOMRect | null) => void;
   onChangeDocumentContent: (resourceId: string, content: string) => void;
   onSaveDocumentContent?: (
     resourceId: string,
@@ -70,11 +68,10 @@ interface WorkbenchEditorProps {
     targetPaneId: string,
     placement: WorkbenchDropPlacement
   ) => void;
-  onAddEditor: (paneId?: string | null) => void;
+  onAddEditor: (paneId?: string | null, anchorRect?: DOMRect | null) => void;
   onClosePane: (paneId: string) => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
-  onToggleSidebar: () => void;
-  isSidebarPinned: boolean;
+  onAddSelectionAskToAssistant?: (messages: AiChatMessage[], detail: WorkbenchContextSelectionActionDetail) => void;
   aiContext?: AiChatContext & { activeFileContent?: string | null };
 }
 
@@ -172,14 +169,13 @@ function PaneTab({
       ref={(element) => {
         drag(element);
       }}
-      className={`group relative flex h-full min-w-0 max-w-[260px] shrink-0 items-center border-r px-3 transition ${
-        isActive
-          ? 'z-10 -mb-px border-[#e6e5df] border-b-white bg-white text-[#25272b]'
-          : 'border-[#ecebe6] bg-[#fafaf8] text-[#7b7f85] hover:bg-[#f5f5f2] hover:text-[#25272b]'
+      className={`group relative flex min-w-fit max-w-[260px] shrink-0 items-center p-1.5 transition select-none ${
+        isActive ? 'text-gray-900' : 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'
       } ${isDragging ? 'opacity-40' : 'opacity-100'}`}
     >
       <button
         type="button"
+        aria-current={isActive ? 'page' : undefined}
         className="flex min-w-0 flex-1 items-center gap-2"
         onClick={() => {
           onActivateEditor(editor.id, paneId);
@@ -201,9 +197,7 @@ function PaneTab({
           event.stopPropagation();
           onCloseEditor(editor.id);
         }}
-        className={`ml-2 inline-flex h-5 w-5 shrink-0 items-center justify-center opacity-0 transition duration-150 group-hover:opacity-100 ${
-          isActive ? 'text-[#7c8086] hover:bg-[#f1f1ef] hover:text-[#25272b]' : 'text-[#a0a4aa] hover:bg-[#f1f1ef] hover:text-[#25272b]'
-        }`}
+        className="ml-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md opacity-0 transition duration-150 hover:bg-gray-100 hover:text-gray-900 group-hover:opacity-100"
         title="Close tab"
       >
         <X className="h-3.5 w-3.5" />
@@ -225,9 +219,7 @@ function PaneTitleBar({
   onCloseEditor,
   onBindResource,
   onAddEditor,
-  onClosePane,
-  onToggleSidebar,
-  isSidebarPinned
+  onClosePane
 }: {
   paneId: string;
   editors: EditorState[];
@@ -239,34 +231,13 @@ function PaneTitleBar({
   onActivateEditor: (editorId: string, paneId?: string | null) => void;
   onActivatePane: (paneId: string) => void;
   onCloseEditor: (editorId: string) => void;
-  onBindResource: (editorId: string) => void;
-  onAddEditor: (paneId?: string | null) => void;
+  onBindResource: (editorId: string, anchorRect?: DOMRect | null) => void;
+  onAddEditor: (paneId?: string | null, anchorRect?: DOMRect | null) => void;
   onClosePane: (paneId: string) => void;
-  onToggleSidebar: () => void;
-  isSidebarPinned: boolean;
 }) {
   return (
-    <div className="group/pane-header relative z-10 flex h-11 items-stretch gap-0 bg-[#fafaf8] text-sm text-[#25272b]">
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[#e6e5df]" />
-      {isPrimaryPane ? (
-        <button
-          type="button"
-          onClick={() => {
-            onActivatePane(paneId);
-            onToggleSidebar();
-          }}
-          className={`inline-flex h-full w-11 shrink-0 items-center justify-center border-r transition ${
-            isSidebarPinned
-              ? 'border-[#e6e5df] bg-[#fafaf8] text-[#202124]'
-              : 'border-[#ecebe6] bg-[#fafaf8] text-[#868a90] hover:bg-[#f5f5f2] hover:text-[#202124]'
-          }`}
-          title={isSidebarPinned ? 'Hide sidebar' : 'Show sidebar'}
-        >
-          {isSidebarPinned ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
-        </button>
-      ) : null}
-
-      <div className="flex min-w-0 flex-1 items-stretch gap-0 overflow-x-auto overflow-y-hidden bg-[#fafaf8]">
+    <div className="group/pane-header relative z-10 flex h-11 items-center bg-white px-2 text-sm font-medium text-[#25272b]">
+      <div className="flex min-w-0 flex-1 gap-1 scrollbar-none overflow-x-auto overflow-y-hidden w-fit text-center rounded-full bg-transparent py-1 touch-auto pointer-events-auto">
         {editors.map((editor) => (
           <PaneTab
             key={editor.id}
@@ -282,11 +253,11 @@ function PaneTitleBar({
         ))}
         <button
           type="button"
-          onClick={() => {
+          onClick={(event) => {
             onActivatePane(paneId);
-            onAddEditor(paneId);
+            onAddEditor(paneId, event.currentTarget.getBoundingClientRect());
           }}
-          className="inline-flex h-full w-8 shrink-0 items-center justify-center bg-[#fafaf8] pr-2 text-[#8a8e94] transition hover:text-[#25272b]"
+          className="inline-flex min-w-fit shrink-0 items-center justify-center p-1.5 text-gray-300 transition hover:text-gray-700 dark:text-gray-600 dark:hover:text-white"
           title="Open another resource in this pane"
         >
           <Plus className="h-4 w-4" />
@@ -296,7 +267,7 @@ function PaneTitleBar({
       {!isPrimaryPane ? (
         <button
           type="button"
-          className="absolute right-2 top-1/2 z-20 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center bg-white text-[#a1a4a9] opacity-0 transition duration-150 group-hover/pane-header:opacity-100 hover:text-[#25272b]"
+          className="absolute right-2 top-1/2 z-20 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-white text-gray-300 opacity-0 transition duration-150 hover:bg-gray-100 hover:text-gray-900 group-hover/pane-header:opacity-100"
           onClick={(event) => {
             event.stopPropagation();
             onClosePane(paneId);
@@ -330,8 +301,7 @@ function EditorLeafView({
   onDropResourceToPane,
   onAddEditor,
   onClosePane,
-  onToggleSidebar,
-  isSidebarPinned,
+  onAddSelectionAskToAssistant,
   aiContext
 }: {
   leaf: EditorLeafNode;
@@ -344,7 +314,7 @@ function EditorLeafView({
   activeEditorId: string | null;
   onActivateEditor: (editorId: string, paneId?: string | null) => void;
   onCloseEditor: (editorId: string) => void;
-  onBindResource: (editorId: string) => void;
+  onBindResource: (editorId: string, anchorRect?: DOMRect | null) => void;
   onChangeDocumentContent: (resourceId: string, content: string) => void;
   onSaveDocumentContent?: (
     resourceId: string,
@@ -364,10 +334,9 @@ function EditorLeafView({
     targetPaneId: string,
     placement: WorkbenchDropPlacement
   ) => void;
-  onAddEditor: (paneId?: string | null) => void;
+  onAddEditor: (paneId?: string | null, anchorRect?: DOMRect | null) => void;
   onClosePane: (paneId: string) => void;
-  onToggleSidebar: () => void;
-  isSidebarPinned: boolean;
+  onAddSelectionAskToAssistant?: (messages: AiChatMessage[], detail: WorkbenchContextSelectionActionDetail) => void;
   aiContext?: AiChatContext & { activeFileContent?: string | null };
 }) {
   const normalizedLeaf = normalizeLeaf(leaf);
@@ -463,8 +432,6 @@ function EditorLeafView({
               onBindResource={onBindResource}
               onAddEditor={onAddEditor}
               onClosePane={onClosePane}
-              onToggleSidebar={onToggleSidebar}
-              isSidebarPinned={isSidebarPinned}
             />
             <div className="relative min-h-0 flex-1 overflow-hidden">
               {leafEditors.map((editor) => {
@@ -491,6 +458,7 @@ function EditorLeafView({
                       onApplyAiNoteEdit={(resourceId, content, options) => onSaveDocumentContent?.(resourceId, content, options)}
                       onUpdateViewState={onUpdateEditorViewState}
                       onBindResource={onBindResource}
+                      onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
                       aiContext={aiContext}
                       resources={resources}
                     />
@@ -520,7 +488,7 @@ function LayoutNodeView(props: {
   activeEditorId: string | null;
   onActivateEditor: (editorId: string, paneId?: string | null) => void;
   onCloseEditor: (editorId: string) => void;
-  onBindResource: (editorId: string) => void;
+  onBindResource: (editorId: string, anchorRect?: DOMRect | null) => void;
   onChangeDocumentContent: (resourceId: string, content: string) => void;
   onSaveDocumentContent?: (
     resourceId: string,
@@ -540,11 +508,10 @@ function LayoutNodeView(props: {
     targetPaneId: string,
     placement: WorkbenchDropPlacement
   ) => void;
-  onAddEditor: (paneId?: string | null) => void;
+  onAddEditor: (paneId?: string | null, anchorRect?: DOMRect | null) => void;
   onClosePane: (paneId: string) => void;
   onUpdateSplitRatio: (splitId: string, ratio: number) => void;
-  onToggleSidebar: () => void;
-  isSidebarPinned: boolean;
+  onAddSelectionAskToAssistant?: (messages: AiChatMessage[], detail: WorkbenchContextSelectionActionDetail) => void;
   aiContext?: AiChatContext & { activeFileContent?: string | null };
 }) {
   const {
@@ -568,8 +535,7 @@ function LayoutNodeView(props: {
     onAddEditor,
     onClosePane,
     onUpdateSplitRatio,
-    onToggleSidebar,
-    isSidebarPinned,
+    onAddSelectionAskToAssistant,
     aiContext
   } = props;
 
@@ -595,8 +561,7 @@ function LayoutNodeView(props: {
         onDropResourceToPane={onDropResourceToPane}
         onAddEditor={onAddEditor}
         onClosePane={onClosePane}
-        onToggleSidebar={onToggleSidebar}
-        isSidebarPinned={isSidebarPinned}
+        onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
         aiContext={aiContext}
       />
     );
@@ -658,12 +623,12 @@ function LayoutNodeView(props: {
         }}
       >
         <div
-          className={`absolute bg-transparent transition-colors hover:bg-[#d9d9d4]/10 ${
+          className={`absolute bg-transparent transition-colors hover:bg-gray-50/30 ${
             isRow ? '-left-[2px] top-0 h-full w-[4px]' : '-top-[2px] left-0 h-[4px] w-full'
           }`}
         >
           <div
-            className={`absolute bg-[#e0dfda] ${
+            className={`absolute bg-gray-50 ${
               isRow
                 ? 'left-1/2 top-0 h-full w-px'
                 : 'left-0 top-1/2 h-px w-full'
@@ -704,8 +669,7 @@ export default function WorkbenchEditor({
   onAddEditor,
   onClosePane,
   onUpdateSplitRatio,
-  onToggleSidebar,
-  isSidebarPinned,
+  onAddSelectionAskToAssistant,
   aiContext
 }: WorkbenchEditorProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -784,7 +748,7 @@ export default function WorkbenchEditor({
           </p>
           <div className="mt-5 flex items-center justify-center">
             <button
-              onClick={() => onAddEditor('pane-1')}
+              onClick={(event) => onAddEditor('pane-1', event.currentTarget.getBoundingClientRect())}
               className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-4 py-2 text-sm font-medium text-white transition-all duration-200 hover:bg-[#34373c] active:scale-95"
             >
               <Plus className="h-4 w-4" />
@@ -819,8 +783,7 @@ export default function WorkbenchEditor({
         onAddEditor={onAddEditor}
         onClosePane={onClosePane}
         onUpdateSplitRatio={onUpdateSplitRatio}
-        onToggleSidebar={onToggleSidebar}
-        isSidebarPinned={isSidebarPinned}
+        onAddSelectionAskToAssistant={onAddSelectionAskToAssistant}
         aiContext={aiContext}
       />
     </div>

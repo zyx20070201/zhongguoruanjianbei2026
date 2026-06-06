@@ -103,7 +103,7 @@ const renderText = (artifact: StudioStructuredArtifact<any>) => {
   const trace = payload.processTrace;
   const mapping = payload.visualMapping;
   const rawContent = typeof payload.rawContent === 'string' ? payload.rawContent.trim() : '';
-  if ((artifact.templateId === 'resource_to_notes' || artifact.templateId === 'resource_compare') && rawContent) {
+  if ((artifact.templateId === 'resource_to_notes' || artifact.templateId === 'pagelm_cornell_notes' || artifact.templateId === 'pure_markdown_notes' || artifact.templateId === 'resource_compare') && rawContent) {
     return [
       rawContent,
       '',
@@ -244,6 +244,43 @@ const renderSlides = (artifact: StudioStructuredArtifact<any>) => {
   ].filter(Boolean).join('\n');
 };
 
+const renderVisualExplainer = (artifact: StudioStructuredArtifact<any>) => {
+  const payload = artifact.payload || {};
+  const sections = Array.isArray(payload.sections) ? payload.sections : [];
+  return [
+    `# ${payload.title || artifact.title}`,
+    '',
+    payload.summary || artifact.summary,
+    '',
+    '## Markdown Draft',
+    payload.markdownDraft || '',
+    '',
+    '## Visual Sections',
+    ...sections.map((section: any, index: number) =>
+      [
+        `### ${index + 1}. ${section.title || 'Section'}`,
+        section.focus ? `Focus: ${section.focus}` : '',
+        section.visualMode ? `Visual mode: ${section.visualMode}` : '',
+        '',
+        'Screen text:',
+        Array.isArray(section.screenText) ? section.screenText.map((item: string) => `- ${item}`).join('\n') : '',
+        '',
+        'Timeline:',
+        Array.isArray(section.timeline)
+          ? section.timeline.map((step: any, stepIndex: number) =>
+              `${stepIndex + 1}. ${step.action || 'focus'} ${Array.isArray(step.targetIds) ? step.targetIds.join(', ') : ''} - ${step.narration || ''}`
+            ).join('\n')
+          : '',
+        section.checkQuestion ? `\nCheck: ${section.checkQuestion}` : ''
+      ].filter(Boolean).join('\n')
+    ),
+    '',
+    personalizationSection(artifact),
+    '',
+    sourceSection(artifact)
+  ].filter(Boolean).join('\n');
+};
+
 const renderVideoScript = (artifact: StudioStructuredArtifact<any>) => {
   const scenes = Array.isArray(artifact.payload.scenes) ? artifact.payload.scenes : [];
   return [
@@ -300,6 +337,7 @@ export const renderStudioArtifact = (artifact: StudioStructuredArtifact) => {
   if (artifact.artifactKind === 'flashcards') return renderFlashcards(artifact);
   if (artifact.artifactKind === 'code_lab') return renderCodeLab(artifact);
   if (artifact.artifactKind === 'slides') return renderSlides(artifact);
+  if (artifact.artifactKind === 'visual_explainer') return renderVisualExplainer(artifact);
   if (artifact.artifactKind === 'video_script') return renderVideoScript(artifact);
   if (artifact.artifactKind === 'interactive_demo') return renderText(artifact);
   if (artifact.artifactKind === 'animation_script') return renderText(artifact);
