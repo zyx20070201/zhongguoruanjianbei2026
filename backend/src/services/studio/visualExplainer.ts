@@ -150,6 +150,53 @@ export interface VisualExplainerTimelineStep {
   narration: string;
   screenText?: string;
   durationMs?: number;
+  statePatch?: Record<string, unknown>;
+}
+
+export type VisualLessonModelType =
+  | 'table'
+  | 'graph'
+  | 'sequence'
+  | 'code_trace'
+  | 'datapath'
+  | 'flowchart'
+  | 'markdown_mermaid';
+
+export interface VisualLessonTimelineStep {
+  stepId: string;
+  action: string;
+  targetIds: string[];
+  screenText?: string;
+  narration: string;
+  statePatch: Record<string, unknown>;
+  durationMs: number;
+}
+
+export interface VisualLessonVisualModel {
+  type: VisualLessonModelType;
+  title: string;
+  objects: VisualExplainerObject[];
+  blocks: VisualExplainerBlock[];
+  markdown: string;
+}
+
+export interface VisualLessonSlide {
+  id: string;
+  title: string;
+  bodyMarkdown: string;
+  narration: string;
+  layout: 'text_visual' | 'visual_first' | 'text_first' | 'full_text';
+  visualModel: VisualLessonVisualModel;
+  timeline: VisualLessonTimelineStep[];
+  checkQuestion?: string;
+}
+
+export interface VisualLesson {
+  schemaVersion: 'visual_lesson.v1';
+  title: string;
+  summary: string;
+  sourceIds: string[];
+  slides: VisualLessonSlide[];
 }
 
 export type VisualExplainerBlock =
@@ -228,6 +275,7 @@ export interface VisualExplainerPayload {
   title: string;
   summary: string;
   sections: VisualExplainerSection[];
+  visualLesson?: VisualLesson;
   rendererPlan: {
     primary: 'section_player';
     libraries: string[];
@@ -475,6 +523,38 @@ export const visualExplainerMarkdownPrompt = (userPrompt: string) => [
   '不要在开头写“当然可以”“以下是”等寒暄，不要在结尾询问是否需要更多内容；直接给出高质量 Markdown 底稿。',
   '',
   `用户要求：${userPrompt}`
+].join('\n');
+
+export const visualExplainerSelectedSourcesMarkdownPrompt = (
+  userPrompt: string,
+  sources: Array<{ id: string; name: string; path?: string; content: string }>
+) => [
+  '你只负责 Visual Explainer 的第一阶段：生成内容底稿。',
+  '你只能使用下面的「用户要求」和「用户勾选资料全文」。',
+  '严禁使用、推断或提及 Context Capsule、Workbench 全量资源、当前文件、学习者画像、历史记忆、推荐系统、未勾选资源或 AI Studio 内部工作流。',
+  '如果勾选资料为空，可以只根据用户要求生成通用教学底稿；如果勾选资料存在，必须以资料内容为准，不要引入资料外的细节。',
+  '输出必须是纯 Markdown 正文，不要输出 JSON，不要输出 YAML，不要输出 schemaVersion、markdownDraft、sections、objects、timeline、rendererPlan 等内部字段。',
+  '底稿目标是“可被拆成 PPT/动画分镜的计算机课程讲解 Markdown”，不是普通摘要。',
+  '每个一级/二级小节都要短而聚焦，保留完整解释、例子、状态变化、关键条件和易错点。',
+  '允许使用 Markdown 表格、公式、代码块、伪代码代码块，以及 ```mermaid 图代码块；不要输出 HTML、CSS、视频源码或应用内部资源协议。',
+  '计算机课程内容要特别具体：数据库要有表/字段/连接条件/中间结果；算法和数据结构要有输入样例、状态序列和关键变量；组成原理要有部件、控制信号、数据通路和时序。',
+  '每个涉及过程的小节都要包含“发生了什么 -> 为什么 -> 当前状态/结果 -> 下一步”的信息，方便后续生成 timeline。',
+  '每个涉及结构的小节都要明确实体、关系、方向、层级或包含关系，方便后续生成 diagram。',
+  '最后给出 2-4 个自检问题或观察点。',
+  '不要在开头写寒暄，不要在结尾询问是否需要更多内容；直接给出 Markdown 底稿。',
+  '',
+  `用户要求：${userPrompt || '把勾选资料转换成视觉化课件讲解。'}`,
+  '',
+  '# 用户勾选资料全文',
+  sources.length
+    ? sources.map((source, index) => [
+      `## Source ${index + 1}: ${source.name}`,
+      `SourceId: ${source.id}`,
+      source.path ? `Path: ${source.path}` : '',
+      '',
+      source.content || '(empty source text)'
+    ].filter(Boolean).join('\n')).join('\n\n---\n\n')
+    : '(no selected source text)'
 ].join('\n');
 
 export const visualExplainerStoryboardPrompt = [
@@ -1503,6 +1583,69 @@ export const normalizeVisualExplainerRendererBlocks = (
   };
 };
 
+const selectedSourceIdsFromContext = (context: StudioGenerationContext) => {
+  const selectedResourceIds = (context.input.context as any)?.selectedResourceIds;
+  return Array.isArray(selectedResourceIds)
+    ? Array.from(new Set(selectedResourceIds.map((id) => String(id || '').trim()).filter(Boolean)))
+    : [];
+};
+
+const visualLessonModelTypeForSection = (section: VisualExplainerSection): VisualLessonModelType => {
+  const text = `${section.title} ${section.focus} ${section.sourceMarkdown || ''} ${section.bodyMarkdown || ''}`.toLowerCase();
+  if (/(join|inner join|left join|right join|数据库|关系表|表连接|字段|主键|外键)/i.test(text)) return 'table';
+  if (/(dijkstra|bfs|dfs|最短路|图算法|节点|边|邻接|graph)/i.test(text)) return 'graph';
+  if (/(lw|load word|数据通路|datapath|控制信号|寄存器堆|alu|数据存储器|指令存储器)/i.test(text)) return 'datapath';
+  if (/(数组|链表|栈|队列|堆|排序|sequence|array|stack|queue|heap)/i.test(text)) return 'sequence';
+  if (/(代码|伪代码|变量|trace|执行到|循环|递归|function|for|while)/i.test(text)) return 'code_trace';
+  if ((section.visualBlocks || []).some((block) => block.kind === 'mermaid') || section.visualMode === 'process' || section.visualMode === 'diagram') {
+    return 'flowchart';
+  }
+  return 'markdown_mermaid';
+};
+
+const visualLessonLayoutForSection = (section: VisualExplainerSection): VisualLessonSlide['layout'] => {
+  if (section.preferredRenderer === 'reveal' || section.visualMode === 'summary') return 'text_first';
+  if (section.visualMode === 'diagram' || section.visualMode === 'process' || section.visualMode === 'chart') return 'visual_first';
+  return 'text_visual';
+};
+
+export const visualLessonFromExplainer = (
+  context: StudioGenerationContext,
+  payload: Omit<VisualExplainerPayload, 'visualLesson'>
+): VisualLesson => ({
+  schemaVersion: 'visual_lesson.v1',
+  title: payload.title,
+  summary: payload.summary,
+  sourceIds: selectedSourceIdsFromContext(context),
+  slides: payload.sections.map((section) => ({
+    id: section.id,
+    title: section.title,
+    bodyMarkdown: section.bodyMarkdown || section.sourceMarkdown || '',
+    narration: section.narration,
+    layout: visualLessonLayoutForSection(section),
+    visualModel: {
+      type: visualLessonModelTypeForSection(section),
+      title: section.title,
+      objects: section.objects,
+      blocks: section.visualBlocks || [],
+      markdown: section.sourceMarkdown || section.bodyMarkdown || ''
+    },
+    timeline: section.timeline.map((step) => ({
+      stepId: step.id,
+      action: step.action,
+      targetIds: step.targetIds,
+      screenText: step.screenText,
+      narration: step.narration,
+      statePatch: step.statePatch || {
+        activeTargetIds: step.targetIds,
+        action: step.action
+      },
+      durationMs: step.durationMs || 900
+    })),
+    checkQuestion: section.checkQuestion
+  }))
+});
+
 export const buildVisualExplainerFromStages = (
   context: StudioGenerationContext,
   markdownDraft: string,
@@ -1547,7 +1690,11 @@ export const buildVisualExplainerFromStages = (
       exportTargets: ['web', 'video', 'pptx']
     }
   };
-  return normalizeVisualExplainerPayload(context, rawPayload, markdownDraft);
+  const normalized = normalizeVisualExplainerPayload(context, rawPayload, markdownDraft);
+  return {
+    ...normalized,
+    visualLesson: visualLessonFromExplainer(context, normalized)
+  };
 };
 
 export const validateVisualExplainerPayload = (payload: VisualExplainerPayload): VisualExplainerValidationReport => {
@@ -1628,7 +1775,10 @@ export const normalizeVisualExplainerPayload = (
           targetIds: targets.length ? targets : objects.slice(0, 1).map((object) => object.id),
           narration: clip(step.narration || section.narration || section.focus || '', 500),
           screenText: step.screenText ? clip(step.screenText, 120) : undefined,
-          durationMs: Number.isFinite(Number(step.durationMs)) ? Math.max(300, Math.min(4000, Number(step.durationMs))) : 900
+          durationMs: Number.isFinite(Number(step.durationMs)) ? Math.max(300, Math.min(4000, Number(step.durationMs))) : 900,
+          statePatch: step.statePatch && typeof step.statePatch === 'object'
+            ? step.statePatch as Record<string, unknown>
+            : undefined
         };
       });
       const visualMode: VisualExplainerSection['visualMode'] = VISUAL_MODES.includes(String(section.visualMode) as VisualExplainerSection['visualMode']) ? section.visualMode : 'slide';
@@ -1672,6 +1822,9 @@ export const normalizeVisualExplainerPayload = (
       primary: 'section_player',
       libraries: Array.isArray(raw.rendererPlan?.libraries) ? raw.rendererPlan.libraries.slice(0, 6).map((item: unknown) => clip(item, 60)) : fallback.rendererPlan.libraries,
       exportTargets: ['web', 'video', 'pptx']
-    }
+    },
+    visualLesson: raw.visualLesson?.schemaVersion === 'visual_lesson.v1' && Array.isArray(raw.visualLesson?.slides)
+      ? raw.visualLesson as VisualLesson
+      : undefined
   };
 };

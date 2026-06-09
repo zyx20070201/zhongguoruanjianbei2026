@@ -38,6 +38,7 @@ import {
   VISUAL_EXPLAINER_VISUAL_INTENT_SCHEMA_HINT,
   visualExplainerContentMapPrompt,
   visualExplainerMarkdownPrompt,
+  visualExplainerSelectedSourcesMarkdownPrompt,
   visualExplainerRendererBlocksPrompt,
   visualExplainerSectionPlanPrompt,
   visualExplainerSlideTextPrompt,
@@ -1356,6 +1357,7 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
 
   if (context.template.renderer === 'visual_explainer') {
     const userPrompt = latestPrompt(context);
+    const selectedSources = await selectedSourceFullTexts(context);
     const visualStages: VisualExplainerPipelineStage[] = [];
     let markdownDraft = '';
     let markdownDraftProvider = 'fallback';
@@ -1368,7 +1370,9 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
         [
           {
             role: 'user',
-            content: visualExplainerMarkdownPrompt(userPrompt)
+            content: selectedSources.length
+              ? visualExplainerSelectedSourcesMarkdownPrompt(userPrompt, selectedSources)
+              : visualExplainerMarkdownPrompt(userPrompt)
           }
         ],
         context,
@@ -1385,7 +1389,9 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
         provider: markdownResponse.provider,
         model: markdownResponse.model,
         durationMs: Date.now() - markdownStartedAt,
-        summary: 'Generated raw Markdown answer.',
+        summary: selectedSources.length
+          ? 'Generated raw Markdown answer from selected source text only.'
+          : 'Generated raw Markdown answer from user prompt only.',
         fallbackErrors: fallbackErrorsFromUsage(markdownResponse.usage)
       });
     } catch (error) {
@@ -1555,6 +1561,10 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
         usage: markdownUsage,
         markdownDraftProvider,
         markdownDraftModel,
+        selectedResourceIds: selectedSources.map((source) => source.id),
+        selectedSourceCount: selectedSources.length,
+        selectedSourceChars: selectedSources.reduce((sum, source) => sum + source.content.length, 0),
+        visualLessonSchemaVersion: payload.visualLesson?.schemaVersion || null,
         visualExplainerPipeline: {
           schemaVersion: 'visual_explainer.pipeline.v1',
           stages: visualStages,

@@ -34,7 +34,6 @@ import {
   ZoomOut
 } from 'lucide-react';
 import { ComponentType, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { Deck, Fragment as RevealFragment, Slide } from '@revealjs/react';
 import Editor from '@monaco-editor/react';
 import { Graph } from '@antv/x6';
 import ELK, { ElkNode } from 'elkjs/lib/elk.bundled.js';
@@ -448,6 +447,53 @@ interface VisualExplainerTimelineStep {
   narration: string;
   screenText?: string;
   durationMs?: number;
+  statePatch?: Record<string, unknown>;
+}
+
+type VisualLessonModelType =
+  | 'table'
+  | 'graph'
+  | 'sequence'
+  | 'code_trace'
+  | 'datapath'
+  | 'flowchart'
+  | 'markdown_mermaid';
+
+interface VisualLessonTimelineStep {
+  stepId: string;
+  action: string;
+  targetIds: string[];
+  screenText?: string;
+  narration: string;
+  statePatch?: Record<string, unknown>;
+  durationMs?: number;
+}
+
+interface VisualLessonVisualModel {
+  type: VisualLessonModelType;
+  title: string;
+  objects?: VisualExplainerObject[];
+  blocks?: VisualExplainerBlock[];
+  markdown?: string;
+}
+
+interface VisualLessonSlide {
+  id: string;
+  title: string;
+  bodyMarkdown: string;
+  narration: string;
+  layout?: 'text_visual' | 'visual_first' | 'text_first' | 'full_text';
+  visualModel?: VisualLessonVisualModel;
+  timeline: VisualLessonTimelineStep[];
+  checkQuestion?: string;
+}
+
+interface VisualLessonPayload {
+  schemaVersion: 'visual_lesson.v1';
+  title: string;
+  summary: string;
+  sourceIds?: string[];
+  slides: VisualLessonSlide[];
 }
 
 interface VisualExplainerSection {
@@ -473,6 +519,7 @@ interface VisualExplainerPayload {
   title: string;
   summary: string;
   sections: VisualExplainerSection[];
+  visualLesson?: VisualLessonPayload;
   rendererPlan?: {
     primary?: string;
     libraries?: string[];
@@ -4266,6 +4313,62 @@ const extractVisualExplainerPayload = (result: StudioResult): VisualExplainerPay
   return null;
 };
 
+const visualLessonModelTypeForSection = (section: VisualExplainerSection): VisualLessonModelType => {
+  const text = `${section.title} ${section.focus || ''} ${section.sourceMarkdown || ''} ${section.bodyMarkdown || ''}`;
+  if (/(join|inner join|left join|right join|数据库|关系表|表连接|字段|主键|外键)/i.test(text)) return 'table';
+  if (/(dijkstra|bfs|dfs|最短路|图算法|节点|边|邻接|graph)/i.test(text)) return 'graph';
+  if (/(lw|load word|数据通路|datapath|控制信号|寄存器堆|alu|数据存储器|指令存储器)/i.test(text)) return 'datapath';
+  if (/(数组|链表|栈|队列|堆|排序|sequence|array|stack|queue|heap)/i.test(text)) return 'sequence';
+  if (/(代码|伪代码|变量|trace|执行到|循环|递归|function|for|while)/i.test(text)) return 'code_trace';
+  if (section.visualMode === 'process' || section.visualMode === 'diagram' || (section.visualBlocks || []).some((block) => block.kind === 'mermaid')) return 'flowchart';
+  return 'markdown_mermaid';
+};
+
+const visualLessonFromVisualExplainer = (payload: VisualExplainerPayload): VisualLessonPayload => ({
+  schemaVersion: 'visual_lesson.v1',
+  title: payload.title,
+  summary: payload.summary,
+  sourceIds: [],
+  slides: payload.sections.map((section) => ({
+    id: section.id,
+    title: section.title,
+    bodyMarkdown: section.bodyMarkdown || section.sourceMarkdown || '',
+    narration: section.narration || section.focus || '',
+    layout: section.visualMode === 'process' || section.visualMode === 'diagram' ? 'visual_first' : 'text_visual',
+    visualModel: {
+      type: visualLessonModelTypeForSection(section),
+      title: section.title,
+      objects: section.objects || [],
+      blocks: section.visualBlocks || [],
+      markdown: section.sourceMarkdown || section.bodyMarkdown || ''
+    },
+    timeline: (section.timeline || []).map((step) => ({
+      stepId: step.id,
+      action: step.action,
+      targetIds: step.targetIds || [],
+      screenText: step.screenText,
+      narration: step.narration,
+      statePatch: step.statePatch || { activeTargetIds: step.targetIds || [], action: step.action },
+      durationMs: step.durationMs || 900
+    })),
+    checkQuestion: section.checkQuestion
+  }))
+});
+
+const extractVisualLessonPayload = (result: StudioResult): VisualLessonPayload | null => {
+  const visualExplainer = extractVisualExplainerPayload(result);
+  if (visualExplainer?.visualLesson?.schemaVersion === 'visual_lesson.v1' && Array.isArray(visualExplainer.visualLesson.slides)) {
+    return visualExplainer.visualLesson;
+  }
+  if (visualExplainer) return visualLessonFromVisualExplainer(visualExplainer);
+  const structured = isObjectRecord(result.structured) ? result.structured : null;
+  const payload = isObjectRecord(structured?.payload) ? structured.payload : null;
+  if (payload?.schemaVersion === 'visual_lesson.v1' && Array.isArray(payload.slides)) {
+    return payload as unknown as VisualLessonPayload;
+  }
+  return null;
+};
+
 const cueForPrimitive = (step: ProcessStepIR, primitiveId: string) =>
   step.visualCues.find((cue) => cue.primitiveId === primitiveId);
 
@@ -6425,11 +6528,197 @@ function RoutedSectionVisual({ section }: { section: VisualExplainerSection }) {
   return null;
 }
 
-function VisualExplainerViewer({ result }: { result: StudioResult }) {
-  const payload = useMemo(() => extractVisualExplainerPayload(result), [result]);
-  const sections = payload?.sections?.length ? payload.sections : [];
+const visualModeForLessonModel = (type?: VisualLessonModelType): VisualExplainerMode => {
+  if (type === 'graph' || type === 'datapath' || type === 'flowchart') return 'diagram';
+  if (type === 'sequence' || type === 'code_trace') return 'process';
+  if (type === 'table') return 'comparison';
+  return 'slide';
+};
 
-  if (!payload || !sections.length) {
+const rendererForLessonModel = (type?: VisualLessonModelType): VisualExplainerRendererKind => {
+  if (type === 'graph' || type === 'datapath' || type === 'flowchart') return 'x6';
+  return 'reveal';
+};
+
+const sectionFromLessonSlide = (slide: VisualLessonSlide): VisualExplainerSection => {
+  const objects = slide.visualModel?.objects || [];
+  const blocks = slide.visualModel?.blocks || [];
+  return {
+    id: slide.id,
+    title: slide.title,
+    focus: slide.narration,
+    sourceMarkdown: slide.visualModel?.markdown || slide.bodyMarkdown,
+    bodyMarkdown: slide.bodyMarkdown,
+    visualMode: visualModeForLessonModel(slide.visualModel?.type),
+    screenText: slide.timeline.map((step) => step.screenText || step.narration).filter(Boolean).slice(0, 6),
+    narration: slide.narration,
+    objects,
+    timeline: slide.timeline.map((step) => ({
+      id: step.stepId,
+      action: step.action as VisualExplainerAction,
+      targetIds: step.targetIds || [],
+      narration: step.narration,
+      screenText: step.screenText,
+      durationMs: step.durationMs,
+      statePatch: step.statePatch
+    })),
+    visualBlocks: blocks,
+    preferredRenderer: blocks.some((block) => block.kind === 'mermaid') ? 'mermaid' : rendererForLessonModel(slide.visualModel?.type),
+    checkQuestion: slide.checkQuestion
+  };
+};
+
+const activeTargetIdsForLessonStep = (step?: VisualLessonTimelineStep) => {
+  const patched = Array.isArray((step?.statePatch as any)?.activeTargetIds)
+    ? (step?.statePatch as any).activeTargetIds
+    : [];
+  return new Set([...(step?.targetIds || []), ...patched].map((id) => String(id)));
+};
+
+function VisualLessonObjectCards({
+  objects,
+  activeTargetIds
+}: {
+  objects: VisualExplainerObject[];
+  activeTargetIds: Set<string>;
+}) {
+  const visibleObjects = objects.filter((object) => object.kind !== 'edge').slice(0, 10);
+  if (!visibleObjects.length) return null;
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {visibleObjects.map((object) => {
+        const active = activeTargetIds.has(object.id);
+        return (
+          <div
+            key={object.id}
+            className={`min-h-[74px] rounded-lg border px-3 py-2 transition ${
+              active
+                ? 'border-[#2563eb] bg-[#eff6ff] shadow-sm'
+                : 'border-[#e2e8f0] bg-white'
+            }`}
+          >
+            <div className="text-xs font-semibold uppercase text-[#7b8190]">{object.kind}</div>
+            <div className="mt-1 text-sm font-semibold leading-snug text-[#202124]">{object.label}</div>
+            {object.detail ? <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-[#64748b]">{object.detail}</div> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function VisualLessonDatapathView({
+  objects,
+  activeTargetIds
+}: {
+  objects: VisualExplainerObject[];
+  activeTargetIds: Set<string>;
+}) {
+  const nodes = objects.filter((object) => object.kind !== 'edge').slice(0, 8);
+  if (!nodes.length) return null;
+  return (
+    <div className="flex min-h-[220px] items-center overflow-x-auto rounded-lg border border-[#e2e8f0] bg-[#f8fafc] p-4">
+      <div className="flex min-w-max items-center gap-3">
+        {nodes.map((node, index) => {
+          const active = activeTargetIds.has(node.id);
+          return (
+            <div key={node.id} className="flex items-center gap-3">
+              <div
+                className={`flex h-[96px] w-[150px] flex-col justify-center rounded-lg border px-3 text-center transition ${
+                  active
+                    ? 'border-[#2563eb] bg-white shadow-md'
+                    : 'border-[#cbd5e1] bg-white'
+                }`}
+              >
+                <div className="text-sm font-semibold leading-snug text-[#202124]">{node.label}</div>
+                {node.detail ? <div className="mt-1 line-clamp-2 text-xs text-[#64748b]">{node.detail}</div> : null}
+              </div>
+              {index < nodes.length - 1 ? <ChevronRight className="h-5 w-5 shrink-0 text-[#94a3b8]" /> : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function VisualLessonModelView({
+  slide,
+  activeStep
+}: {
+  slide: VisualLessonSlide;
+  activeStep?: VisualLessonTimelineStep;
+}) {
+  const section = useMemo(() => sectionFromLessonSlide(slide), [slide]);
+  const activeTargetIds = useMemo(() => activeTargetIdsForLessonStep(activeStep), [activeStep]);
+  const modelType = slide.visualModel?.type || 'markdown_mermaid';
+  const hasDiagram = routeVisualRenderer(section).renderer !== 'reveal';
+  const objects = slide.visualModel?.objects || [];
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold uppercase tracking-wide text-[#64748b]">
+          {modelType.replace('_', ' ')}
+        </div>
+        {activeStep?.screenText ? (
+          <div className="rounded-full bg-[#eef2ff] px-3 py-1 text-xs font-semibold text-[#3730a3]">
+            {activeStep.screenText}
+          </div>
+        ) : null}
+      </div>
+      <div className="min-h-[260px] flex-1 overflow-hidden rounded-lg border border-[#e2e8f0] bg-white p-3">
+        {modelType === 'datapath' ? (
+          <VisualLessonDatapathView objects={objects} activeTargetIds={activeTargetIds} />
+        ) : hasDiagram ? (
+          <div className="h-full min-h-[300px]">
+            <RoutedSectionVisual section={section} />
+          </div>
+        ) : (
+          <div className="h-full overflow-auto">
+            <MarkdownPreview content={slide.visualModel?.markdown || slide.bodyMarkdown || slide.narration} variant="message" />
+          </div>
+        )}
+      </div>
+      <VisualLessonObjectCards objects={objects} activeTargetIds={activeTargetIds} />
+    </div>
+  );
+}
+
+function VisualExplainerViewer({ result }: { result: StudioResult }) {
+  const lesson = useMemo(() => extractVisualLessonPayload(result), [result]);
+  const slides = lesson?.slides?.length ? lesson.slides : [];
+  const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const currentSlide = slides[currentSlideIndex];
+  const steps = currentSlide?.timeline?.length ? currentSlide.timeline : [];
+  const activeStep = steps[currentStepIndex];
+
+  useEffect(() => {
+    setCurrentSlideIndex(0);
+    setCurrentStepIndex(0);
+    setIsPlaying(false);
+  }, [lesson?.title]);
+
+  useEffect(() => {
+    if (!isPlaying || !currentSlide) return;
+    const timer = window.setTimeout(() => {
+      if (currentStepIndex < Math.max(steps.length - 1, 0)) {
+        setCurrentStepIndex((index) => index + 1);
+        return;
+      }
+      if (currentSlideIndex < slides.length - 1) {
+        setCurrentSlideIndex((index) => index + 1);
+        setCurrentStepIndex(0);
+        return;
+      }
+      setIsPlaying(false);
+    }, Math.max(400, activeStep?.durationMs || 1100));
+    return () => window.clearTimeout(timer);
+  }, [activeStep?.durationMs, currentSlide, currentSlideIndex, currentStepIndex, isPlaying, slides.length, steps.length]);
+
+  if (!lesson || !slides.length || !currentSlide) {
     return (
       <div className="mx-auto max-w-4xl">
         <MarkdownPreview content={result.content} variant="document" />
@@ -6437,75 +6726,132 @@ function VisualExplainerViewer({ result }: { result: StudioResult }) {
     );
   }
 
+  const goSlide = (nextIndex: number) => {
+    setCurrentSlideIndex(Math.min(Math.max(nextIndex, 0), slides.length - 1));
+    setCurrentStepIndex(0);
+    setIsPlaying(false);
+  };
+
+  const resetCurrentSlide = () => {
+    setCurrentStepIndex(0);
+    setIsPlaying(false);
+  };
+
   return (
-    <section className="min-w-0 overflow-hidden bg-white">
-      <div className="px-5 py-4">
-        <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
-          Visual Explainer · {visualModeLabel[sections[0]?.visualMode] || 'Slide'}
+    <section className="min-w-0 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] px-5 py-4">
+        <div className="min-w-0">
+          <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
+            Visual Lesson · {currentSlideIndex + 1}/{slides.length}
+          </div>
+          <h3 className="mt-1 truncate text-lg font-semibold text-[#202124]">{lesson.title}</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => goSlide(currentSlideIndex - 1)}
+            disabled={currentSlideIndex === 0}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#dfe3ea] text-[#343a46] disabled:opacity-40"
+            title="Previous slide"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsPlaying((value) => !value)}
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#2563eb] px-3 text-sm font-semibold text-white"
+          >
+            {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            {isPlaying ? 'Pause' : 'Play'}
+          </button>
+          <button
+            type="button"
+            onClick={resetCurrentSlide}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#dfe3ea] text-[#343a46]"
+            title="Reset slide"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => goSlide(currentSlideIndex + 1)}
+            disabled={currentSlideIndex >= slides.length - 1}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#dfe3ea] text-[#343a46] disabled:opacity-40"
+            title="Next slide"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
         </div>
       </div>
-      <div className="h-[min(720px,calc(100vh-250px))] min-h-[520px] bg-white">
-        <Deck
-          config={{
-            width: 1280,
-            height: 720,
-            controls: true,
-            progress: true,
-            center: true,
-            hash: false,
-            transition: 'slide',
-            backgroundTransition: 'fade'
-          }}
-        >
-          {sections.map((section) => {
-            const route = routeVisualRenderer(section);
-            const hasRenderer = route.renderer === 'x6' || route.renderer === 'mermaid';
-            const narration = revealNarration(section);
-            const bodyMarkdown = sectionBodyMarkdown(section);
-            const focus = slideFocusText(section, bodyMarkdown);
-            return (
-              <Slide key={section.id} autoAnimate>
-                <section
-                  className={`mx-auto grid h-full text-left ${
-                    hasRenderer
-                      ? 'max-w-6xl grid-cols-[1.05fr_0.95fr] items-stretch gap-8 px-2 py-8'
-                      : 'max-w-5xl grid-cols-1 px-3 py-8'
-                  }`}
-                >
-                  <div className={`flex min-h-0 min-w-0 flex-col ${hasRenderer ? 'pr-4' : ''}`}>
-                    <div className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#64748b]">
-                      {visualModeLabel[section.visualMode] || section.visualMode}
-                    </div>
-                    <h2 className="!mb-4 !text-[34px] !font-semibold !leading-tight !text-[#202124]">
-                      {cleanRevealText(section.title, 72)}
-                    </h2>
-                    {focus ? (
-                      <p className="!mx-0 !mb-4 !text-[20px] !leading-snug !text-[#475569]">
-                        {focus}
-                      </p>
-                    ) : null}
-                    {bodyMarkdown ? (
-                      <RevealFragment animation="fade-up" as="div">
-                        <div className={`min-h-0 flex-1 overflow-y-auto text-left ${hasRenderer ? 'pr-3' : 'pr-2'}`}>
-                          <MarkdownPreview content={bodyMarkdown} variant="message" />
-                        </div>
-                      </RevealFragment>
-                    ) : narration ? (
-                      <RevealFragment animation="fade-up" as="p">
-                        <span className="block !text-[19px] !leading-relaxed !text-[#334155]">{narration}</span>
-                      </RevealFragment>
-                    ) : null}
-                  </div>
-                  {hasRenderer ? (
-                    <div className="flex min-h-0 min-w-0 items-center border-l border-[#e2e8f0] pl-8">
-                      <RoutedSectionVisual section={section} />
-                    </div>
-                  ) : null}
-                </section>
-              </Slide>
-            );
-          })}
-        </Deck>
+      <div className="grid min-h-[640px] grid-cols-1 gap-4 px-5 py-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <main className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)]">
+          <article className="flex min-h-[520px] min-w-0 flex-col rounded-lg border border-[#e5e7eb] bg-white">
+            <div className="border-b border-[#e5e7eb] px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-[#64748b]">
+                Slide {currentSlideIndex + 1}
+              </div>
+              <h2 className="mt-1 text-2xl font-semibold leading-tight text-[#202124]">{currentSlide.title}</h2>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+              <MarkdownPreview content={currentSlide.bodyMarkdown || currentSlide.narration} variant="message" />
+            </div>
+            {currentSlide.checkQuestion ? (
+              <div className="border-t border-[#e5e7eb] bg-[#f8fafc] px-4 py-3 text-sm font-medium text-[#334155]">
+                {currentSlide.checkQuestion}
+              </div>
+            ) : null}
+          </article>
+          <aside className="min-h-[520px] min-w-0 rounded-lg border border-[#e5e7eb] bg-[#fbfdff] p-4">
+            <VisualLessonModelView slide={currentSlide} activeStep={activeStep} />
+          </aside>
+        </main>
+        <aside className="flex min-h-[280px] flex-col rounded-lg border border-[#e5e7eb] bg-white">
+          <div className="border-b border-[#e5e7eb] px-4 py-3">
+            <div className="text-sm font-semibold text-[#202124]">Timeline</div>
+            <div className="mt-0.5 text-xs text-[#7b8190]">
+              {steps.length ? `${currentStepIndex + 1}/${steps.length}` : 'No steps'}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-3">
+            {steps.length ? (
+              <div className="space-y-2">
+                {steps.map((step, index) => {
+                  const active = index === currentStepIndex;
+                  return (
+                    <button
+                      key={step.stepId}
+                      type="button"
+                      onClick={() => {
+                        setCurrentStepIndex(index);
+                        setIsPlaying(false);
+                      }}
+                      className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                        active
+                          ? 'border-[#2563eb] bg-[#eff6ff]'
+                          : 'border-[#e2e8f0] bg-white hover:bg-[#f8fafc]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold uppercase text-[#64748b]">{step.action}</span>
+                        <span className="text-xs text-[#94a3b8]">{index + 1}</span>
+                      </div>
+                      <div className="mt-1 text-sm font-semibold leading-snug text-[#202124]">
+                        {step.screenText || step.narration}
+                      </div>
+                      {step.screenText && step.narration !== step.screenText ? (
+                        <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-[#64748b]">{step.narration}</div>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-lg bg-[#f8fafc] p-3 text-sm text-[#64748b]">
+                This slide has no timeline steps.
+              </div>
+            )}
+          </div>
+        </aside>
       </div>
     </section>
   );
@@ -8038,7 +8384,7 @@ function ResultView({
   const headerMeta = `${studioResultTypeLabel(result)} · Based on ${sourceCount} sources`;
   const hasGeneratedFileViewer = Boolean(result.delivery && result.delivery.kind !== 'markdown');
   const teachingVisualization = extractTeachingVisualizationPayload(result);
-  const visualExplainer = extractVisualExplainerPayload(result);
+  const visualLesson = extractVisualLessonPayload(result);
   const [resourceNote, setResourceNote] = useState<FileSystemObject | null>(result.createdNote || null);
   const [resourceNoteError, setResourceNoteError] = useState<string | null>(result.autoCreateNoteError || null);
   const [openingNote, setOpeningNote] = useState(false);
@@ -8119,7 +8465,7 @@ function ResultView({
             sourceLabel={headerTitle}
           >
             <div className="min-w-0">
-              {visualExplainer ? (
+              {visualLesson ? (
                 <VisualExplainerViewer result={result} />
               ) : teachingVisualization ? (
                 <TeachingVisualizationViewer result={result} />
