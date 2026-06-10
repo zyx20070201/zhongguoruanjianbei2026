@@ -643,5 +643,14 @@ export const fileSystemApi = {
 
   previewUrl: (workspaceId: string, id: string): string => {
     return apiUrl(`/files/workspace/${workspaceId}/preview?id=${encodeURIComponent(id)}`);
+  },
+
+  previewData: async (workspaceId: string, id: string, previewUrl?: string): Promise<ArrayBuffer> => {
+    const url = previewUrl || `/files/workspace/${workspaceId}/preview?id=${encodeURIComponent(id)}`;
+    const response = await client.get(url, {
+      responseType: 'arraybuffer',
+      timeout: RESOURCE_REQUEST_TIMEOUT_MS
+    });
+    return response.data;
   }
 };

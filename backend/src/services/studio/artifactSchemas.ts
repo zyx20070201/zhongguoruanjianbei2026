@@ -6,6 +6,7 @@ import {
   validateTeachingVisualizationIR
 } from './visualizationIr';
 import {
+  normalizeVisualCodeLessonPayload,
   normalizeVisualExplainerPayload,
   VISUAL_EXPLAINER_SCHEMA_HINT
 } from './visualExplainer';
@@ -273,6 +274,24 @@ const normalizeSlides = (context: StudioGenerationContext, content: string) => {
 
 const normalizeVisualExplainer = (context: StudioGenerationContext, content: string) => {
   const parsed = parseJson(content);
+  if (parsed?.schemaVersion === 'visual_code_lesson.v1') {
+    const selectedSourceIds = context.capsule.citations
+      .map((citation) => citation.sourceId)
+      .filter((id): id is string => Boolean(id));
+    const payload = normalizeVisualCodeLessonPayload(
+      context,
+      parsed,
+      context.input.prompt || context.template.title,
+      selectedSourceIds.length ? selectedSourceIds : Array.isArray(parsed.sourceIds) ? parsed.sourceIds : []
+    );
+    return createArtifactEnvelope(
+      context,
+      'visual_explainer',
+      payload as unknown as Record<string, unknown>,
+      payload.title || context.input.prompt || context.template.title,
+      payload.summary || '包含讲解文本和可执行前端可视化代码块的视觉化课程。'
+    );
+  }
   const payload = normalizeVisualExplainerPayload(context, parsed, content);
   return createArtifactEnvelope(
     context,
