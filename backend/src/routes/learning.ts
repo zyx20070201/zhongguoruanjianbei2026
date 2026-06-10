@@ -11,9 +11,10 @@ import { learnerStateService } from '../services/learnerStateService';
 import { learnerStateAnalyzer } from '../services/learnerStateAnalyzer';
 import { learnerStateContextAdapter, LearnerContextAudience } from '../services/learnerStateContextAdapter';
 import { learnerProfileViewService } from '../services/learnerProfileViewService';
-import { learnerMemoryControlService } from '../services/learnerMemoryControlService';
+import { profileControlService } from '../services/profileControlService';
 import { savedMemoryService } from '../services/savedMemoryService';
 import { conversationHistoryService } from '../services/conversationHistoryService';
+import { memoryCandidateService } from '../services/memoryCandidateService';
 import { memoryGovernanceService } from '../services/memoryGovernanceService';
 import { systemHealthService } from '../services/systemHealthService';
 import { learningMemoryService } from '../services/learningMemoryService';
@@ -93,6 +94,7 @@ const terminalAssistantMessage = (result: any, mode: 'chat' | 'agentic') => ({
   proposedActions: result?.proposedActions,
   executedActions: result?.executedActions,
   agentTrace: result?.agentTrace,
+  agentEvents: Array.isArray(result?.agentEvents) ? result.agentEvents : undefined,
   evidence: result?.evidence,
   followUps: result?.followUps,
   askUserToSave: result?.memoryContext?.askUserToSave || null
@@ -1885,7 +1887,7 @@ router.get('/learner-state/memories', async (req: Request, res: Response) => {
   if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
 
   try {
-    const result = await learnerMemoryControlService.listKeyMemories({ workspaceId, workbenchId, limit });
+    const result = await profileControlService.listProfileControls({ workspaceId, workbenchId, limit });
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
@@ -1898,7 +1900,7 @@ router.get('/learner-state/memories/explain', async (req: Request, res: Response
   if (!workspaceId || !memoryKey) return res.status(400).json({ error: 'workspaceId and memoryKey are required' });
 
   try {
-    const result = await learnerMemoryControlService.explain({ workspaceId, memoryKey });
+    const result = await profileControlService.explainProfileItem({ workspaceId, memoryKey });
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
@@ -1915,7 +1917,7 @@ router.post('/learner-state/memories/control', async (req: Request, res: Respons
   }
 
   try {
-    const control = await learnerMemoryControlService.control({
+    const control = await profileControlService.controlProfileItem({
       workspaceId,
       workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
       memoryKey,
@@ -1936,7 +1938,7 @@ router.get('/learner-state/lifecycle', async (req: Request, res: Response) => {
   const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
   if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
   try {
-    const result = await learnerMemoryControlService.lifecycle({ workspaceId });
+    const result = await profileControlService.lifecycle({ workspaceId });
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
@@ -1947,7 +1949,7 @@ router.get('/learner-state/evaluate', async (req: Request, res: Response) => {
   const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
   if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
   try {
-    const result = await learnerMemoryControlService.evaluate({ workspaceId });
+    const result = await profileControlService.evaluate({ workspaceId });
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
@@ -1989,7 +1991,7 @@ router.get('/memory/candidates', async (req: Request, res: Response) => {
   const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 8;
   if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
   try {
-    const result = await memoryGovernanceService.listSaveCandidates({ workspaceId, limit });
+    const result = await memoryCandidateService.list({ workspaceId, limit });
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ error: getErrorMessage(error) });
@@ -2003,7 +2005,7 @@ router.post('/memory/candidates/:candidateId/decision', async (req: Request, res
   if (!candidateId) return res.status(400).json({ error: 'candidateId is required' });
   if (decision !== 'save' && decision !== 'dismiss') return res.status(400).json({ error: 'decision must be save or dismiss' });
   try {
-    const result = await memoryGovernanceService.decideSaveCandidate({
+    const result = await memoryCandidateService.decide({
       workspaceId,
       workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
       candidateId,

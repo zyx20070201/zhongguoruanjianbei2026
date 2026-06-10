@@ -644,6 +644,8 @@ export const aiApi = {
     const decoder = new TextDecoder();
     let buffer = '';
     let finalResult: AiStreamResult | null = null;
+    let streamedReply = '';
+    let latestMeta: Partial<AiStreamResult> = {};
 
     const handleBlock = (block: string) => {
       const { event, data } = parseSseBlock(block);
@@ -651,15 +653,20 @@ export const aiApi = {
 
       const parsed = JSON.parse(data);
       if (event === 'delta') {
-        handlers.onDelta?.(String(parsed));
+        const delta = String(parsed);
+        streamedReply += delta;
+        handlers.onDelta?.(delta);
       } else if (event === 'replace') {
-        handlers.onReplace?.(String(parsed));
+        streamedReply = String(parsed);
+        handlers.onReplace?.(streamedReply);
       } else if (event === 'timeline') {
         handlers.onTimeline?.(parsed as AgentTimelineItem[]);
       } else if (event === 'meta') {
-        handlers.onMeta?.(parsed as Partial<AiStreamResult>);
+        latestMeta = { ...latestMeta, ...(parsed as Partial<AiStreamResult>) };
+        handlers.onMeta?.(latestMeta);
       } else if (event === 'done') {
         finalResult = parsed as AiStreamResult;
+        if (finalResult?.reply) streamedReply = finalResult.reply;
       } else if (event === 'error') {
         throw new Error(parsed?.error || 'AI request failed');
       }
@@ -681,6 +688,14 @@ export const aiApi = {
     }
 
     if (!finalResult) {
+      if (streamedReply.trim()) {
+        return {
+          ...latestMeta,
+          reply: streamedReply,
+          timeline: latestMeta.timeline || [],
+          usage: latestMeta.usage || null
+        } as AiStreamResult;
+      }
       throw new Error('AI stream ended before a final response was received');
     }
 

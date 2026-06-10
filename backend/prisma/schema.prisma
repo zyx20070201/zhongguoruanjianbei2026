@@ -90,6 +90,8 @@ model Workspace {
   learnerStateSnapshotVersions LearnerStateSnapshotVersion[]
   learnerEvidences   LearnerEvidence[]
   learnerMemoryControls LearnerMemoryControl[]
+  learnerProfileCandidates LearnerProfileCandidate[]
+  learnerProfileEntities LearnerProfileEntity[]
   workbenchTableProperties WorkbenchTableProperty[]
   workbenchTablePropertyValues WorkbenchTablePropertyValue[]
   flashcardDecks     FlashcardDeck[]
@@ -181,6 +183,8 @@ model Workbench {
   learnerEvidences LearnerEvidence[]
   learnerStateTransitions LearnerStateTransition[]
   learnerMemoryControls LearnerMemoryControl[]
+  learnerProfileCandidates LearnerProfileCandidate[]
+  learnerProfileEntities LearnerProfileEntity[]
   tablePropertyValues WorkbenchTablePropertyValue[]
   conversationSessions ConversationSession[]
   conversationMessages ConversationMessage[]
@@ -1092,6 +1096,69 @@ model LearnerMemoryControl {
   @@index([workspaceId, status])
   @@index([workspaceId, memoryKey])
   @@index([workspaceId, dimension])
+}
+
+model LearnerProfileCandidate {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  workbenchId     String?
+  candidateKey    String
+  dimension       String
+  type            String
+  title           String
+  description     String   @default("")
+  polarity        String   @default("neutral")
+  status          String   @default("candidate")
+  confidence      Float    @default(0.5)
+  severity        String?
+  evidenceIdsJson String   @default("[]")
+  sourceTypesJson String   @default("[]")
+  payloadJson     String   @default("{}")
+  sourcePipeline  String   @default("learner_portrait_pipeline")
+  observedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workbench Workbench? @relation(fields: [workbenchId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, candidateKey])
+  @@index([workspaceId, dimension, status])
+  @@index([workspaceId, updatedAt])
+}
+
+model LearnerProfileEntity {
+  id                   String   @id @default(uuid())
+  workspaceId           String
+  workbenchId           String?
+  entityKey             String
+  dimension             String
+  type                  String
+  title                 String
+  description           String   @default("")
+  status                String   @default("candidate")
+  polarity              String   @default("neutral")
+  confidence            Float    @default(0.5)
+  severity              String?
+  evidenceCount         Int      @default(0)
+  evidenceIdsJson       String   @default("[]")
+  candidateKeysJson     String   @default("[]")
+  affectedConceptsJson  String   @default("[]")
+  recommendation        String   @default("")
+  payloadJson           String   @default("{}")
+  resolutionSource      String   @default("builder")
+  polishSource          String   @default("fallback")
+  entityHash            String   @default("")
+  observedAt            DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workbench Workbench? @relation(fields: [workbenchId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, entityKey])
+  @@index([workspaceId, dimension, status])
+  @@index([workspaceId, updatedAt])
 }
 
 model LearningRunStep {

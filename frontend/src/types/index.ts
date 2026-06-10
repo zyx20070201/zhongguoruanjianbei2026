@@ -277,11 +277,50 @@ export interface LearningGoalDraft {
   suggestedMode: 'quick-start' | 'project' | 'review';
 }
 
+export type AgentUiEvent =
+  | {
+      id: string;
+      kind: 'activity';
+      at: string;
+      title: string;
+      detail?: string;
+      node?: string;
+      status: 'running' | 'done' | 'error';
+    }
+  | {
+      id: string;
+      kind: 'say';
+      at: string;
+      phase: 'interim' | 'final';
+      content: string;
+      node?: string;
+    }
+  | {
+      id: string;
+      kind: 'artifact';
+      at: string;
+      title: string;
+      artifactType: 'file' | 'note' | 'diff' | 'list' | 'plan' | 'workbench';
+      fileId?: string;
+      workbenchId?: string;
+      planId?: string;
+      detail?: string;
+    }
+  | {
+      id: string;
+      kind: 'ask';
+      at: string;
+      prompt: string;
+      node?: string;
+      actions?: Array<{ id: string; label: string }>;
+    };
+
 export interface LearningTerminalMessage {
   role: 'user' | 'assistant';
   content: string;
   files?: TerminalChatFile[];
   mode?: 'chat' | 'agentic';
+  agentEvents?: AgentUiEvent[];
   statusHistory?: Array<{
     done: boolean;
     action: string;
@@ -300,6 +339,41 @@ export interface LearningTerminalMessage {
     risk: 'low' | 'medium' | 'high';
     requiresConfirmation: boolean;
     payload?: Record<string, unknown>;
+    artifacts?: Array<{
+      id: string;
+      kind: string;
+      title: string;
+      summary: string;
+      contentPreview?: string;
+      target?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    }>;
+    changeSet?: {
+      id: string;
+      title: string;
+      summary: string;
+      risk: 'low' | 'medium' | 'high';
+      requiresApproval: boolean;
+      items: Array<{
+        id: string;
+        actionType: string;
+        title: string;
+        description: string;
+        operation: 'create' | 'update' | 'bind' | 'run_job' | 'delete' | 'noop';
+        risk: 'low' | 'medium' | 'high';
+        target: Record<string, unknown>;
+        artifacts?: Array<{
+          id: string;
+          kind: string;
+          title: string;
+          summary: string;
+          contentPreview?: string;
+          target?: Record<string, unknown>;
+          metadata?: Record<string, unknown>;
+        }>;
+        reversible?: boolean;
+      }>;
+    };
   }>;
   executedActions?: Array<{
     id: string;
@@ -453,6 +527,7 @@ export interface LearningTerminalAction {
 export interface LearningTerminalResponse {
   reply: string;
   mode?: 'chat' | 'agentic';
+  agentEvents?: AgentUiEvent[];
   goalDraft?: LearningGoalDraft;
   suggestedActions?: LearningTerminalAction[];
   sessionId?: string;
@@ -467,6 +542,41 @@ export interface LearningTerminalResponse {
     risk: 'low' | 'medium' | 'high';
     requiresConfirmation: boolean;
     payload?: Record<string, unknown>;
+    artifacts?: Array<{
+      id: string;
+      kind: string;
+      title: string;
+      summary: string;
+      contentPreview?: string;
+      target?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    }>;
+    changeSet?: {
+      id: string;
+      title: string;
+      summary: string;
+      risk: 'low' | 'medium' | 'high';
+      requiresApproval: boolean;
+      items: Array<{
+        id: string;
+        actionType: string;
+        title: string;
+        description: string;
+        operation: 'create' | 'update' | 'bind' | 'run_job' | 'delete' | 'noop';
+        risk: 'low' | 'medium' | 'high';
+        target: Record<string, unknown>;
+        artifacts?: Array<{
+          id: string;
+          kind: string;
+          title: string;
+          summary: string;
+          contentPreview?: string;
+          target?: Record<string, unknown>;
+          metadata?: Record<string, unknown>;
+        }>;
+        reversible?: boolean;
+      }>;
+    };
   }>;
   approvalRequest?: {
     proposals: Array<{
@@ -477,6 +587,41 @@ export interface LearningTerminalResponse {
       risk: 'low' | 'medium' | 'high';
       requiresConfirmation: boolean;
       payload?: Record<string, unknown>;
+      artifacts?: Array<{
+        id: string;
+        kind: string;
+        title: string;
+        summary: string;
+        contentPreview?: string;
+        target?: Record<string, unknown>;
+        metadata?: Record<string, unknown>;
+      }>;
+      changeSet?: {
+        id: string;
+        title: string;
+        summary: string;
+        risk: 'low' | 'medium' | 'high';
+        requiresApproval: boolean;
+        items: Array<{
+          id: string;
+          actionType: string;
+          title: string;
+          description: string;
+          operation: 'create' | 'update' | 'bind' | 'run_job' | 'delete' | 'noop';
+          risk: 'low' | 'medium' | 'high';
+          target: Record<string, unknown>;
+          artifacts?: Array<{
+            id: string;
+            kind: string;
+            title: string;
+            summary: string;
+            contentPreview?: string;
+            target?: Record<string, unknown>;
+            metadata?: Record<string, unknown>;
+          }>;
+          reversible?: boolean;
+        }>;
+      };
     }>;
     message: string;
   };

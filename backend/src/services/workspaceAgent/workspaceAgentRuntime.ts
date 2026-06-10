@@ -24,16 +24,20 @@ import { knowledgeSearchService } from '../knowledgeSearchService';
 import { ChatSessionAttachmentContext } from '../../types/contextSystem';
 import { LocalStorageService } from '../storage/localStorageService';
 import { learnerStateContextAdapter } from '../learnerStateContextAdapter';
-import { learningMemoryService } from '../learningMemoryService';
-import { learningOrchestrationService } from '../learningOrchestrationService';
 import { learningRunService } from '../learningRunService';
 import { learningStateBuilder } from '../learningStateBuilder';
 import { mclPlannerService } from '../mclPlannerService';
-import type { LearningPlan } from '../planningTypes';
 import { resourceDiscoveryService } from '../resourceDiscoveryService';
 import { savedMemoryService } from '../savedMemoryService';
 import { workspaceFileIndexService, type WorkspaceFileRetrievalMode } from '../workspaceFileIndexService';
 import { workbenchService } from '../workbenchService';
+import {
+  workspaceAgentActionRegistry,
+  type WorkspaceAgentArtifact,
+  type WorkspaceAgentChangeSet,
+  type WorkspaceAgentExecutedAction as RegistryExecutedAction,
+  type WorkspaceAgentProposal as RegistryProposal
+} from './workspaceAgentActions';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
@@ -239,14 +243,9 @@ interface WorkspaceAgentEvidence {
   metadata?: Record<string, unknown>;
 }
 
-interface WorkspaceAgentProposal {
-  id: string;
-  type: string;
-  title: string;
-  description: string;
-  risk: 'low' | 'medium' | 'high';
-  requiresConfirmation: true;
-  payload: Record<string, unknown>;
+interface WorkspaceAgentProposal extends RegistryProposal {
+  artifacts?: WorkspaceAgentArtifact[];
+  changeSet?: WorkspaceAgentChangeSet;
 }
 
 interface WorkspaceAgentApprovalDecision {
@@ -255,16 +254,7 @@ interface WorkspaceAgentApprovalDecision {
   note?: string;
 }
 
-interface WorkspaceAgentExecutedAction {
-  id: string;
-  proposalId: string;
-  type: string;
-  title: string;
-  success: boolean;
-  summary: string;
-  result?: Record<string, unknown>;
-  error?: string;
-}
+interface WorkspaceAgentExecutedAction extends RegistryExecutedAction {}
 
 interface WorkspaceAgentToolCall {
   id: string;
@@ -365,15 +355,55 @@ export interface WorkspaceAgentRunResult {
   memoryContext?: {
     askUserToSave?: null;
   };
+  agentEvents?: WorkspaceAgentUiEvent[];
 }
 
+export type WorkspaceAgentUiEvent =
+  | {
+      id: string;
+      kind: 'activity';
+      at: string;
+      title: string;
+      detail?: string;
+      node?: string;
+      status: 'running' | 'done' | 'error';
+    }
+  | {
+      id: string;
+      kind: 'say';
+      at: string;
+      phase: 'interim' | 'final';
+      content: string;
+      node?: string;
+    }
+  | {
+      id: string;
+      kind: 'artifact';
+      at: string;
+      title: string;
+      artifactType: 'file' | 'note' | 'diff' | 'list' | 'plan' | 'workbench';
+      fileId?: string;
+      workbenchId?: string;
+      planId?: string;
+      detail?: string;
+    }
+  | {
+      id: string;
+      kind: 'ask';
+      at: string;
+      prompt: string;
+      node?: string;
+      actions?: Array<{ id: string; label: string }>;
+    };
+
 export interface WorkspaceAgentStreamEvent {
-  type: 'progress' | 'update' | 'token' | 'approval_required' | 'final' | 'error';
+  type: 'progress' | 'update' | 'token' | 'approval_required' | 'final' | 'error' | 'ui_event';
   node?: string;
   message?: string;
   delta?: string;
   data?: Record<string, unknown>;
   result?: WorkspaceAgentRunResult;
+  uiEvent?: WorkspaceAgentUiEvent;
 }
 
 const appendArray = <T>(left: T[] = [], right: T[] | T = []) =>
@@ -690,12 +720,25 @@ const uniqueRoutes = (routes: WorkspaceAgentRoute[]) => {
 const inferIntentByRules = (text: string, recentContext = ''): WorkspaceAgentIntent => {
   const normalized = text.toLowerCase();
   const combinedContext = `${text}\n${recentContext}`.toLowerCase();
-  const requiresMutation = /创建|保存|写入|修改|删除|绑定|应用|落地|生成到|记住|save|create|write|update|delete|bind|apply/.test(text);
+  const requiresMutation = /创建|保存|写入|修改|删除|绑定|应用|落地|生成|制作|导入|索引|分析资源|分析文档|构建|重建|记住|推荐.*studio|列出.*studio|渲染|运行代码|批改|判题|提示.*题|解释.*题|save|create|write|update|delete|bind|apply|generate|import|index|analy[sz]e|build|recommend.*studio|run code|code lab|retry.*render|judge.*quiz|quiz assistant/.test(text);
   const mutationKinds = [
     /记住|长期记忆|memory|preference/.test(normalized) ? 'save_memory' : '',
     /创建|新建|workbench|学习现场/.test(text) ? 'create_workbench' : '',
-    /保存.*计划|应用.*计划|save.*plan/.test(normalized) ? 'save_plan' : '',
+    /保存.*计划|save.*plan/.test(normalized) ? 'save_plan' : '',
+    /应用.*计划|apply.*plan/.test(normalized) ? 'apply_learning_plan' : '',
+    /推荐.*(studio|产物|资源)|studio.*推荐|recommend.*studio/i.test(text) ? 'recommend_studio_artifacts' : '',
+    /列出|查看|已有/.test(text) && /studio.*(产物|artifact|资源)|artifacts?/i.test(text) ? 'list_studio_artifacts' : '',
+    /重试.*渲染|重新.*渲染|retry.*render/i.test(text) ? 'retry_studio_render_job' : '',
+    /运行.*代码|执行.*代码|run code|code lab.*run|运行.*code lab/i.test(text) ? 'run_code_lab' : '',
+    /批改|判题|judge.*quiz|quiz.*judge/i.test(text) ? 'judge_studio_quiz_answer' : '',
+    /(提示|讲解|解释|帮助).*(这道题|题目|quiz)|quiz.*assistant/i.test(text) ? 'assist_studio_quiz_question' : '',
+    /studio|测验|练习|quiz|flashcards?|抽认卡|卡片|思维导图|mind.?map|slide|课件|可视化|visual|debug task|速记|复习清单|生成.*(笔记|资料|资源|测验|练习|卡片|图|课件)/i.test(text) ? 'generate_studio_artifact' : '',
+    /保存.*(回答|内容|资料|文件)|落库|save.*(content|file)|生成到/.test(normalized) ? 'save_generated_content' : '',
+    /(保存|创建|生成).*(笔记|note)/i.test(text) ? 'create_note' : '',
     /绑定|添加资源|bind|attach/.test(normalized) ? 'bind_resource' : '',
+    /索引|index/.test(normalized) ? 'index_file' : '',
+    /分析.*(资源|资料|文档|pdf|视频)|resource intelligence|analy[sz]e.*(resource|document)/i.test(text) ? 'analyze_resource' : '',
+    /(构建|重建|生成).*(知识图谱|图谱)|build.*graph|rebuild.*graph/i.test(text) ? 'build_course_graph' : '',
     /写入|修改文件|保存文件|write|edit file/.test(normalized) ? 'write_file' : ''
   ].filter(Boolean);
 
@@ -715,7 +758,7 @@ const inferIntentByRules = (text: string, recentContext = ''): WorkspaceAgentInt
   if (hardSignals.explicitGraphReference) matchedIntents.push('knowledge_graph');
   if (/计划|规划|学习路径|路线|下一步|milestone|path|planner|planning|复习计划/.test(text)) matchedIntents.push('planning');
   if (hardSignals.explicitPersonalizationReference) matchedIntents.push('personalized_path');
-  if (/资源|推荐资料|外部资料|找资料|搜索资料|resource|search web/.test(text)) matchedIntents.push('resource_generation');
+  if (/资源|推荐资料|外部资料|找资料|搜索资料|resource|search web|studio/.test(text)) matchedIntents.push('resource_generation');
   if (hardSignals.explicitFileReference || hardSignals.explicitWorkspaceReference) matchedIntents.push('material_search');
   if (/根据.*资料|课程资料|知识库|这门课|课件|讲义|course|material/.test(text)) matchedIntents.push('course_qa');
   if (/学习画像|长期记忆|历史对话|我之前|profile|memory|history/.test(text)) matchedIntents.push('learner_profile');
@@ -1104,6 +1147,7 @@ export class WorkspaceAgentRuntime {
     const threadId = toThreadId(input);
     const chatFiles = normalizeChatFiles(input.chatFiles);
     const chatFileIds = chatFileIdsFromInput(input);
+    const collectedUiEvents: WorkspaceAgentUiEvent[] = [];
     const run = await learningRunService.startRun({
       workspaceId: input.workspaceId,
       workbenchId: input.workbenchId || null,
@@ -1118,7 +1162,13 @@ export class WorkspaceAgentRuntime {
 
     try {
       const initialUserId = await this.lookupWorkspaceUserId(input.workspaceId).catch(() => null);
-      yield { type: 'progress', node: 'Graph', message: '启动 Workspace Agent graph。', data: { runId: run.id, checkpointThreadId: threadId } };
+      const initialEvent: WorkspaceAgentStreamEvent = { type: 'progress', node: 'Graph', message: '启动 Workspace Agent graph。', data: { runId: run.id, checkpointThreadId: threadId } };
+      yield initialEvent;
+      const initialUiEvent = this.uiEventFromStreamEvent(initialEvent);
+      if (initialUiEvent) {
+        collectedUiEvents.push(initialUiEvent);
+        yield { type: 'ui_event', node: initialEvent.node, uiEvent: initialUiEvent };
+      }
       const stream = await this.graph.stream({
         workspaceId: input.workspaceId,
         workbenchId: input.workbenchId || null,
@@ -1161,6 +1211,15 @@ export class WorkspaceAgentRuntime {
       for await (const chunk of stream as any) {
         for (const event of this.normalizeStreamChunk(chunk)) {
           yield event;
+          if (event.type === 'ui_event' && event.uiEvent) {
+            collectedUiEvents.push(event.uiEvent);
+            continue;
+          }
+          const uiEvent = this.uiEventFromStreamEvent(event);
+          if (uiEvent) {
+            collectedUiEvents.push(uiEvent);
+            yield { type: 'ui_event', node: event.node, uiEvent };
+          }
         }
       }
 
@@ -1176,6 +1235,15 @@ export class WorkspaceAgentRuntime {
         messages,
         interrupted
       });
+      const artifactEvents = this.artifactUiEventsFromResult(result);
+      for (const uiEvent of artifactEvents) {
+        collectedUiEvents.push(uiEvent);
+        yield { type: 'ui_event', node: 'ArtifactCollector', uiEvent };
+      }
+      const resultWithEvents: WorkspaceAgentRunResult = {
+        ...result,
+        agentEvents: collectedUiEvents.slice(-80)
+      };
 
       if (interrupted) {
         await learningRunService.completeRun(run.id, {
@@ -1190,8 +1258,18 @@ export class WorkspaceAgentRuntime {
           type: 'approval_required',
           node: 'ApprovalGate',
           message: '需要用户确认后继续执行。',
-          result
+          result: resultWithEvents
         };
+        const approvalUiEvent = this.uiEventFromStreamEvent({
+          type: 'approval_required',
+          node: 'ApprovalGate',
+          message: '需要用户确认后继续执行。',
+          result: resultWithEvents
+        });
+        if (approvalUiEvent) {
+          collectedUiEvents.push(approvalUiEvent);
+          yield { type: 'ui_event', node: 'ApprovalGate', uiEvent: approvalUiEvent };
+        }
         return;
       }
 
@@ -1202,13 +1280,16 @@ export class WorkspaceAgentRuntime {
         evidenceCount: result.evidence?.length || 0,
         proposalCount: proposedActions.length
       }).catch(() => undefined);
-      yield { type: 'final', node: 'ResponseComposer', result };
+      yield { type: 'final', node: 'ResponseComposer', result: resultWithEvents };
     } catch (error) {
       await learningRunService.failRun(run.id, error).catch(() => undefined);
-      yield {
+      const errorEvent: WorkspaceAgentStreamEvent = {
         type: 'error',
         message: error instanceof Error ? error.message : String(error)
       };
+      const uiEvent = this.uiEventFromStreamEvent(errorEvent);
+      if (uiEvent) yield { type: 'ui_event', uiEvent };
+      yield errorEvent;
     }
   }
 
@@ -1217,8 +1298,29 @@ export class WorkspaceAgentRuntime {
     const payload = Array.isArray(chunk) ? chunk[1] : chunk;
     if (mode === 'messages') {
       const message = Array.isArray(payload) ? payload[0] : payload;
+      const metadata = Array.isArray(payload) ? payload[1] : null;
       const content = typeof message?.content === 'string' ? message.content : '';
-      return content ? [{ type: 'token', delta: content }] : [];
+      if (!content) return [];
+      const node = typeof metadata?.langgraph_node === 'string'
+        ? metadata.langgraph_node
+        : typeof metadata?.node === 'string'
+          ? metadata.node
+          : undefined;
+      if (node && node !== 'ResponseComposer') {
+        return [{
+          type: 'ui_event',
+          node,
+          uiEvent: {
+            id: crypto.randomUUID(),
+            kind: 'say',
+            at: new Date().toISOString(),
+            phase: 'interim',
+            node,
+            content
+          }
+        }];
+      }
+      return [{ type: 'token', node, delta: content }];
     }
     if (mode === 'tasks') {
       const task = payload || {};
@@ -1248,6 +1350,116 @@ export class WorkspaceAgentRuntime {
       }));
     }
     return [];
+  }
+
+  private uiEventFromStreamEvent(event: WorkspaceAgentStreamEvent): WorkspaceAgentUiEvent | null {
+    const at = new Date().toISOString();
+    if (event.type === 'progress') {
+      return {
+        id: crypto.randomUUID(),
+        kind: 'activity',
+        at,
+        node: event.node,
+        title: this.humanizeAgentNode(event.node || 'Agent'),
+        detail: event.message,
+        status: this.inferActivityStatus(event.message)
+      };
+    }
+    if (event.type === 'update') {
+      const detail = event.message || `${event.node || 'Agent'} updated.`;
+      return {
+        id: crypto.randomUUID(),
+        kind: 'activity',
+        at,
+        node: event.node,
+        title: this.humanizeAgentNode(event.node || 'Agent'),
+        detail,
+        status: detail.includes('failed') || detail.includes('失败') ? 'error' : 'done'
+      };
+    }
+    if (event.type === 'approval_required') {
+      return {
+        id: crypto.randomUUID(),
+        kind: 'ask',
+        at,
+        node: event.node || 'ApprovalGate',
+        prompt: event.message || event.result?.approvalRequest?.message || '需要用户确认后继续执行。',
+        actions: (event.result?.proposedActions || []).slice(0, 4).map((action) => ({
+          id: action.id,
+          label: action.title
+        }))
+      };
+    }
+    if (event.type === 'error') {
+      return {
+        id: crypto.randomUUID(),
+        kind: 'activity',
+        at,
+        node: event.node,
+        title: 'Agent error',
+        detail: event.message || 'Workspace Agent failed.',
+        status: 'error'
+      };
+    }
+    return null;
+  }
+
+  private artifactUiEventsFromResult(result: WorkspaceAgentRunResult): WorkspaceAgentUiEvent[] {
+    const at = new Date().toISOString();
+    const artifacts: WorkspaceAgentUiEvent[] = [];
+    (result.executedActions || []).forEach((action) => {
+      const data = action.result || {};
+      const fileId = typeof data.fileId === 'string' ? data.fileId : typeof data.resourceId === 'string' ? data.resourceId : undefined;
+      const workbenchId = typeof data.workbenchId === 'string' ? data.workbenchId : undefined;
+      const planId = typeof data.planId === 'string' ? data.planId : undefined;
+      if (!fileId && !workbenchId && !planId) return;
+      artifacts.push({
+        id: crypto.randomUUID(),
+        kind: 'artifact',
+        at,
+        title: action.title || action.summary || 'Agent result',
+        detail: action.summary,
+        artifactType: fileId ? 'file' : workbenchId ? 'workbench' : 'plan',
+        fileId,
+        workbenchId,
+        planId
+      });
+    });
+    if (result.goalDraft) {
+      artifacts.push({
+        id: crypto.randomUUID(),
+        kind: 'artifact',
+        at,
+        title: result.goalDraft.title || 'Learning goal draft',
+        detail: result.goalDraft.goalText,
+        artifactType: 'plan'
+      });
+    }
+    return artifacts.slice(0, 12);
+  }
+
+  private inferActivityStatus(message?: string): 'running' | 'done' | 'error' {
+    const value = message || '';
+    if (/failed|error|失败|错误/.test(value)) return 'error';
+    if (/完成|done|generated|已生成|updated|已更新/.test(value)) return 'done';
+    return 'running';
+  }
+
+  private humanizeAgentNode(node: string) {
+    const labels: Record<string, string> = {
+      Graph: 'Workspace Agent',
+      QueryRouter: 'Planning route',
+      WorkspaceInspector: 'Inspecting workspace',
+      ContextPlanner: 'Planning context',
+      RouteDispatcher: 'Dispatching steps',
+      RouteExecutor: 'Running tool step',
+      ApprovalGate: 'Approval needed',
+      ApprovedActionExecutor: 'Applying approved action',
+      ResponseComposer: 'Composing response',
+      RetryPolicy: 'Checking coverage',
+      ArtifactCollector: 'Collecting results'
+    };
+    return labels[node] || node || 'Workspace Agent';
   }
 
   private summarizeUpdate(node: string, update: unknown) {
@@ -1857,184 +2069,21 @@ export class WorkspaceAgentRuntime {
   }
 
   private async executeApprovedProposal(state: WorkspaceAgentState, proposal: WorkspaceAgentProposal): Promise<WorkspaceAgentExecutedAction> {
-    const base = {
-      id: `executed-${crypto.randomUUID()}`,
-      proposalId: proposal.id,
-      type: proposal.type,
-      title: proposal.title
-    };
     try {
-      if (proposal.type === 'save_memory') {
-        if (!state.userId) throw new Error('缺少 userId，无法保存长期记忆。');
-        const text = String((proposal.payload as any).candidateText || state.userInput || '').trim();
-        if (!text) throw new Error('缺少可保存的记忆内容。');
-        const memory = await savedMemoryService.upsert({
-          workspaceId: state.workspaceId,
-          workbenchId: state.workbenchId || null,
-          userId: state.userId,
-          text,
-          category: 'note',
-          source: 'workspace_agent_approval',
-          confidence: 0.9
-        });
-        return {
-          ...base,
-          success: true,
-          summary: `已保存长期记忆：${clip(memory.text, 120)}`,
-          result: { memoryId: memory.id, memoryKey: memory.memoryKey }
-        };
-      }
-
-      if (proposal.type === 'create_workbench') {
-        const goalDraft = ((proposal.payload as any).goalDraft || this.buildGoalDraft(state)) as LearningGoalDraft;
-        const result = await learningOrchestrationService.createGuidedWorkbench({
-          workspaceId: state.workspaceId,
-          goalText: goalDraft.goalText || state.userInput,
-          title: goalDraft.title,
-          mode: goalDraft.suggestedMode,
-          goalDraft
-        });
-        return {
-          ...base,
-          success: true,
-          summary: `已创建学习现场：${result.workbench.title}`,
-          result: {
-            workbenchId: result.workbench.id,
-            generatedResourceIds: result.generatedResources.map((resource: any) => resource.id)
-          }
-        };
-      }
-
-      if (proposal.type === 'save_learning_plan') {
-        const proposedPlan = (proposal.payload as any).plan as LearningPlan | undefined;
-        if (proposedPlan?.id && proposedPlan.objective && Array.isArray(proposedPlan.steps)) {
-          const savedPlan = await learningMemoryService.saveLearningPlan({
-            workspaceId: state.workspaceId,
-            workbenchId: null,
-            goalId: proposedPlan.goalId || null,
-            scope: 'workspace',
-            supersedePrevious: false,
-            plan: {
-              ...proposedPlan,
-              workspaceId: state.workspaceId,
-              workbenchId: null,
-              scope: 'workspace',
-              updatedAt: nowIso()
-            }
-          });
-          return {
-            ...base,
-            success: true,
-            summary: `已保存学习计划：${savedPlan.objective || proposedPlan.objective}`,
-            result: {
-              planId: savedPlan.id,
-              version: savedPlan.version,
-              scope: 'workspace',
-              plannerMode: (proposedPlan.knowledgeGraphSnapshot as any)?.planningEnhancements ? 'mcl_enhanced' : 'mcl'
-            }
-          };
-        }
-
-        const planDraft = ((proposal.payload as any).planDraft || {}) as Record<string, any>;
-        const objective = String(planDraft.objective || state.userInput || 'Workspace learning plan').trim();
-        const milestones = Array.isArray(planDraft.milestones)
-          ? planDraft.milestones.map((item: any, index: number) => ({
-              id: `milestone-${index + 1}`,
-              title: String(item?.title || `Milestone ${index + 1}`),
-              description: String(item?.description || item?.rationale || ''),
-              successCriteria: Array.isArray(item?.successCriteria) ? item.successCriteria.map(String) : [],
-              status: index === 0 ? 'active' : 'pending'
-            }))
-          : [];
-        const steps = Array.isArray(planDraft.steps)
-          ? planDraft.steps.map((item: any, index: number) => ({
-              id: String(item?.id || `step-${index + 1}`),
-              type: 'explain',
-              title: String(item?.title || item?.task || `Step ${index + 1}`),
-              rationale: String(item?.rationale || item?.why || ''),
-              targetSkills: Array.isArray(item?.targetSkills) ? item.targetSkills.map(String) : [],
-              prerequisites: Array.isArray(item?.prerequisites) ? item.prerequisites.map(String) : [],
-              estimatedLoad: ['light', 'medium', 'heavy'].includes(item?.estimatedLoad) ? item.estimatedLoad : 'medium',
-              expectedEvidence: Array.isArray(item?.expectedEvidence) ? item.expectedEvidence.map(String) : [],
-              status: index === 0 ? 'active' : 'pending'
-            }))
-          : [];
-        const savedPlan = await learningMemoryService.saveLearningPlan({
-          workspaceId: state.workspaceId,
-          workbenchId: null,
-          scope: 'workspace',
-          supersedePrevious: false,
-          plan: {
-            id: crypto.randomUUID(),
-            workspaceId: state.workspaceId,
-            workbenchId: null,
-            goalId: null,
-            scope: 'workspace',
-            version: 1,
-            status: 'active',
-            objective,
-            rationale: String(planDraft.rationale || 'Saved from AI Terminal approved proposal.'),
-            assumptions: Array.isArray(planDraft.assumptions) ? planDraft.assumptions.map(String) : [],
-            constraints: Array.isArray(planDraft.constraints) ? planDraft.constraints.map(String) : [],
-            targetSkills: Array.isArray(planDraft.targetSkills) ? planDraft.targetSkills.map(String) : [],
-            weakSkills: Array.isArray(planDraft.weakSkills) ? planDraft.weakSkills.map(String) : [],
-            milestones,
-            steps,
-            adaptationPolicy: { replanTriggers: [], progressionSignals: [], fallbackActions: [] },
-            evidence: {
-              citations: this.dedupeEvidence(state.evidence || []).slice(0, 8).map((item) => item.title),
-              currentTaskIntent: state.intent?.summary || state.userInput,
-              readinessSummary: 'Created from approved AI Terminal plan draft.'
-            },
-            diagnosticReport: {
-              learnerLevel: 'unknown',
-              targetGoal: objective,
-              currentStateSummary: '',
-              strengths: [],
-              weakSkills: [],
-              prerequisiteGaps: [],
-              preferredResourceForms: [],
-              timeBudget: { sessionMinutes: 30, weeklySessions: 3 },
-              cognitiveLoadTolerance: 'medium',
-              recommendedDifficultyBand: { min: 0.3, max: 0.7 }
-            } as any,
-            candidateResources: [],
-            knowledgeGraphSnapshot: { nodes: [], edges: [] },
-            reflectionHistory: [],
-            constraintScores: {
-              cltScore: 0.6,
-              zpdScore: 0.6,
-              alignmentScore: 0.6,
-              confidence: 0.55,
-              summary: 'Lightweight terminal-approved plan.'
-            },
-            revisionCount: 0,
-            nextStepId: steps[0]?.id || null,
-            previousPlanId: null,
-            naturalPlanMarkdown: '',
-            structuredPlan: null,
-            skipPlanningSideEffects: true,
-            createdAt: nowIso(),
-            updatedAt: nowIso()
-          } as any
-        });
-        return {
-          ...base,
-          success: true,
-          summary: `已保存学习计划：${objective}`,
-          result: { planId: (savedPlan as any).plan?.id || (savedPlan as any).id, scope: 'workspace' }
-        };
-      }
-
-      return {
-        ...base,
-        success: false,
-        summary: `当前还没有 ${proposal.type} 的确认后执行器。`,
-        error: 'unsupported_proposal_executor'
-      };
+      return await workspaceAgentActionRegistry.execute({
+        workspaceId: state.workspaceId,
+        workbenchId: state.workbenchId || null,
+        userId: state.userId || state.workspaceSnapshot?.workspace.userId || null,
+        userInput: state.userInput,
+        evidence: this.dedupeEvidence(state.evidence || []),
+        goalDraft: state.goalDraft || this.maybeBuildGoalDraft(state)
+      }, proposal);
     } catch (error) {
       return {
-        ...base,
+        id: `executed-${crypto.randomUUID()}`,
+        proposalId: proposal.id,
+        type: proposal.type,
+        title: proposal.title,
         success: false,
         summary: `${proposal.title} 执行失败：${error instanceof Error ? error.message : String(error)}`,
         error: error instanceof Error ? error.message : String(error)
@@ -2673,7 +2722,7 @@ export class WorkspaceAgentRuntime {
     });
     const planningQueryCompiler = (plan.knowledgeGraphSnapshot as any)?.planningQueryCompiler;
     const planningEnhancements = (plan.knowledgeGraphSnapshot as any)?.planningEnhancements;
-    const proposal: WorkspaceAgentProposal = {
+    const proposal = workspaceAgentActionRegistry.preview({
       id: `proposal-${crypto.randomUUID()}`,
       type: 'save_learning_plan',
       title: '保存增强学习计划',
@@ -2686,7 +2735,7 @@ export class WorkspaceAgentRuntime {
         planningQueryCompiler,
         planningEnhancements
       }
-    };
+    });
     return {
       summary: '已生成增强学习计划，但没有写入数据库。',
       useful: true,
@@ -2709,7 +2758,7 @@ export class WorkspaceAgentRuntime {
 
   private async proposeWorkspaceAction(state: WorkspaceAgentState, strategy: WorkspaceAgentStrategy) {
     const intent = state.intent || inferIntentByRules(state.userInput);
-    const mutationKinds = intent.mutationKinds.length ? intent.mutationKinds : ['workspace_action'];
+    const mutationKinds = intent.mutationKinds.length ? intent.mutationKinds : this.inferActionKindsFromRequest(state);
     const proposals = mutationKinds.map((kind) => this.buildProposal(kind, state, strategy));
     return {
       summary: `生成 ${proposals.length} 个待确认 workspace proposal；没有执行写入。`,
@@ -2731,51 +2780,363 @@ export class WorkspaceAgentRuntime {
         evidenceIds: this.dedupeEvidence(state.evidence).slice(0, 8).map((item) => item.id)
       }
     };
-    if (kind === 'save_memory') {
-      return {
+    const fileObjectIds = this.inferActionFileIds(state);
+    const normalizedKind = this.normalizeActionKind(kind, state);
+    if (normalizedKind === 'save_memory') {
+      return workspaceAgentActionRegistry.preview({
         ...base,
         type: 'save_memory',
         title: '保存长期记忆',
         description: '建议将用户明确表达的偏好/背景保存为长期记忆，需用户确认。',
         risk: 'medium',
         payload: { ...base.payload, candidateText: state.userInput }
-      };
+      });
     }
-    if (kind === 'create_workbench') {
-      return {
+    if (normalizedKind === 'create_workbench') {
+      return workspaceAgentActionRegistry.preview({
         ...base,
         type: 'create_workbench',
         title: '创建学习现场',
         description: '建议基于当前目标创建 workbench；第一版不会自动创建。',
         risk: 'medium',
         payload: { ...base.payload, goalDraft: this.buildGoalDraft(state) }
-      };
+      });
     }
-    if (kind === 'write_file') {
-      return {
+    if (normalizedKind === 'write_file') {
+      return workspaceAgentActionRegistry.preview({
         ...base,
         type: 'write_file',
         title: '写入或修改文件',
         description: '用户请求可能涉及文件写入，必须先展示变更建议并等待确认。',
         risk: 'high'
-      };
+      });
     }
-    if (kind === 'bind_resource') {
-      return {
+    if (normalizedKind === 'bind_resource_to_workbench') {
+      return workspaceAgentActionRegistry.preview({
         ...base,
-        type: 'bind_resource',
+        type: 'bind_resource_to_workbench',
         title: '绑定学习资源',
         description: '建议将相关资源绑定到 workbench 或计划，需确认后执行。',
-        risk: 'medium'
-      };
+        risk: 'medium',
+        payload: { ...base.payload, fileObjectIds, targetWorkbenchId: state.workbenchId || undefined }
+      });
     }
-    return {
+    if (normalizedKind === 'generate_studio_artifact') {
+      const templateId = this.inferStudioTemplateId(state.userInput);
+      return workspaceAgentActionRegistry.preview({
+        ...base,
+        type: 'generate_studio_artifact',
+        title: '生成 AI Studio 学习产物',
+        description: `调用 AI Studio 模板 ${templateId} 生成并保存学习资源。`,
+        risk: 'medium',
+        payload: {
+          ...base.payload,
+          templateId,
+          prompt: strategy.query || state.userInput,
+          fileObjectIds
+        }
+      });
+    }
+    if (normalizedKind === 'recommend_studio_artifacts') {
+      return workspaceAgentActionRegistry.preview({
+        ...base,
+        type: 'recommend_studio_artifacts',
+        title: '推荐 AI Studio 产物',
+        description: '基于当前 Workbench 上下文推荐下一步适合生成的 Studio 产物。',
+        risk: 'low',
+        payload: {
+          ...base.payload,
+          goal: this.inferStudioGoal(state.userInput),
+          fileObjectIds
+        }
+      });
+    }
+    if (normalizedKind === 'list_studio_artifacts') {
+      return workspaceAgentActionRegistry.preview({
+        ...base,
+        type: 'list_studio_artifacts',
+        title: '查看 AI Studio 产物',
+        description: '读取当前 workspace/workbench 已生成的 Studio 产物列表。',
+        risk: 'low',
+        payload: {
+          ...base.payload,
+          limit: 20
+        }
+      });
+    }
+    if (normalizedKind === 'retry_studio_render_job') {
+      return workspaceAgentActionRegistry.preview({
+        ...base,
+        type: 'retry_studio_render_job',
+        title: '重试 Studio 渲染任务',
+        description: '重试指定 Studio render job，适用于 AI Studio 里可见的失败/跳过渲染任务。',
+        risk: 'medium',
+        payload: {
+          ...base.payload,
+          renderJobId: this.inferRenderJobId(state.userInput)
+        }
+      });
+    }
+    if (normalizedKind === 'run_code_lab') {
+      const code = this.extractFencedCode(state.userInput);
+      return workspaceAgentActionRegistry.preview({
+        ...base,
+        type: 'run_code_lab',
+        title: '运行 Code Lab',
+        description: code
+          ? '运行用户提供的代码块，并返回 stdout/stderr/编译信息。'
+          : '运行 Code Lab 需要 sourceCode；当前 proposal 会等待结构化代码输入。',
+        risk: 'high',
+        payload: {
+          ...base.payload,
+          language: code.language || this.inferCodeLanguage(state.userInput),
+          sourceCode: code.sourceCode,
+          stdin: this.extractCodeStdin(state.userInput)
+        }
+      });
+    }
+    if (normalizedKind === 'judge_studio_quiz_answer' || normalizedKind === 'assist_studio_quiz_question') {
+      const quizPayload = this.extractQuizActionPayload(state.userInput);
+      return workspaceAgentActionRegistry.preview({
+        ...base,
+        type: normalizedKind,
+        title: normalizedKind === 'judge_studio_quiz_answer' ? '批改 Studio Quiz 答案' : '解释 Studio Quiz 题目',
+        description: normalizedKind === 'judge_studio_quiz_answer'
+          ? '调用 Studio Quiz Judge 批改单题答案，并同步学习事件。'
+          : '调用 Studio 单题助手解释题目、提示思路或检查题目质量。',
+        risk: normalizedKind === 'judge_studio_quiz_answer' ? 'medium' : 'low',
+        payload: {
+          ...base.payload,
+          ...quizPayload,
+          userMessage: normalizedKind === 'assist_studio_quiz_question'
+            ? quizPayload.userMessage || state.userInput
+            : quizPayload.userMessage
+        }
+      });
+    }
+    if (normalizedKind === 'create_note' || normalizedKind === 'save_generated_content') {
+      const sourceText = this.bestGeneratedContentSource(state);
+      return workspaceAgentActionRegistry.preview({
+        ...base,
+        type: normalizedKind,
+        title: normalizedKind === 'create_note' ? '创建学习笔记' : '保存生成内容',
+        description: '将本轮回答、资料摘要或生成草稿保存为文件，确认后落库。',
+        risk: 'medium',
+        payload: {
+          ...base.payload,
+          filename: normalizedKind === 'create_note' ? 'agent-note.md' : 'agent-generated.md',
+          content: sourceText || state.finalReply || state.userInput,
+          targetDir: 'Generated'
+        }
+      });
+    }
+    if (normalizedKind === 'index_file' || normalizedKind === 'analyze_resource') {
+      return workspaceAgentActionRegistry.preview({
+        ...base,
+        type: normalizedKind,
+        title: normalizedKind === 'index_file' ? '索引文件' : '分析资源结构',
+        description: normalizedKind === 'index_file'
+          ? '为相关文件建立知识索引，供后续检索和问答使用。'
+          : '运行 Resource Intelligence，提取资源大纲、章节和阅读建议。',
+        risk: 'low',
+        payload: {
+          ...base.payload,
+          fileObjectId: fileObjectIds[0],
+          fileObjectIds
+        }
+      });
+    }
+    if (normalizedKind === 'build_course_graph') {
+      return workspaceAgentActionRegistry.preview({
+        ...base,
+        type: 'build_course_graph',
+        title: '构建课程知识图谱',
+        description: '基于 workspace 资料构建或增强课程知识图谱，确认后运行。',
+        risk: 'medium',
+        payload: { ...base.payload, reindex: /重建|reindex|重新/.test(state.userInput), validate: true }
+      });
+    }
+    if (normalizedKind === 'apply_learning_plan') {
+      return workspaceAgentActionRegistry.preview({
+        ...base,
+        type: 'apply_learning_plan',
+        title: '应用学习计划',
+        description: '将指定学习计划应用到 Workbench，确认后绑定到学习现场。',
+        risk: 'medium'
+      });
+    }
+    return workspaceAgentActionRegistry.preview({
       ...base,
-      type: kind === 'save_plan' ? 'save_learning_plan' : 'workspace_action',
-      title: kind === 'save_plan' ? '保存学习计划' : '执行 workspace 操作',
-      description: '该操作会改变学习空间状态，第一版只返回 proposal，不直接写入数据库。',
+      type: normalizedKind === 'save_learning_plan' ? 'save_learning_plan' : 'workspace_action',
+      title: normalizedKind === 'save_learning_plan' ? '保存学习计划' : '执行 workspace 操作',
+      description: '该操作会改变学习空间状态，会先返回变更包并等待确认。',
       risk: 'medium'
+    });
+  }
+
+  private normalizeActionKind(kind: string, state: WorkspaceAgentState): string {
+    const normalized = String(kind || '').trim();
+    if (normalized === 'save_plan') return 'save_learning_plan';
+    if (normalized === 'bind_resource') return 'bind_resource_to_workbench';
+    if (normalized === 'generate_resource' || normalized === 'resource_generation') return 'generate_studio_artifact';
+    if (normalized === 'recommend_studio_resources' || normalized === 'studio_recommendation') return 'recommend_studio_artifacts';
+    if (normalized === 'list_studio_resources' || normalized === 'list_studio_results') return 'list_studio_artifacts';
+    if (normalized === 'retry_render_job' || normalized === 'retry_render') return 'retry_studio_render_job';
+    if (normalized === 'code_lab_run' || normalized === 'execute_code') return 'run_code_lab';
+    if (normalized === 'judge_quiz_answer' || normalized === 'quiz_judge') return 'judge_studio_quiz_answer';
+    if (normalized === 'quiz_question_assistant' || normalized === 'quiz_assistant') return 'assist_studio_quiz_question';
+    if (normalized === 'index_resource') return 'index_file';
+    if (normalized === 'resource_intelligence') return 'analyze_resource';
+    if (normalized === 'build_graph' || normalized === 'rebuild_graph') return 'build_course_graph';
+    if (normalized === 'workspace_action') {
+      return this.inferActionKindsFromRequest(state)[0] || 'workspace_action';
+    }
+    return normalized || 'workspace_action';
+  }
+
+  private inferActionKindsFromRequest(state: WorkspaceAgentState) {
+    const text = state.userInput;
+    const lower = text.toLowerCase();
+    const kinds = [
+      /记住|长期记忆|memory|preference/.test(lower) ? 'save_memory' : '',
+      /创建|新建|workbench|学习现场/.test(text) ? 'create_workbench' : '',
+      /保存.*计划|save.*plan/.test(lower) ? 'save_learning_plan' : '',
+      /应用.*计划|apply.*plan/.test(lower) ? 'apply_learning_plan' : '',
+      /推荐.*(studio|产物|资源)|studio.*推荐|recommend.*studio/i.test(text) ? 'recommend_studio_artifacts' : '',
+      /列出|查看|已有/.test(text) && /studio.*(产物|artifact|资源)|artifacts?/i.test(text) ? 'list_studio_artifacts' : '',
+      /重试.*渲染|重新.*渲染|retry.*render/i.test(text) ? 'retry_studio_render_job' : '',
+      /运行.*代码|执行.*代码|run code|code lab.*run|运行.*code lab/i.test(text) ? 'run_code_lab' : '',
+      /批改|判题|judge.*quiz|quiz.*judge/i.test(text) ? 'judge_studio_quiz_answer' : '',
+      /(提示|讲解|解释|帮助).*(这道题|题目|quiz)|quiz.*assistant/i.test(text) ? 'assist_studio_quiz_question' : '',
+      /studio|测验|练习|quiz|flashcards?|抽认卡|卡片|思维导图|mind.?map|slide|课件|可视化|visual|code lab|debug task|速记|复习清单|生成.*(笔记|资料|资源|测验|练习|卡片|图|课件)/i.test(text) ? 'generate_studio_artifact' : '',
+      /(保存|创建|生成).*(笔记|note)/i.test(text) ? 'create_note' : '',
+      /保存.*(回答|内容|资料|文件)|落库|save.*(content|file)|生成到/.test(lower) ? 'save_generated_content' : '',
+      /绑定|添加资源|bind|attach/.test(lower) ? 'bind_resource_to_workbench' : '',
+      /索引|index/.test(lower) ? 'index_file' : '',
+      /分析.*(资源|资料|文档|pdf|视频)|resource intelligence|analy[sz]e.*(resource|document)/i.test(text) ? 'analyze_resource' : '',
+      /(构建|重建|生成).*(知识图谱|图谱)|build.*graph|rebuild.*graph/i.test(text) ? 'build_course_graph' : '',
+      /写入|修改文件|edit file|overwrite/.test(lower) ? 'write_file' : ''
+    ];
+    const inferred = unique(kinds.filter(Boolean), 8);
+    if (inferred.length) return inferred;
+    if (state.intent?.primaryIntent === 'resource_generation') return ['generate_studio_artifact'];
+    if (state.intent?.primaryIntent === 'knowledge_graph') return ['build_course_graph'];
+    return ['workspace_action'];
+  }
+
+  private inferStudioTemplateId(text: string) {
+    if (/cornell|pagelm/i.test(text)) return 'pagelm_cornell_notes';
+    if (/笔记|notes?|整理资料|resource.*note/i.test(text)) return 'resource_to_notes';
+    if (/对比|compare|差异/.test(text)) return 'resource_compare';
+    if (/思维导图|mind.?map/i.test(text)) return 'mind_map';
+    if (/知识图谱|concept.?graph|knowledge.?graph/i.test(text)) return 'knowledge_graph';
+    if (/测验|练习|quiz|practice/i.test(text)) return 'custom_practice';
+    if (/flashcards?|抽认卡|卡片/.test(text)) return 'flashcards';
+    if (/速记|复习清单|review sheet/i.test(text)) return 'quick_review_sheet';
+    if (/复习计划|review plan/i.test(text)) return 'review_plan';
+    if (/code lab|代码实验|实验步骤/i.test(text)) return 'code_lab';
+    if (/debug|调试/.test(text)) return 'debug_task';
+    if (/visual explainer|视觉讲解|可视化讲解/.test(text)) return 'visual_explainer';
+    if (/slide|幻灯片|课件/.test(text)) return 'slide_deck';
+    if (/视频脚本|video script/i.test(text)) return 'video_script';
+    if (/interactive|交互/.test(text)) return 'interactive_demo';
+    if (/manim|动画/.test(text)) return 'algorithm_animation';
+    if (/remotion|ui video/i.test(text)) return 'ui_video';
+    if (/学习计划|study plan/i.test(text)) return 'study_plan';
+    return 'resource_to_notes';
+  }
+
+  private inferStudioGoal(text: string) {
+    if (/测验|练习|quiz|practice|批改|判题/i.test(text)) return 'practice';
+    if (/思维导图|知识图谱|关系|map|graph/i.test(text)) return 'map';
+    if (/复习|review|卡片|flashcards?|抽认卡/i.test(text)) return 'review';
+    if (/代码|实验|code|lab|debug/i.test(text)) return 'lab';
+    if (/可视化|动画|视频|slide|幻灯片|课件|visual|manim|remotion/i.test(text)) return 'visualize';
+    if (/计划|规划|plan|路线/i.test(text)) return 'plan';
+    return undefined;
+  }
+
+  private inferRenderJobId(text: string) {
+    const labeled = text.match(/(?:render\s*job|renderJobId|jobId|渲染任务|渲染\s*job)[:：#\s-]*([a-zA-Z0-9_-]{8,})/i);
+    if (labeled?.[1]) return labeled[1];
+    const uuid = text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    return uuid?.[0] || '';
+  }
+
+  private extractFencedCode(text: string) {
+    const match = text.match(/```([a-zA-Z0-9_+#.-]*)\s*\n([\s\S]*?)```/);
+    if (!match) return { language: this.inferCodeLanguage(text), sourceCode: '' };
+    return {
+      language: match[1]?.trim() || this.inferCodeLanguage(text),
+      sourceCode: match[2]?.trim() || ''
     };
+  }
+
+  private inferCodeLanguage(text: string) {
+    if (/typescript|ts\b/i.test(text)) return 'typescript';
+    if (/javascript|node|js\b/i.test(text)) return 'javascript';
+    if (/python|py\b/i.test(text)) return 'python';
+    if (/java\b/i.test(text)) return 'java';
+    if (/c\+\+|cpp/i.test(text)) return 'cpp';
+    if (/\bc\b/.test(text)) return 'c';
+    if (/go|golang/i.test(text)) return 'go';
+    if (/rust/i.test(text)) return 'rust';
+    if (/sqlite|sql/i.test(text)) return 'sql';
+    return 'python';
+  }
+
+  private extractCodeStdin(text: string) {
+    const match = text.match(/(?:stdin|输入)[:：]\s*([\s\S]+)$/i);
+    return match?.[1]?.trim() || '';
+  }
+
+  private extractQuizActionPayload(text: string): Record<string, unknown> {
+    const jsonBlock = text.match(/```json\s*([\s\S]*?)```/i)?.[1] || '';
+    if (jsonBlock) {
+      try {
+        const parsed = JSON.parse(jsonBlock);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            question: parsed.question || parsed,
+            userAnswer: typeof parsed.userAnswer === 'string' ? parsed.userAnswer : '',
+            userMessage: typeof parsed.userMessage === 'string' ? parsed.userMessage : ''
+          };
+        }
+      } catch {
+        // Keep this extractor best-effort; the executor will validate required fields.
+      }
+    }
+    const answer = text.match(/(?:我的答案|userAnswer|答案)[:：]\s*([^\n]+)/i)?.[1]?.trim() || '';
+    return {
+      question: null,
+      userAnswer: answer,
+      userMessage: text
+    };
+  }
+
+  private inferActionFileIds(state: WorkspaceAgentState) {
+    return unique([
+      ...(state.chatFileIds || []),
+      ...(state.workspaceSnapshot?.relevantFiles || []).slice(0, 6).map((file) => file.id),
+      ...(state.evidence || []).map((item) => String(item.metadata?.fileObjectId || '')).filter(Boolean)
+    ], 12);
+  }
+
+  private bestGeneratedContentSource(state: WorkspaceAgentState) {
+    const evidence = this.dedupeEvidence(state.evidence || [])
+      .filter((item) => item.content?.trim())
+      .slice(0, 4);
+    if (state.finalReply?.trim()) return state.finalReply;
+    if (!evidence.length) return '';
+    return [
+      `# ${clip(state.userInput, 80) || 'Agent Note'}`,
+      '',
+      ...evidence.map((item, index) => [
+        `## ${index + 1}. ${item.title}`,
+        item.summary,
+        item.content
+      ].filter(Boolean).join('\n\n'))
+    ].join('\n\n');
   }
 
   private async composeAnswer(state: WorkspaceAgentState) {

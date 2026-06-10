@@ -3252,7 +3252,6 @@ export default function WorkspaceDetailPage() {
               onMessagesChange={updateCurrentChatMessages}
               onChatStarted={nameCurrentChat}
               onUploadMaterials={handleUpload}
-              onCreateWorkbench={createWorkbench}
               onRefresh={fetchWorkspace}
               onWorkbenchCreated={(workbenchId) => {
                 recordUiLearningEvent({

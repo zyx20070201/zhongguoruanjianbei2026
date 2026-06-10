@@ -625,19 +625,8 @@ const buildPrompt = (input: {
     : 'No focused retrieval evidence cards were retrieved for this turn.';
 
   return [
-    'You are Workspace Chat, a fast non-agentic chatbox for a course workspace.',
-    'Follow this Open WebUI-style RAG policy:',
-    '1. Treat the following prompt as a request-time context bundle: conversation state, retrieved chat history, full-context documents, and focused RAG evidence are separate layers.',
-    '2. Use Conversation continuity only to preserve user intent, prior constraints, and unresolved follow-ups. Do not treat it as workspace factual evidence unless the user is asking about the conversation itself.',
-    '3. Focused Retrieval is the default for selected sources: use retrieval cards, not full-document dumping.',
-    '4. Chat attachments are explicit context for this chat only. Use them before broader workspace sources when they are relevant.',
-    '5. Image attachments may be supplied through the model attachment channel. Inspect them directly when available.',
-    '6. Full Context means the selected source text is already provided below. Read it directly and answer from it. Do not ask for retrieval of that same source.',
-    '7. If evidence answers the question, ground factual claims in evidence cards and cite them inline like [1], [2].',
-    '8. If the user asks about workspace/source/course materials but evidence is insufficient, say you could not find enough support in the selected scope and ask a brief clarification or suggest selecting/uploading a source.',
-    '9. If the question is general and does not require workspace evidence, answer from model knowledge. Be explicit when the answer is based on general knowledge rather than workspace sources.',
-    '10. Do not plan or execute workspace actions. If the user asks to create, modify, or run a multi-step workflow, tell them to switch to Agentic mode.',
-    'Default to concise Simplified Chinese unless the user asks otherwise.',
+    'The following is context for answering the user request.',
+    'Use citations when evidence cards or full-context documents are provided.',
     '',
     `Workspace: ${input.workspaceName}`,
     `Context scope: ${input.scopeLabel}${input.sourceLocked ? ' (locked by user)' : ''}`,
@@ -657,7 +646,7 @@ const buildPrompt = (input: {
           .filter((item) => item.metadata.retrievalMode === 'chat_attachment')
           .map((item) => `${item.label}\n${item.content}`)
           .join('\n\n')
-      : 'No text-readable chat attachments. Image or binary attachments, if any, are available through the model attachment channel.',
+      : 'No text-readable chat attachments.',
     '',
     'Full context documents:',
     fullContextBlock,
@@ -665,7 +654,7 @@ const buildPrompt = (input: {
     'Focused retrieval evidence cards:',
     focusedBlock,
     '',
-    `User question:\n${input.query}`
+    `User request:\n${input.query}`
   ].join('\n');
 };
 
@@ -692,30 +681,45 @@ const reindexEvidenceCards = (items: EvidenceCard[]): EvidenceCard[] =>
     }
   }));
 
-const buildFollowUps = (input: { query: string; reply: string; evidence: EvidenceCard[] }) => {
-  const topSource = input.evidence[0]?.fileName;
-  const prompts = topSource
-    ? [
-        `继续展开 ${topSource} 里最关键的依据`,
-        '把这些资料整理成复习提纲',
-        '这里有哪些容易误解的点？'
-      ]
-    : [
-        '给我一个更具体的例子',
-        '把这个解释得更简单一点',
-        '下一步我该怎么做？'
-      ];
-  return uniqueUnbounded(prompts).slice(0, 3);
+const FOLLOW_UP_GENERATION_PROMPT_TEMPLATE = `### Task:
+Suggest 3-5 relevant follow-up questions or prompts that the user might naturally ask next in this conversation as a **user**, based on the chat history, to help continue or deepen the discussion.
+### Guidelines:
+- Write all follow-up questions from the user's point of view, directed to the assistant.
+- Make questions concise, clear, and directly related to the discussed topic(s).
+- Only suggest follow-ups that make sense given the chat content and do not repeat what was already covered.
+- If the conversation is very short or not specific, suggest more general (but relevant) follow-ups the user might ask.
+- Use the conversation's primary language; default to English if multilingual.
+- Response must be a JSON object with a "follow_ups" key containing an array of strings, no extra text or formatting.
+### Output:
+JSON format: { "follow_ups": ["Question 1?", "Question 2?", "Question 3?"] }
+### Chat History:
+<chat_history>
+{{MESSAGES:END:6}}
+</chat_history>`;
+
+const formatFollowUpMessages = (messages: TerminalMessage[], assistantReply: string) =>
+  [...messages, { role: 'assistant' as const, content: assistantReply }]
+    .slice(-6)
+    .map((message) => `${message.role}: ${clip(message.content, 1800)}`)
+    .join('\n\n');
+
+const extractJsonObject = (value: string) => {
+  const start = value.indexOf('{');
+  const end = value.lastIndexOf('}');
+  return start >= 0 && end > start ? value.slice(start, end + 1) : value;
 };
+
+const normalizeFollowUps = (value: unknown) =>
+  uniqueUnbounded(
+    (Array.isArray(value) ? value : [])
+      .map((item) => String(item || '').replace(/\s+/g, ' ').trim())
+      .filter((item) => item.length > 0 && item.length <= 180)
+  ).slice(0, 5);
 
 const terminalChatModelOptions = {
   useCase: 'chat' as const,
   timeoutMs: Number(process.env.AI_TERMINAL_CHAT_TIMEOUT_MS || 120000),
-  systemPrompt: [
-    'You are a concise workspace RAG chat assistant.',
-    'Use citations when evidence cards or full-context documents are provided.',
-    'Ask for clarification or refuse unsupported workspace-specific claims when evidence is insufficient.'
-  ].join('\n')
+  systemPrompt: 'Use citations when evidence cards or full-context documents are provided.'
 };
 
 class WorkspaceTerminalChatService {
@@ -1266,6 +1270,7 @@ class WorkspaceTerminalChatService {
       messages,
       assistantReply: result.reply
     }).catch(() => null);
+    const followUps = await this.generateFollowUps(messages, result.reply).catch(() => []);
 
     return {
       reply: result.reply,
@@ -1273,15 +1278,28 @@ class WorkspaceTerminalChatService {
       status: result.status,
       evidence: toTerminalEvidence(result.evidence),
       suggestedActions: [],
-      followUps: buildFollowUps({
-        query: latestUserMessage(messages),
-        reply: result.reply,
-        evidence: result.evidence
-      }),
+      followUps,
       memoryContext: { askUserToSave: null },
       model: result.model,
       provider: result.provider
     };
+  }
+
+  private async generateFollowUps(messages: TerminalMessage[], assistantReply: string) {
+    if (process.env.AI_TERMINAL_FOLLOW_UPS_ENABLED === 'false') return [];
+    const prompt = FOLLOW_UP_GENERATION_PROMPT_TEMPLATE.replace(
+      '{{MESSAGES:END:6}}',
+      formatFollowUpMessages(messages, assistantReply)
+    );
+    const result = await aiModelProviderService.chat(
+      [{ role: 'user', content: prompt }],
+      {
+        useCase: 'chat',
+        timeoutMs: Number(process.env.AI_TERMINAL_FOLLOW_UP_TIMEOUT_MS || 45000)
+      }
+    );
+    const parsed = JSON.parse(extractJsonObject(result.reply));
+    return normalizeFollowUps(parsed?.follow_ups);
   }
 }
 

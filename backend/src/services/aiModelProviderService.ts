@@ -297,7 +297,11 @@ class AiModelProviderService {
             : message
         )
       : messages;
-    const result = await deepseekService.chat(projectedMessages as any, undefined, { timeoutMs: options.timeoutMs, signal: options.signal });
+    const result = await deepseekService.chat(projectedMessages as any, undefined, {
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+      systemPrompt: options.systemPrompt
+    });
     return { reply: result.reply, model: result.model, provider: 'deepseek', usage: result.usage as any };
   }
 
@@ -319,7 +323,11 @@ class AiModelProviderService {
               : message
           )
         : messages;
-      for await (const delta of deepseekService.chatStream(projectedMessages as any, undefined, { timeoutMs: options.timeoutMs, signal: options.signal })) {
+      for await (const delta of deepseekService.chatStream(projectedMessages as any, undefined, {
+        timeoutMs: options.timeoutMs,
+        signal: options.signal,
+        systemPrompt: options.systemPrompt
+      })) {
         yield delta;
       }
       return;

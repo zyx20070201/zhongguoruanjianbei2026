@@ -256,8 +256,17 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
 
   const controller = new AbortController();
   let ended = false;
+  let doneSent = false;
+  let errorSent = false;
+  let streamedReply = '';
+  let replacementReply: string | null = null;
+  let latestMeta: Record<string, unknown> = {};
 
-  req.on('close', () => {
+  req.on('aborted', () => {
+    if (!ended) controller.abort();
+  });
+
+  res.on('close', () => {
     if (!ended) controller.abort();
   });
 
@@ -268,11 +277,45 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
   };
 
   try {
-    await multiAgentOrchestrator.chatStream({ messages, context }, send, { signal: controller.signal });
+    await multiAgentOrchestrator.chatStream({ messages, context }, (event, data) => {
+      if (event === 'delta') streamedReply += String(data || '');
+      if (event === 'replace') replacementReply = String(data || '');
+      if (event === 'meta' && data && typeof data === 'object') latestMeta = { ...latestMeta, ...(data as Record<string, unknown>) };
+      if (event === 'done') doneSent = true;
+      if (event === 'error') errorSent = true;
+      send(event, data);
+    }, { signal: controller.signal });
+    if (!doneSent && !errorSent && !controller.signal.aborted) {
+      const reply = replacementReply ?? streamedReply;
+      if (reply.trim()) {
+        doneSent = true;
+        send('done', {
+          reply,
+          ...(latestMeta || {}),
+          streamRecovered: true,
+          warning: 'AI stream completed without final metadata; recovered from streamed content.'
+        });
+      } else {
+        errorSent = true;
+        send('error', { error: 'AI stream ended before a final response was produced.' });
+      }
+    }
   } catch (error: any) {
     if (controller.signal.aborted || error?.name === 'AbortError') return;
     const message = error instanceof Error ? error.message : 'AI request failed';
-    send('error', { error: message });
+    const reply = replacementReply ?? streamedReply;
+    if (reply.trim() && !doneSent) {
+      doneSent = true;
+      send('done', {
+        reply,
+        ...(latestMeta || {}),
+        streamRecovered: true,
+        warning: message
+      });
+    } else {
+      errorSent = true;
+      send('error', { error: message });
+    }
   } finally {
     ended = true;
     if (!res.writableEnded) res.end();

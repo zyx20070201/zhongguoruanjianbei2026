@@ -67,6 +67,7 @@ type ProfileLikeEntry = {
   diagnosticFeatures?: Record<string, any> | null;
   cognitiveSignals?: Array<Record<string, any>> | null;
   quality?: Record<string, any> | null;
+  sourcePipeline?: string | null;
 };
 
 type CandidateEntity = Omit<LearnerPortraitEntity, 'confidence' | 'evidenceCount' | 'evidence' | 'affectedConcepts' | 'updatedAt'> & {
@@ -216,11 +217,60 @@ const hasPrimaryEvidence = (items: ProfileLikeEntry[]) => items.some((entry) => 
 const isExtractableDimension = (value: unknown): value is ExtractablePortraitDimension =>
   value === 'learningGoal' || value === 'knowledgeFoundation' || value === 'metacognitiveStrategy' || value === 'learningRisk';
 
+const portraitDimensions = new Set<PortraitDimension>([
+  'learningBackground',
+  'learningGoal',
+  'knowledgeFoundation',
+  'cognitiveStyle',
+  'learningPreference',
+  'errorPattern',
+  'learningRisk',
+  'metacognitiveStrategy',
+  'supportNeed'
+]);
+
+const isPortraitDimension = (value: unknown): value is PortraitDimension =>
+  portraitDimensions.has(value as PortraitDimension);
+
 const polarityForDimension = (dimension: ExtractablePortraitDimension, value?: string): PortraitPolarity => {
   if (value === 'strength' || value === 'need' || value === 'risk' || value === 'preference' || value === 'neutral') return value;
   if (dimension === 'learningRisk') return 'risk';
   if (dimension === 'knowledgeFoundation') return 'neutral';
   return 'neutral';
+};
+
+const polarityForProfileClaim = (dimension: PortraitDimension, text: string): PortraitPolarity => {
+  if (dimension === 'learningRisk') return 'risk';
+  if (dimension === 'learningPreference' || dimension === 'cognitiveStyle') return 'preference';
+  if (dimension === 'errorPattern' || dimension === 'supportNeed') return 'need';
+  if (dimension === 'knowledgeFoundation' && /薄弱|不会|错误|混淆|缺口|weak|error|confus/i.test(text)) return 'need';
+  if (dimension === 'knowledgeFoundation' && /掌握|熟悉|理解|mastered|strength/i.test(text)) return 'strength';
+  return 'neutral';
+};
+
+const recommendationForProfileClaim = (dimension: PortraitDimension) =>
+  dimension === 'learningBackground'
+    ? '后续推荐资源和学习计划应贴合该学习背景。'
+    : dimension === 'learningGoal'
+      ? '把诊断、资料推荐和练习安排绑定到这个目标上。'
+      : dimension === 'knowledgeFoundation'
+        ? '在计划生成时把该知识点作为诊断和资源匹配条件。'
+        : dimension === 'cognitiveStyle'
+          ? '讲解时匹配该认知加工方式。'
+          : dimension === 'learningPreference'
+            ? '个性化回复和资源推荐应默认遵循该偏好，除非用户纠正。'
+            : dimension === 'errorPattern'
+              ? '用最小反例验证该易错模式是否仍然存在。'
+              : dimension === 'learningRisk'
+                ? '优先安排短诊断和复习检查。'
+                : dimension === 'metacognitiveStrategy'
+                  ? '在阶段结束时用一句反思巩固这个策略。'
+                  : '把下一步拆成可执行的小任务。';
+
+const statusFromProfileClaim = (status: string | null | undefined, confidence: number, evidenceCount: number, dimension: PortraitDimension): PortraitStatus => {
+  if (status === 'stable' && confidence >= 0.72 && evidenceCount >= 2) return 'stable';
+  if (status === 'active' || status === 'candidate' || status === 'needs_review') return status;
+  return statusFrom(confidence, evidenceCount, dimension === 'learningRisk');
 };
 
 const statusForExtracted = (value: unknown, confidence: number, evidenceCount: number, dimension: ExtractablePortraitDimension): PortraitStatus => {
@@ -440,6 +490,37 @@ export class LearnerPortraitEntityBuilderService {
     const byDimension = (dimension: string) => entries.filter((entry) => entry.dimension === dimension);
     const bySource = (source: SourceType) => entries.filter((entry) => entry.source === source);
     const contains = (patterns: RegExp[]) => entries.filter((entry) => patterns.some((pattern) => pattern.test(`${entry.label} ${entry.value} ${entry.rationale || ''}`)));
+    const directProfileClaims = entries
+      .filter((entry) => isPortraitDimension(entry.dimension))
+      .filter((entry) => entry.sourcePipeline !== 'learner_portrait_builder')
+      .filter((entry) => !isWeakBehaviorEvidence(entry))
+      .slice(0, 40);
+
+    directProfileClaims.forEach((entry) => {
+      const dimension = entry.dimension as PortraitDimension;
+      const confidence = clamp01(Number(entry.confidence ?? 0.5));
+      const title = clip(entry.value, 64);
+      if (!title) return;
+      candidates.push({
+        id: stableId(dimension, `profileClaim:${clip(entry.label, 40) || 'claim'}`, title),
+        dimension,
+        type: clip(entry.label || 'profileClaim', 48),
+        title,
+        description: entry.rationale
+          ? clip(entry.rationale, 180)
+          : `学习画像信号：${clip(entry.value, 140)}`,
+        polarity: polarityForProfileClaim(dimension, `${entry.label} ${entry.value} ${entry.rationale || ''}`),
+        status: statusFromProfileClaim(entry.status, confidence, Math.max(1, Number(entry.evidenceCount || 1)), dimension),
+        confidence,
+        severity: dimension === 'learningRisk' ? severityFrom(confidence) : undefined,
+        evidence: [weightedEvidence(entry)],
+        affectedConcepts:
+          dimension === 'knowledgeFoundation' || dimension === 'errorPattern'
+            ? [clip(entry.value, 80)]
+            : [],
+        recommendation: recommendationForProfileClaim(dimension)
+      });
+    });
 
     const profileBase = byDimension('profileBase');
     const knowledge = byDimension('knowledgeState');

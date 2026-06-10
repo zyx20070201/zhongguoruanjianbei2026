@@ -1,25 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowUp,
-  BookOpen,
   Brain,
-  Check,
   CheckCircle2,
-  ChevronDown,
-  FolderUp,
   Image,
   Loader2,
   Paperclip,
-  Plus,
   Search,
-  Square,
   Target,
   Wand2,
   X
 } from 'lucide-react';
-import { LearningGoalDraft, LearningTerminalMessage, TerminalChatFile, WorkbenchItem } from '../../types';
+import { AgentUiEvent, LearningGoalDraft, LearningTerminalMessage, TerminalChatFile, WorkbenchItem } from '../../types';
 import { learningApi } from '../../services/learningApi';
 import OpenWebUIMarkdownPreview, { OpenWebUICitationSource } from '../workbench/OpenWebUIMarkdownPreview';
+import TerminalComposer from './TerminalComposer';
 
 interface LearningTerminalProps {
   workspaceId: string;
@@ -38,11 +32,11 @@ interface LearningTerminalProps {
   onCheckpointThreadIdChange?: (checkpointThreadId: string) => void;
   onChatStarted: (title: string) => void;
   onUploadMaterials: () => void;
-  onCreateWorkbench: () => void;
   onWorkbenchCreated: (workbenchId: string) => void;
   onRefresh: () => Promise<void> | void;
   variant?: 'full' | 'dashboard';
   initialPrompt?: string;
+  onInitialPromptConsumed?: () => void;
   mode?: 'chat' | 'agentic';
   selectedSources?: Array<{ fileId: string; mode?: 'focused' | 'full_context' }>;
   chatFiles?: TerminalChatFile[];
@@ -74,22 +68,6 @@ const getStarterDescription = (index: number) => {
   if (index === 1) return '整理已有 workbench 与资源的状态';
   if (index === 2) return '根据当前文件生成下一步行动';
   return '创建一个带资源和助教的任务现场';
-};
-
-const formatBytes = (bytes?: number) => {
-  const value = Number(bytes || 0);
-  if (!value) return '';
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${Math.round(value / 102.4) / 10} KB`;
-  return `${Math.round(value / 1024 / 102.4) / 10} MB`;
-};
-
-const sourceStatusToneClass = (tone?: 'ready' | 'indexing' | 'degraded' | 'failed' | 'empty') => {
-  if (tone === 'ready') return 'bg-emerald-50 text-emerald-700';
-  if (tone === 'degraded') return 'bg-amber-50 text-amber-700';
-  if (tone === 'indexing') return 'bg-blue-50 text-blue-700';
-  if (tone === 'failed') return 'bg-red-50 text-red-700';
-  return 'bg-gray-100 text-gray-600';
 };
 
 const fileIsImage = (file: Pick<TerminalChatFile, 'mimeType' | 'extension' | 'name'>) => {
@@ -434,6 +412,117 @@ function StatusHistory({ statusHistory = [] }: { statusHistory?: TerminalStatus[
   );
 }
 
+function StreamingInterimText({ content, active }: { content: string; active: boolean }) {
+  const [visible, setVisible] = useState(active ? '' : content);
+
+  useEffect(() => {
+    if (!active) {
+      setVisible(content);
+      return;
+    }
+    setVisible('');
+    let index = 0;
+    const timer = window.setInterval(() => {
+      index = Math.min(content.length, index + 2);
+      setVisible(content.slice(0, index));
+      if (index >= content.length) window.clearInterval(timer);
+    }, 18);
+    return () => window.clearInterval(timer);
+  }, [active, content]);
+
+  return (
+    <>
+      {visible}
+      {active && visible.length < content.length ? (
+        <span className="ml-0.5 inline-block h-3 w-1 translate-y-0.5 animate-pulse rounded-full bg-blue-700/60" />
+      ) : null}
+    </>
+  );
+}
+
+function InlineAgentUpdates({ events = [], isStreaming }: { events?: AgentUiEvent[]; isStreaming: boolean }) {
+  const interimUpdates = events.filter((event): event is Extract<AgentUiEvent, { kind: 'say' }> => event.kind === 'say' && event.phase === 'interim');
+  const latestActivity = [...events].reverse().find((event): event is Extract<AgentUiEvent, { kind: 'activity' }> => event.kind === 'activity');
+  const artifacts = events.filter((event): event is Extract<AgentUiEvent, { kind: 'artifact' }> => event.kind === 'artifact');
+  const asks = events.filter((event): event is Extract<AgentUiEvent, { kind: 'ask' }> => event.kind === 'ask');
+  const [open, setOpen] = useState(false);
+
+  if (!events.length) return null;
+
+  if (!isStreaming && interimUpdates.length) {
+    return (
+      <div className="mb-3">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="inline-flex items-center gap-2 rounded-full bg-gray-50 px-3 py-1 text-xs font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-700"
+        >
+          <span>{open ? 'Hide' : 'Show'} earlier updates</span>
+          <span className="text-gray-400">{interimUpdates.length}</span>
+        </button>
+        {open ? (
+          <div className="mt-2 space-y-2 border-l border-gray-100 pl-3 text-sm leading-6 text-gray-500">
+            {interimUpdates.slice(-4).map((event) => (
+              <div key={event.id}>{event.content}</div>
+            ))}
+          </div>
+        ) : null}
+        {artifacts.length ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {artifacts.slice(-4).map((event) => (
+              <div key={event.id} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-gray-100 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm">
+                <span className="capitalize text-gray-400">{event.artifactType}</span>
+                <span className="min-w-0 truncate">{event.title}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (isStreaming && interimUpdates.length) {
+    return (
+      <div className="chat-assistant markdown-prose mb-3 w-full min-w-full text-gray-800">
+        {interimUpdates.slice(-2).map((event, index, list) => (
+          <div key={event.id} className="mb-2 last:mb-0">
+            <StreamingInterimText content={event.content} active={index === list.length - 1} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (isStreaming && latestActivity) {
+    return (
+      <div className="mb-3 flex items-center gap-2 text-xs text-gray-400">
+        <span className={`size-1.5 rounded-full ${latestActivity.status === 'error' ? 'bg-red-400' : latestActivity.status === 'done' ? 'bg-emerald-400' : 'animate-pulse bg-blue-400'}`} />
+        <span className="truncate">{latestActivity.detail || latestActivity.title}</span>
+      </div>
+    );
+  }
+
+  if (!isStreaming && (artifacts.length || asks.length)) {
+    return (
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {artifacts.slice(-4).map((event) => (
+          <div key={event.id} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-gray-100 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm">
+            <span className="capitalize text-gray-400">{event.artifactType}</span>
+            <span className="min-w-0 truncate">{event.title}</span>
+          </div>
+        ))}
+        {asks.slice(-1).map((event) => (
+          <div key={event.id} className="inline-flex max-w-full rounded-full border border-amber-100 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800">
+            {event.prompt}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return null;
+}
+
 export default function LearningTerminal({
   workspaceId,
   sessionId,
@@ -444,11 +533,11 @@ export default function LearningTerminal({
   onMessagesChange,
   onChatStarted,
   onUploadMaterials,
-  onCreateWorkbench,
   onWorkbenchCreated,
   onRefresh,
   variant = 'full',
   initialPrompt,
+  onInitialPromptConsumed,
   mode = 'chat',
   selectedSources = [],
   chatFiles = [],
@@ -476,25 +565,26 @@ export default function LearningTerminal({
   const [sourceModalSource, setSourceModalSource] = useState<TerminalEvidence | null>(null);
   const [uploadingChatFiles, setUploadingChatFiles] = useState(false);
   const [workingSeconds, setWorkingSeconds] = useState(0);
-  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const preserveScrollRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
-  const sourceMenuRef = useRef<HTMLDivElement | null>(null);
-  const chatFileInputRef = useRef<HTMLInputElement | null>(null);
   const sentInitialPromptRef = useRef<string | null>(null);
   const isChatMode = mode === 'chat';
 
   useEffect(() => {
     if (!initialPrompt) return;
+    if (messages.length > 0) {
+      onInitialPromptConsumed?.();
+      return;
+    }
     if (sentInitialPromptRef.current === initialPrompt) return;
     sentInitialPromptRef.current = initialPrompt;
     void sendMessage(initialPrompt);
+    onInitialPromptConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialPrompt]);
+  }, [initialPrompt, messages.length, onInitialPromptConsumed]);
 
   useEffect(() => {
-    setSourceMenuOpen(false);
     if (mode === 'chat') {
       setGoalDraft(null);
     }
@@ -555,17 +645,6 @@ export default function LearningTerminal({
     void loadEarlierMessages();
   };
 
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (sourceMenuRef.current?.contains(target)) return;
-      setSourceMenuOpen(false);
-    };
-
-    window.addEventListener('pointerdown', onPointerDown);
-    return () => window.removeEventListener('pointerdown', onPointerDown);
-  }, []);
-
   const latestWorkbench = workbenches[0];
   const overviewText = useMemo(() => {
     if (workbenches.length === 0) {
@@ -575,38 +654,10 @@ export default function LearningTerminal({
     return `最近学习现场：${latestWorkbench.title}`;
   }, [latestWorkbench, workbenches.length]);
 
-  const activeSources = useMemo(
-    () => sourceFiles.filter((file) => selectedSources.some((source) => source.fileId === file.id)),
-    [selectedSources, sourceFiles]
-  );
-
   const readyChatFiles = useMemo(
     () => chatFiles.filter((file) => file.status !== 'uploading' && file.status !== 'error'),
     [chatFiles]
   );
-
-  const selectedSourceModeById = useMemo(
-    () => new Map(selectedSources.map((source) => [source.fileId, source.mode || 'focused'] as const)),
-    [selectedSources]
-  );
-
-  const toggleSourceId = (sourceId: string) => {
-    const next = selectedSources.some((source) => source.fileId === sourceId)
-      ? selectedSources.filter((source) => source.fileId !== sourceId)
-      : [...selectedSources, { fileId: sourceId, mode: 'focused' as const }];
-    onSelectedSourcesChange?.(next.slice(0, 12).map((source) => ({
-      fileId: source.fileId,
-      mode: source.mode === 'full_context' ? 'full_context' : 'focused'
-    })));
-  };
-
-  const updateSourceMode = (sourceId: string, nextMode: 'focused' | 'full_context') => {
-    onSelectedSourcesChange?.(selectedSources.map((source) =>
-      source.fileId === sourceId
-        ? { fileId: source.fileId, mode: nextMode }
-        : { fileId: source.fileId, mode: source.mode === 'full_context' ? 'full_context' : 'focused' }
-    ));
-  };
 
   const uploadChatFiles = async (files: FileList | File[]) => {
     const selected = Array.from(files);
@@ -619,7 +670,6 @@ export default function LearningTerminal({
       setError(err?.response?.data?.error || err?.message || '上传 Chat 附件失败');
     } finally {
       setUploadingChatFiles(false);
-      if (chatFileInputRef.current) chatFileInputRef.current.value = '';
     }
   };
 
@@ -646,6 +696,7 @@ export default function LearningTerminal({
 
     let streamedReply = '';
     let statusHistory: TerminalStatus[] = [];
+    let agentEvents: AgentUiEvent[] = [];
 
     try {
       const assistantIndex = nextMessages.length;
@@ -655,7 +706,8 @@ export default function LearningTerminal({
           role: 'assistant',
           content,
           mode,
-          statusHistory
+          statusHistory,
+          agentEvents
         };
         onMessagesChange([
           ...nextMessages,
@@ -669,14 +721,36 @@ export default function LearningTerminal({
         workbenchId,
         checkpointThreadId,
         mode,
-        selectedSources: isChatMode ? selectedSources.map((source) => ({
+        selectedSources: selectedSources.map((source) => ({
           fileId: source.fileId,
           mode: source.mode === 'full_context' ? 'full_context' : 'focused'
-        })) : undefined,
+        })),
         chatFiles: messageFiles,
         onEvent: (event, data) => {
           if (data?.message) setAgentProgress(String(data.message));
           if (data?.result?.checkpointThreadId) rememberCheckpointThreadId(data.result.checkpointThreadId);
+          if (event === 'ui_event' && data?.uiEvent) {
+            const uiEvent = data.uiEvent as AgentUiEvent;
+            const lastEvent = agentEvents[agentEvents.length - 1];
+            if (
+              uiEvent.kind === 'say' &&
+              uiEvent.phase === 'interim' &&
+              lastEvent?.kind === 'say' &&
+              lastEvent.phase === 'interim' &&
+              lastEvent.node === uiEvent.node
+            ) {
+              const content = uiEvent.content.startsWith(lastEvent.content)
+                ? uiEvent.content
+                : `${lastEvent.content}${uiEvent.content}`;
+              agentEvents = [...agentEvents.slice(0, -1), { ...lastEvent, content, at: uiEvent.at }].slice(-80);
+            } else {
+              agentEvents = [...agentEvents, uiEvent].slice(-80);
+            }
+            if (uiEvent.kind === 'activity') setAgentProgress(uiEvent.detail || uiEvent.title);
+            if (uiEvent.kind === 'say') setAgentProgress('Working through the next step');
+            if (uiEvent.kind === 'artifact') setAgentProgress(`Generated ${uiEvent.artifactType}: ${uiEvent.title}`);
+            upsertStreamingAssistant(streamedReply);
+          }
           const status = event === 'status' ? data?.status || data?.data : null;
           if (status?.action) {
             statusHistory = [...statusHistory, status as TerminalStatus];
@@ -706,6 +780,7 @@ export default function LearningTerminal({
           role: 'assistant',
           content: response.reply || streamedReply,
           mode,
+          agentEvents: agentEvents.length ? agentEvents : response.agentEvents,
           statusHistory,
           goalDraft: response.goalDraft,
           proposedActions: response.proposedActions,
@@ -726,6 +801,7 @@ export default function LearningTerminal({
             role: 'assistant',
             content: streamedReply,
             mode,
+            agentEvents,
             statusHistory
           }
         ]);
@@ -738,10 +814,10 @@ export default function LearningTerminal({
           workbenchId,
           checkpointThreadId,
           mode,
-          selectedSources: isChatMode ? selectedSources.map((source) => ({
+          selectedSources: selectedSources.map((source) => ({
             fileId: source.fileId,
             mode: source.mode === 'full_context' ? 'full_context' : 'focused'
-          })) : undefined,
+          })),
           chatFiles: messageFiles
         });
         rememberCheckpointThreadId(response.checkpointThreadId);
@@ -752,6 +828,7 @@ export default function LearningTerminal({
             role: 'assistant',
             content: response.reply,
             mode,
+            agentEvents: agentEvents.length ? agentEvents : response.agentEvents,
             statusHistory,
             goalDraft: response.goalDraft,
             proposedActions: response.proposedActions,
@@ -797,12 +874,15 @@ export default function LearningTerminal({
           ? {
               ...message,
               content: response.reply,
+              mode,
+              agentEvents: response.agentEvents || message.agentEvents,
               proposedActions: response.proposedActions,
               executedActions: response.executedActions,
               agentTrace: response.agentTrace,
               evidence: response.evidence,
               followUps: response.followUps,
-              goalDraft: response.goalDraft || message.goalDraft
+              goalDraft: response.goalDraft || message.goalDraft,
+              askUserToSave: response.memoryContext?.askUserToSave || message.askUserToSave
             }
           : message
       );
@@ -912,6 +992,33 @@ export default function LearningTerminal({
                   </div>
                   <p className="mt-1 text-xs leading-5 text-gray-600">{action.description}</p>
                   {plan ? <ProposalPlanPreview plan={plan} /> : null}
+                  {action.changeSet?.items?.length ? (
+                    <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50/70 p-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Preview</p>
+                      <div className="mt-1 space-y-1">
+                        {action.changeSet.items.slice(0, 4).map((item) => (
+                          <div key={item.id} className="text-xs leading-5 text-amber-950">
+                            <span className="font-medium">{item.operation}</span>
+                            <span className="text-amber-700"> · </span>
+                            <span>{item.title}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {action.artifacts?.length ? (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {action.artifacts.slice(0, 4).map((artifact) => (
+                        <span
+                          key={artifact.id}
+                          className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600"
+                          title={artifact.summary}
+                        >
+                          {artifact.kind}: {artifact.title}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   {checkpointThreadId && !message.executedActions?.some((item) => item.proposalId === action.id) ? (
                     <div className="mt-2 flex gap-2">
                       <button
@@ -955,7 +1062,7 @@ export default function LearningTerminal({
           </div>
         </div>
       ) : null}
-      {message.agentTrace?.length ? (
+      {message.agentTrace?.length && !message.agentEvents?.length ? (
         <details className="mt-4 rounded-2xl border border-gray-100 bg-gray-50 p-3 text-xs text-gray-600">
           <summary className="cursor-pointer select-none font-semibold text-gray-800">
             Agent trace
@@ -984,118 +1091,6 @@ export default function LearningTerminal({
       isDashboard ? 'min-h-[520px] max-w-none px-0 pb-0 pt-0' : 'h-full min-h-0 px-0 pb-0 pt-0'
     }`}>
       <div className={`mx-auto flex min-h-0 w-full flex-1 flex-col ${isDashboard ? 'max-w-none' : 'max-w-6xl'}`}>
-        <div className={`mx-auto flex w-full max-w-3xl items-center justify-between px-4 pt-4 md:px-6 ${messages.length > 0 ? 'pb-0' : 'pb-3'}`}>
-          <div className="inline-flex rounded-full bg-gray-100 p-1 text-xs font-medium text-gray-500">
-            <button
-              type="button"
-              onClick={() => onModeChange?.('chat')}
-              className={`rounded-full px-3 py-1.5 transition ${isChatMode ? 'bg-white text-gray-900 shadow-sm' : 'hover:text-gray-700'}`}
-            >
-              Chat
-            </button>
-            <button
-              type="button"
-              onClick={() => onModeChange?.('agentic')}
-              className={`rounded-full px-3 py-1.5 transition ${!isChatMode ? 'bg-white text-gray-900 shadow-sm' : 'hover:text-gray-700'}`}
-            >
-              Agentic
-            </button>
-          </div>
-          {isChatMode ? (
-            <div ref={sourceMenuRef} className="relative flex max-w-[62%] justify-end">
-              <button
-                type="button"
-                onClick={() => setSourceMenuOpen((current) => !current)}
-                className="inline-flex max-w-full items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
-              >
-                <BookOpen className="size-3.5" />
-                <span className="max-w-[18rem] truncate">
-                  {activeSources.length > 0 ? `${activeSources.length} locked source${activeSources.length > 1 ? 's' : ''}` : 'Workspace scope'}
-                </span>
-                <ChevronDown className="size-3.5" />
-              </button>
-              {sourceMenuOpen ? (
-                <div className="absolute right-0 top-10 z-20 w-80 rounded-2xl border border-gray-100 bg-white p-2 shadow-lg">
-                  <div className="px-2 pb-2 text-[11px] font-medium uppercase tracking-wide text-gray-400">
-                    Lock sources for this chat
-                  </div>
-                  <div className="max-h-72 overflow-y-auto">
-                    {sourceFiles.length > 0 ? (
-                      sourceFiles.map((source) => {
-                        const isActive = selectedSourceModeById.has(source.id);
-                        const sourceMode = selectedSourceModeById.get(source.id) || 'focused';
-                        return (
-                          <div
-                            key={source.id}
-                            className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left transition hover:bg-gray-50"
-                          >
-                            <button
-                              type="button"
-                              onClick={() => toggleSourceId(source.id)}
-                              className="min-w-0 flex-1 text-left"
-                            >
-                              <div className="truncate text-sm font-medium text-gray-900">{source.name}</div>
-                              <div className="truncate text-xs text-gray-500">{source.path}</div>
-                              <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${sourceStatusToneClass(source.indexStatusTone)}`}>
-                                  {source.indexStatusLabel || 'Unknown'}
-                                </span>
-                                <span className="truncate text-[10px] text-gray-400">
-                                  {source.indexStatusDetail || 'Index status unavailable'}
-                                </span>
-                              </div>
-                              {isActive && Number(source.chunkCount || 0) === 0 ? (
-                                <div className="mt-1 text-[10px] text-red-500">No chunks yet; focused retrieval may not find evidence.</div>
-                              ) : null}
-                            </button>
-                            <div className="flex shrink-0 items-center gap-2">
-                              {isActive ? (
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    updateSourceMode(source.id, sourceMode === 'focused' ? 'full_context' : 'focused');
-                                  }}
-                                  className="rounded-full border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-600 transition hover:bg-gray-50"
-                                >
-                                  {sourceMode === 'focused' ? 'Focused Retrieval' : 'Full Context'}
-                                </button>
-                              ) : null}
-                              {isActive ? <Check className="size-4 shrink-0 text-black" /> : null}
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="px-3 py-3 text-sm text-gray-500">No workspace sources available.</div>
-                    )}
-                  </div>
-                  <div className="mt-2 flex justify-between gap-2 border-t border-gray-100 px-2 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => onSelectedSourcesChange?.([])}
-                      className="rounded-full px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-100"
-                    >
-                      Clear
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSourceMenuOpen(false)}
-                      className="rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white"
-                    >
-                      Done
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="flex max-w-[62%] items-center gap-2 text-xs text-gray-500">
-              <Search className="size-3.5" />
-              Agentic mode
-            </div>
-          )}
-        </div>
         {messages.length > 0 && (
         <div
           ref={messageScrollRef}
@@ -1141,7 +1136,11 @@ export default function LearningTerminal({
                           {message.mode === 'agentic' ? 'Workspace Agent' : 'AI Terminal'}
                         </span>
                       </div>
-                      <StatusHistory statusHistory={message.statusHistory} />
+                      {message.agentEvents?.length ? (
+                        <InlineAgentUpdates events={message.agentEvents} isStreaming={streamingMessageIndex === index} />
+                      ) : (
+                        <StatusHistory statusHistory={message.statusHistory} />
+                      )}
                       <div className="chat-assistant markdown-prose w-full min-w-full">
                         <OpenWebUIMarkdownPreview
                           content={message.content}
@@ -1271,135 +1270,26 @@ export default function LearningTerminal({
             {error && <p className="mx-auto mb-2 max-w-3xl px-3 text-sm text-red-600">{error}</p>}
 
             <div className="mx-auto w-full max-w-3xl">
-            <form
-              className="workspace-composer flex w-full flex-col gap-1.5"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void sendMessage();
-              }}
-            >
-            <div className="flex flex-1 flex-col rounded-3xl border border-gray-100/30 bg-white/95 px-1 shadow-lg backdrop-blur-sm transition hover:border-gray-200 focus-within:border-gray-100">
-              <input
-                ref={chatFileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                  if (event.target.files?.length) void uploadChatFiles(event.target.files);
-                }}
-              />
-              {chatFiles.length > 0 ? (
-                <div className="flex max-w-full gap-2 overflow-x-auto px-3 pt-3">
-                  {chatFiles.map((file) => (
-                    <div
-                      key={file.id}
-                      className="group/attachment flex h-10 max-w-52 shrink-0 items-center gap-2 rounded-2xl border border-gray-100 bg-gray-50 px-2 text-xs text-gray-700"
-                      title={`${file.name}${file.size ? ` · ${formatBytes(file.size)}` : ''}`}
-                    >
-                      <div className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white text-gray-500">
-                        {fileIsImage(file) && file.downloadUrl ? (
-                          <img src={file.downloadUrl} alt={file.name} className="h-full w-full object-cover" />
-                        ) : fileIsImage(file) ? (
-                          <Image className="size-3.5" />
-                        ) : (
-                          <Paperclip className="size-3.5" />
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-medium text-gray-800">{file.name}</div>
-                        <div className="truncate text-[10px] text-gray-400">{formatBytes(file.size) || file.mimeType || 'Attachment'}</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeChatFile(file.id)}
-                        className="flex size-5 shrink-0 items-center justify-center rounded-full text-gray-400 opacity-80 transition hover:bg-gray-200 hover:text-gray-700 group-hover/attachment:opacity-100"
-                        title="Remove attachment"
-                      >
-                        <X className="size-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              <div className="px-2.5">
-              <textarea
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    void sendMessage();
-                  }
-                }}
-                className="scrollbar-hidden min-h-[52px] max-h-96 w-full resize-none bg-transparent px-1 pb-1 pt-3 text-[15px] leading-6 text-gray-900 outline-none placeholder:text-gray-500"
-                placeholder="Send a Message"
-                rows={1}
-              />
-              </div>
-
-              <div className="mx-0.5 mb-2.5 mt-0.5 flex max-w-full justify-between" dir="ltr">
-                <div className="ml-1 flex max-w-[80%] flex-1 items-center self-end">
-                  <button
-                    type="button"
-                    onClick={() => chatFileInputRef.current?.click()}
-                    disabled={uploadingChatFiles || !onUploadChatFiles}
-                    className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-700 outline-none transition hover:bg-gray-100 disabled:opacity-40"
-                    title="Attach to this chat"
-                  >
-                    {uploadingChatFiles ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4.5" />}
-                  </button>
-                  {isChatMode ? (
-                    <button
-                      type="button"
-                      onClick={onUploadMaterials}
-                      className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-700 outline-none transition hover:bg-gray-100"
-                      title="Add sources to Knowledge"
-                    >
-                      <Plus className="size-5" />
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        onClick={onCreateWorkbench}
-                      className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-600 outline-none transition hover:bg-gray-100 hover:text-gray-800"
-                        title="New workbench"
-                      >
-                        <FolderUp className="size-4.5" />
-                      </button>
-                    </>
-                  )}
-                </div>
-
-                <div className="mr-1 flex shrink-0 items-center gap-[0.5px] self-end">
-                  {loading ? (
-                    <button
-                      type="button"
-                      disabled
-                      className="self-center rounded-full bg-white p-1.5 text-gray-800 transition hover:bg-gray-100"
-                      title="Stop"
-                    >
-                      <Square className="size-5 fill-current" />
-                    </button>
-                  ) : (
-                    <button
-                      type="submit"
-                      disabled={!input.trim() && readyChatFiles.length === 0}
-                      className={`self-center rounded-full p-1.5 transition ${
-                        input.trim() || readyChatFiles.length > 0
-                          ? 'bg-black text-white hover:bg-gray-900'
-                          : 'cursor-not-allowed bg-gray-200 text-white'
-                      }`}
-                      title="Send message"
-                    >
-                      <ArrowUp className="size-5" strokeWidth={2.5} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="mb-1" />
-            </form>
+            <TerminalComposer
+              value={input}
+              onValueChange={setInput}
+              onSubmit={() => void sendMessage()}
+              placeholder="Send a Message"
+              mode={mode}
+              onModeChange={onModeChange}
+              selectedSources={selectedSources.map((source) => ({
+                fileId: source.fileId,
+                mode: source.mode === 'full_context' ? 'full_context' : 'focused'
+              }))}
+              onSelectedSourcesChange={onSelectedSourcesChange}
+              sourceFiles={sourceFiles}
+              chatFiles={chatFiles}
+              onRemoveChatFile={removeChatFile}
+              onUploadChatFiles={uploadChatFiles}
+              uploadingChatFiles={uploadingChatFiles}
+              onUploadMaterials={onUploadMaterials}
+              submitting={loading}
+            />
             </div>
 
           {messages.length === 0 && !isChatMode && (

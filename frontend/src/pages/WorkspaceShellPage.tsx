@@ -2,9 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowUp,
   BookOpen,
-  Check,
   ChevronDown,
   ExternalLink,
   Folder,
@@ -19,7 +17,6 @@ import {
   MoreHorizontal,
   Plus,
   Sparkles,
-  Wrench,
   Upload
 } from 'lucide-react';
 import { workspaceApi } from '../api/client';
@@ -29,6 +26,7 @@ import { workbenchApi } from '../services/workbenchApi';
 import { useAuthStore } from '../store/authStore';
 import { EditorState, FileSystemObject, LearningTerminalMessage, ResourceReference, TerminalChatFile, User, Workspace, Workbench, WorkbenchItem } from '../types';
 import LearningTerminal from '../components/workspace/LearningTerminal';
+import TerminalComposer from '../components/workspace/TerminalComposer';
 import { AddSourcesDialog } from '../components/workspace/AddSourcesDialog';
 import LearningIntelligenceDashboard, {
   IntelligenceSection
@@ -2121,11 +2119,11 @@ export default function WorkspaceShellPage() {
                     onCheckpointThreadIdChange={updateActiveTerminalCheckpointThread}
                     onChatStarted={() => undefined}
                     onUploadMaterials={() => setAddSourcesOpen(true)}
-                    onCreateWorkbench={() => void createWorkbench(undefined, false)}
                     onWorkbenchCreated={(workbenchId) => openWorkbench(workbenchId)}
                     onRefresh={refreshSelectedWorkspace}
                     variant="full"
                     initialPrompt={terminalDraftPrompt}
+                    onInitialPromptConsumed={() => setTerminalDraftPrompt('')}
                     mode={currentTerminalMode}
                     selectedSources={currentTerminalSources}
                     chatFiles={currentTerminalChatFiles}
@@ -2145,7 +2143,6 @@ export default function WorkspaceShellPage() {
                   onOpenChat={openTerminalChat}
                   onSubmitPrompt={(prompt, options) => startTerminalChat(prompt, options)}
                   onUploadMaterials={() => setAddSourcesOpen(true)}
-                  onCreateWorkbench={() => void createWorkbench(undefined, false)}
                   onModeChange={setTerminalDraftMode}
                   onSelectedSourcesChange={setTerminalDraftSources}
                 />
@@ -3719,7 +3716,6 @@ function WorkspaceTerminalFolderChat({
   onOpenChat,
   onSubmitPrompt,
   onUploadMaterials,
-  onCreateWorkbench,
   onModeChange,
   onSelectedSourcesChange
 }: {
@@ -3730,19 +3726,14 @@ function WorkspaceTerminalFolderChat({
   onOpenChat: (chatId: string) => void;
   onSubmitPrompt: (prompt: string, options: { mode: TerminalChatMode; selectedSources: Array<{ fileId: string; mode: 'focused' | 'full_context' }> }) => void;
   onUploadMaterials: () => void;
-  onCreateWorkbench: () => void;
   onModeChange: (mode: TerminalChatMode) => void;
   onSelectedSourcesChange: (sources: Array<{ fileId: string; mode: 'focused' | 'full_context' }>) => void;
 }) {
   const [prompt, setPrompt] = useState('');
   const [mode, setMode] = useState<TerminalChatMode>('chat');
-  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
-  const [sourceModes, setSourceModes] = useState<Record<string, 'focused' | 'full_context'>>({});
-  const sourceMenuRef = useRef<HTMLDivElement | null>(null);
+  const [selectedSources, setSelectedSources] = useState<Array<{ fileId: string; mode: 'focused' | 'full_context' }>>([]);
   const [orderBy, setOrderBy] = useState<'title' | 'updatedAt'>('updatedAt');
   const [direction, setDirection] = useState<'asc' | 'desc'>('desc');
-  const selectedSourceCount = Object.keys(sourceModes).length;
-  const modeLabel = mode === 'agentic' ? 'Agentic' : 'Chat';
 
   const sortedChats = useMemo(() => {
     return [...chats].sort((a, b) => {
@@ -3777,7 +3768,6 @@ function WorkspaceTerminalFolderChat({
   const submitPrompt = () => {
     const value = prompt.trim();
     if (!value) return;
-    const selectedSources = Object.entries(sourceModes).map(([fileId, sourceMode]) => ({ fileId, mode: sourceMode }));
     onSubmitPrompt(value, { mode, selectedSources });
     setPrompt('');
   };
@@ -3787,19 +3777,8 @@ function WorkspaceTerminalFolderChat({
   }, [mode, onModeChange]);
 
   useEffect(() => {
-    onSelectedSourcesChange(Object.entries(sourceModes).map(([fileId, sourceMode]) => ({ fileId, mode: sourceMode })));
-  }, [onSelectedSourcesChange, sourceModes]);
-
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (sourceMenuRef.current?.contains(target)) return;
-      setSourceMenuOpen(false);
-    };
-
-    window.addEventListener('pointerdown', onPointerDown);
-    return () => window.removeEventListener('pointerdown', onPointerDown);
-  }, []);
+    onSelectedSourcesChange(selectedSources);
+  }, [onSelectedSourcesChange, selectedSources]);
 
   const SortIcon = ({ active }: { active: boolean }) => (
     <ChevronDown
@@ -3834,143 +3813,20 @@ function WorkspaceTerminalFolderChat({
             </button>
           </div>
 
-          <form
-            className="w-full py-3 text-base font-normal"
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitPrompt();
-            }}
-          >
-            <div className="flex flex-1 flex-col rounded-3xl border border-gray-100/30 bg-white/5 px-1 shadow-lg backdrop-blur-sm transition hover:border-gray-200 focus-within:border-gray-100">
-              <div className="px-2.5">
-                <textarea
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                      event.preventDefault();
-                      submitPrompt();
-                    }
-                  }}
-                  placeholder="How can I help you today?"
-                  rows={1}
-                  className="scrollbar-hidden min-h-[48px] max-h-96 w-full resize-none bg-transparent px-1 pb-1 pt-2.5 text-sm leading-6 text-gray-900 outline-none placeholder:text-gray-500"
-                />
-              </div>
-              <div className="mx-0.5 mb-2.5 mt-0.5 flex max-w-full justify-between" dir="ltr">
-                <div className="ml-1 flex max-w-[80%] flex-1 items-center self-end">
-                  <button
-                    type="button"
-                    onClick={onUploadMaterials}
-                    className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-700 outline-none transition hover:bg-gray-100"
-                    title="Add"
-                  >
-                    <Plus className="size-5" strokeWidth={2} />
-                  </button>
-                  <div className="mx-1 h-4 w-px self-center bg-gray-200/50" />
-                  <div ref={sourceMenuRef} className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setSourceMenuOpen((current) => !current)}
-                      className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-700 outline-none transition hover:bg-gray-100"
-                      title="Chat mode"
-                    >
-                      <Sparkles className="size-[1.125rem]" strokeWidth={1.5} />
-                    </button>
-                    {sourceMenuOpen ? (
-                      <div className="absolute bottom-10 left-0 z-50 max-h-72 min-w-[17.5rem] max-w-[17.5rem] overflow-y-auto overflow-x-hidden rounded-2xl border border-gray-100 bg-white px-1 py-1 text-sm text-gray-900 shadow-lg">
-                        <div className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-1.5 text-sm">
-                          <Wrench className="size-4" strokeWidth={1.75} />
-                          <div className="flex w-full items-center justify-between">
-                            <div className="line-clamp-1">
-                              Mode <span className="ml-0.5 text-gray-500">{modeLabel}</span>
-                            </div>
-                          </div>
-                        </div>
-                        {([
-                          { value: 'chat' as const, label: 'Chat' },
-                          { value: 'agentic' as const, label: 'Agentic' }
-                        ]).map((item) => (
-                          <button
-                            key={item.value}
-                            type="button"
-                            onClick={() => setMode(item.value)}
-                            className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-3 py-1.5 text-sm transition hover:bg-gray-50"
-                          >
-                            <div className="flex flex-1 items-center gap-2 truncate">
-                              <Sparkles className="size-4" strokeWidth={1.75} />
-                              <div className="truncate">{item.label}</div>
-                            </div>
-                            {mode === item.value ? <Check className="size-4 shrink-0 text-gray-900" /> : null}
-                          </button>
-                        ))}
-                        <div className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-1.5 text-sm">
-                          <BookOpen className="size-4" strokeWidth={1.75} />
-                          <div className="flex w-full items-center justify-between">
-                            <div className="line-clamp-1">Workspace scope</div>
-                          </div>
-                          {selectedSourceCount > 0 ? <span>{selectedSourceCount}</span> : null}
-                        </div>
-                        <div>
-                          {sourceFiles.length > 0 ? sourceFiles.map((source) => {
-                            const active = Boolean(sourceModes[source.id]);
-                            return (
-                              <div key={source.id} className="flex items-center justify-between gap-2 rounded-xl px-3 py-1.5 text-sm transition hover:bg-gray-50">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSourceModes((current) => {
-                                      const next = { ...current };
-                                      if (next[source.id]) delete next[source.id];
-                                      else next[source.id] = 'focused';
-                                      return next;
-                                    });
-                                  }}
-                                  className="min-w-0 flex-1 text-left"
-                                >
-                                  <div className="truncate text-gray-900">{source.name}</div>
-                                  <div className="truncate text-xs text-gray-500">{source.path}</div>
-                                  <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${knowledgeIndexToneClass(source.indexStatusTone)}`}>
-                                      {source.indexStatusLabel || 'Unknown'}
-                                    </span>
-                                    <span className="truncate text-[10px] text-gray-400">
-                                      {source.indexStatusDetail || 'Index status unavailable'}
-                                    </span>
-                                  </div>
-                                  {active && Number(source.chunkCount || 0) === 0 ? (
-                                    <div className="mt-1 text-[10px] text-red-500">No chunks yet; focused retrieval may not find evidence.</div>
-                                  ) : null}
-                                </button>
-                                {active ? <Check className="size-4 shrink-0 text-black" /> : null}
-                              </div>
-                            );
-                          }) : (
-                            <div className="px-3 py-1.5 text-sm text-gray-500">No workspace sources available.</div>
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="mr-1 flex shrink-0 items-center gap-[0.5px] self-end">
-                  <button
-                    type="submit"
-                    className={`self-center rounded-full p-1.5 transition ${
-                      prompt.trim()
-                        ? 'bg-black text-white hover:bg-gray-900'
-                        : 'cursor-not-allowed bg-gray-200 text-white'
-                    }`}
-                    disabled={!prompt.trim()}
-                    title="New Chat"
-                  >
-                    <ArrowUp className="size-5" strokeWidth={2.5} />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </form>
+          <div className="w-full py-3 text-base font-normal">
+            <TerminalComposer
+              value={prompt}
+              onValueChange={setPrompt}
+              onSubmit={submitPrompt}
+              placeholder="How can I help you today?"
+              mode={mode}
+              onModeChange={setMode}
+              selectedSources={selectedSources}
+              onSelectedSourcesChange={setSelectedSources}
+              sourceFiles={sourceFiles}
+              onUploadMaterials={onUploadMaterials}
+            />
+          </div>
 
           <div className="min-h-[15.5rem] px-4 md:px-6">
             <div className="mb-1 flex items-center -mr-0.5 text-xs font-medium text-gray-900">
