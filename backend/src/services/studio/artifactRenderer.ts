@@ -246,6 +246,15 @@ const renderSlides = (artifact: StudioStructuredArtifact<any>) => {
 
 const renderVisualExplainer = (artifact: StudioStructuredArtifact<any>) => {
   const payload = artifact.payload || {};
+  if (payload.schemaVersion === 'visual_code_lesson.v1') {
+    return [
+      payload.contentMarkdown || '',
+      '',
+      personalizationSection(artifact),
+      '',
+      sourceSection(artifact)
+    ].filter(Boolean).join('\n');
+  }
   const sections = Array.isArray(payload.sections) ? payload.sections : [];
   return [
     `# ${payload.title || artifact.title}`,

@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import { 
   createFileObject, updateFileObject, deleteFileObject, getFileObject,
   getFileTree, getResources, initFileSystem, createFolder, createFile, renameNode,
@@ -16,6 +16,22 @@ import { requireAuth, requireWorkspaceAccess } from '../middleware/auth';
 
 const router = express.Router();
 
+const isLocalPreviewRequest = (req: Request) => {
+  if (process.env.ALLOW_LOCAL_FILE_PREVIEW === 'false') return false;
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_LOCAL_FILE_PREVIEW !== 'true') return false;
+  const host = String(req.hostname || '').toLowerCase();
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+};
+
+const allowLocalPreview = (handler: (req: Request, res: Response) => Promise<unknown>) =>
+  (req: Request, res: Response, next: NextFunction) => {
+    if (!isLocalPreviewRequest(req)) {
+      next();
+      return;
+    }
+    void handler(req, res);
+  };
+
 // Configure multer for temporary storage
 const tempStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -32,6 +48,9 @@ const tempStorage = multer.diskStorage({
 const upload = multer({ storage: tempStorage });
 
 router.post('/discover-sources', requireAuth, discoverWebSources);
+
+router.get('/workspace/:workspaceId/download', allowLocalPreview(downloadFile));
+router.get('/workspace/:workspaceId/preview', allowLocalPreview(streamFilePreview));
 
 router.use('/workspace/:workspaceId', requireAuth, requireWorkspaceAccess);
 

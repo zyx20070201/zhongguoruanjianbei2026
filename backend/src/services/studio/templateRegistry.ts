@@ -274,19 +274,19 @@ export const STUDIO_TEMPLATES: StudioResourceTemplate[] = [
   {
     id: 'visual_explainer',
     goal: 'visualize',
-    title: 'Visual Explainer',
-    shortTitle: '视觉讲解',
-    description: '先生成完整 Markdown 答案，再切成讲解分镜，并为每个分镜生成可播放的局部动画步骤。',
+    title: 'Animated Explainer',
+    shortTitle: '动画讲解',
+    description: '生成带 React/HTML 小动画的讲解页面，直接在浏览器沙盒中运行。',
     generator: 'multimodal',
     renderer: 'visual_explainer',
     format: 'md',
     filename: 'visualize-visual-explainer.md',
     outputLabel: '视觉讲解动画',
-    promptFrame: '把问题回答成一个可播放的视觉讲解：先给完整 Markdown 答案，再拆分 section 分镜，并设计每个分镜内部的动画步骤。',
+    promptFrame: '把问题回答成一个带可执行小动画的视觉讲解：先给 Markdown 讲解，再用 REACT_VIZ 或 HTML_VIZ 代码块生成可运行演示。',
     systemInstruction:
-      '生成通用视觉讲解资源。先保证 Markdown 答案完整、准确、结构清楚；再把答案拆成 4-7 个 section 分镜；每个 section 必须聚焦一个讲解目标，并包含 screenText、narration、visual objects、timeline steps 和可选检查问题。不要只做标题切分，要按语义和讲解节奏切分。',
-    defaultOptions: { sectionCount: 5, animationDepth: 'lightweight', rendererFamily: 'slides+motion' },
-    tags: ['visual-explainer', 'markdown-first', 'storyboard', 'animation'],
+      '生成通用动画讲解资源。输出 Markdown 讲解正文，并在适合的位置嵌入 REACT_VIZ 或 HTML_VIZ 可执行代码块。代码必须自包含、短小、可直接运行，优先用 React 组件表达交互和状态变化。',
+    defaultOptions: { animationDepth: 'interactive', rendererFamily: 'react-html-sandbox' },
+    tags: ['visual-explainer', 'react-viz', 'html-viz', 'animation'],
     recommendationRules: [
       { id: 'visual-explainer-general', reason: '该主题适合从纯文字回答升级为分镜式视觉讲解。', priority: 86, when: ['visual_preference'] },
       { id: 'visual-explainer-source', reason: '当前资料可以先沉淀 Markdown，再转成可播放讲解。', priority: 74, when: ['has_sources'] }

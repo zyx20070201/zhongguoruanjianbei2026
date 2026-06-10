@@ -23,8 +23,11 @@ import {
   buildVisualExplainerMarkdownSourceBlocks,
   buildVisualExplainerFromStages,
   buildFallbackVisualExplainer,
+  buildAvlVisualCodeLesson,
   extractVisualExplainerMarkdownDraft,
+  isAvlVisualExplainerRequest,
   normalizeVisualExplainerContentMap,
+  normalizeVisualCodeLessonPayload,
   normalizeVisualExplainerRendererBlocks,
   normalizeVisualExplainerSectionPlan,
   normalizeVisualExplainerSlideText,
@@ -32,12 +35,14 @@ import {
   validateVisualExplainerPayload,
   VISUAL_EXPLAINER_CONTENT_MAP_SCHEMA_HINT,
   VISUAL_EXPLAINER_RENDERER_BLOCK_SCHEMA_HINT,
-  VISUAL_EXPLAINER_SCHEMA_HINT,
   VISUAL_EXPLAINER_SECTION_PLAN_SCHEMA_HINT,
   VISUAL_EXPLAINER_SLIDE_TEXT_SCHEMA_HINT,
   VISUAL_EXPLAINER_VISUAL_INTENT_SCHEMA_HINT,
+  VISUAL_CODE_LESSON_SCHEMA_HINT,
+  visualCodeLessonPrompt,
   visualExplainerContentMapPrompt,
   visualExplainerMarkdownPrompt,
+  visualExplainerSelectedSourcesMarkdownPrompt,
   visualExplainerRendererBlocksPrompt,
   visualExplainerSectionPlanPrompt,
   visualExplainerSlideTextPrompt,
@@ -1061,7 +1066,7 @@ const buildSchemaHint = (template: StudioResourceTemplate) => {
     };
   }
   if (template.renderer === 'visual_explainer') {
-    return VISUAL_EXPLAINER_SCHEMA_HINT;
+    return VISUAL_CODE_LESSON_SCHEMA_HINT;
   }
   if (
     template.renderer === 'interactive_html' ||
@@ -1356,7 +1361,88 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
 
   if (context.template.renderer === 'visual_explainer') {
     const userPrompt = latestPrompt(context);
+    const selectedSources = await selectedSourceFullTexts(context);
     const visualStages: VisualExplainerPipelineStage[] = [];
+    const selectedSourceIds = selectedSources.map((source) => source.id);
+
+    if (isAvlVisualExplainerRequest(userPrompt, selectedSources)) {
+      const visualCodeLesson = buildAvlVisualCodeLesson(context, userPrompt, selectedSourceIds);
+      const rawContent = JSON.stringify(visualCodeLesson, null, 2);
+      const structured = normalizeStudioArtifact(context, rawContent);
+      return {
+        content: renderStudioArtifact(structured),
+        structured,
+        source: 'avl-specialized-visual-code-lesson',
+        metadata: {
+          selectedResourceIds: selectedSourceIds,
+          selectedSourceCount: selectedSources.length,
+          selectedSourceChars: selectedSources.reduce((sum, source) => sum + source.content.length, 0),
+          visualCodeLessonSchemaVersion: visualCodeLesson.schemaVersion,
+          specializedDemo: 'avl_tree_interactive',
+          visualCodeLessonGeneration: {
+            schemaVersion: 'visual_code_lesson.generation.v1',
+            strategy: 'specialized_avl_tree_interactive_demo',
+            provider: 'local',
+            model: 'deterministic-avl-demo',
+            durationMs: 0
+          }
+        }
+      };
+    }
+
+    const directCodeLessonStartedAt = Date.now();
+    try {
+      const response = await jsonWithStudioFallback<Record<string, unknown>>(context, {
+        instruction: visualCodeLessonPrompt(userPrompt, selectedSources),
+        schema: VISUAL_CODE_LESSON_SCHEMA_HINT,
+        input: {
+          userPrompt,
+          selectedSources: selectedSources.map((source, index) => ({
+            index: index + 1,
+            id: source.id,
+            name: source.name,
+            path: source.path,
+            text: source.content
+          }))
+        }
+      }, { includeVisualEvidence: false, timeoutMs: VISUAL_EXPLAINER_STAGE_TIMEOUT_MS });
+      if (response.data?.schemaVersion !== 'visual_code_lesson.v1' || typeof (response.data as any).contentMarkdown !== 'string') {
+        throw new Error('Model did not return visual_code_lesson.v1 JSON.');
+      }
+      const visualCodeLesson = normalizeVisualCodeLessonPayload(context, response.data, userPrompt, selectedSourceIds);
+      const rawContent = JSON.stringify(visualCodeLesson, null, 2);
+      const structured = normalizeStudioArtifact(context, rawContent);
+      return {
+        content: renderStudioArtifact(structured),
+        structured,
+        source: `${response.provider}-visual-code-lesson-json`,
+        metadata: {
+          model: response.model,
+          usage: response.usage,
+          selectedResourceIds: selectedSourceIds,
+          selectedSourceCount: selectedSources.length,
+          selectedSourceChars: selectedSources.reduce((sum, source) => sum + source.content.length, 0),
+          visualCodeLessonSchemaVersion: visualCodeLesson.schemaVersion,
+          visualCodeLessonGeneration: {
+            schemaVersion: 'visual_code_lesson.generation.v1',
+            strategy: 'direct_json_markdown_code_blocks',
+            provider: response.provider,
+            model: response.model,
+            durationMs: Date.now() - directCodeLessonStartedAt
+          }
+        }
+      };
+    } catch (error) {
+      visualStages.push({
+        id: 'visual_code_lesson',
+        label: 'Visual Code Lesson JSON',
+        status: 'fallback',
+        durationMs: Date.now() - directCodeLessonStartedAt,
+        summary: 'Direct visual_code_lesson.v1 generation failed; falling back to legacy staged pipeline.',
+        error: fallbackErrorText(error)
+      });
+    }
+
     let markdownDraft = '';
     let markdownDraftProvider = 'fallback';
     let markdownDraftModel = '';
@@ -1368,7 +1454,9 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
         [
           {
             role: 'user',
-            content: visualExplainerMarkdownPrompt(userPrompt)
+            content: selectedSources.length
+              ? visualExplainerSelectedSourcesMarkdownPrompt(userPrompt, selectedSources)
+              : visualExplainerMarkdownPrompt(userPrompt)
           }
         ],
         context,
@@ -1385,7 +1473,9 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
         provider: markdownResponse.provider,
         model: markdownResponse.model,
         durationMs: Date.now() - markdownStartedAt,
-        summary: 'Generated raw Markdown answer.',
+        summary: selectedSources.length
+          ? 'Generated raw Markdown answer from selected source text only.'
+          : 'Generated raw Markdown answer from user prompt only.',
         fallbackErrors: fallbackErrorsFromUsage(markdownResponse.usage)
       });
     } catch (error) {
@@ -1555,6 +1645,10 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
         usage: markdownUsage,
         markdownDraftProvider,
         markdownDraftModel,
+        selectedResourceIds: selectedSourceIds,
+        selectedSourceCount: selectedSources.length,
+        selectedSourceChars: selectedSources.reduce((sum, source) => sum + source.content.length, 0),
+        visualLessonSchemaVersion: payload.visualLesson?.schemaVersion || null,
         visualExplainerPipeline: {
           schemaVersion: 'visual_explainer.pipeline.v1',
           stages: visualStages,

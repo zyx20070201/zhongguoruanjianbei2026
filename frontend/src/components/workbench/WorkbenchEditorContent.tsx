@@ -3465,12 +3465,18 @@ function PdfJsReader({
     eventBus.on('pagechanging', handlePageChanging);
     eventBus.on('textlayerrendered', handlePageChanging);
 
-    const loadingTask = pdfjsLib.getDocument({
-      url: sourceUrl,
-      verbosity: pdfjsLib.VerbosityLevel.ERRORS
-    });
-    void loadingTask.promise
+    let loadingTask: ReturnType<typeof pdfjsLib.getDocument> | null = null;
+    void fileSystemApi.previewData(workspaceId, fileId, sourceUrl)
+      .then((buffer) => {
+        if (cancelled) return null;
+        loadingTask = pdfjsLib.getDocument({
+          data: new Uint8Array(buffer),
+          verbosity: pdfjsLib.VerbosityLevel.ERRORS
+        });
+        return loadingTask.promise;
+      })
       .then((pdf: any) => {
+        if (!pdf) return;
         if (cancelled) {
           pdf.destroy();
           return;
@@ -3500,7 +3506,7 @@ function PdfJsReader({
       clearJumpHighlights();
       pdfViewer.cleanup();
       linkService.setDocument(null);
-      loadingTask.destroy();
+      void loadingTask?.destroy();
       void loadedPdf?.destroy?.();
       if (pdfViewerRef.current === pdfViewer) pdfViewerRef.current = null;
       if (linkServiceRef.current === linkService) linkServiceRef.current = null;

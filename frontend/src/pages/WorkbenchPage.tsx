@@ -6,6 +6,8 @@ import {
   FolderOpen,
   WandSparkles,
   MessageCirclePlus,
+  Maximize2,
+  Minimize2,
   PanelLeftOpen,
   Search,
 } from 'lucide-react';
@@ -170,6 +172,7 @@ interface AIToolPanelShellProps {
   resources: ResourceReference[];
   onClose: () => void;
   onResizeSidebar: (width: number) => void;
+  onToggleMode: () => void;
   onSelectTool: (tool: AIToolPanelState['activeTool']) => void;
   onSelectSession: (sessionId: string) => void;
   onCreateSession: () => void;
@@ -187,6 +190,7 @@ interface AIToolShellProps {
   sidebarWidth: number;
   onClose: () => void;
   onResizeSidebar: (width: number) => void;
+  onToggleMode: () => void;
   children: React.ReactNode;
   headerLeft?: React.ReactNode;
   headerActions?: React.ReactNode;
@@ -195,15 +199,19 @@ interface AIToolShellProps {
 
 function AIToolShell({
   title,
+  mode,
   sidebarWidth,
   onClose,
   onResizeSidebar,
+  onToggleMode,
   children,
   headerLeft,
   headerActions,
   closeTitle
 }: AIToolShellProps) {
+  const isFullscreen = mode === 'fullscreen';
   const handleResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (isFullscreen) return;
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = sidebarWidth;
@@ -221,16 +229,22 @@ function AIToolShell({
 
   return (
     <div
-      className="openwebui-shell ai-sidebar-drift relative z-40 flex h-full shrink-0 overflow-hidden border-l-[0.5px] border-gray-50 bg-gray-50/70 text-sm text-gray-900"
-      style={{ width: sidebarWidth }}
+      className={
+        isFullscreen
+          ? 'openwebui-shell ai-sidebar-drift absolute inset-0 z-50 flex h-full overflow-hidden bg-white text-sm text-gray-900'
+          : 'openwebui-shell ai-sidebar-drift relative z-40 flex h-full shrink-0 overflow-hidden border-l-[0.5px] border-gray-50 bg-gray-50/70 text-sm text-gray-900'
+      }
+      style={isFullscreen ? undefined : { width: sidebarWidth }}
     >
-      <div
-        className="group/ai-resize absolute left-0 top-0 z-30 h-full w-2 -translate-x-1 cursor-col-resize"
-        onPointerDown={handleResizeStart}
-        title="调整 AI 侧边栏宽度"
-      >
-        <div className="absolute left-1 top-0 h-full w-px bg-gray-50 transition-colors group-hover/ai-resize:bg-gray-100" />
-      </div>
+      {!isFullscreen ? (
+        <div
+          className="group/ai-resize absolute left-0 top-0 z-30 h-full w-2 -translate-x-1 cursor-col-resize"
+          onPointerDown={handleResizeStart}
+          title="调整 AI 侧边栏宽度"
+        >
+          <div className="absolute left-1 top-0 h-full w-px bg-gray-50 transition-colors group-hover/ai-resize:bg-gray-100" />
+        </div>
+      ) : null}
       <div className="flex min-h-0 w-full flex-col overflow-hidden bg-transparent">
         <div className="relative z-20 flex h-14 shrink-0 items-center justify-between px-4">
           <div className="relative min-w-0">
@@ -243,6 +257,14 @@ function AIToolShell({
 
           <div className="flex items-center gap-1">
             {headerActions}
+            <button
+              type="button"
+              onClick={onToggleMode}
+              className="ai-soft-button inline-flex h-9 w-9 items-center justify-center rounded-full text-[#3f4247] hover:bg-[#f1f1ef]"
+              title={isFullscreen ? '退出全屏' : '全屏显示'}
+            >
+              {isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+            </button>
             <button
               type="button"
               onClick={onClose}
@@ -273,6 +295,7 @@ function AIToolPanelShell({
   resources,
   onClose,
   onResizeSidebar,
+  onToggleMode,
   onSelectTool,
   onSelectSession,
   onCreateSession,
@@ -304,6 +327,7 @@ function AIToolPanelShell({
       sidebarWidth={sidebarWidth}
       onClose={onClose}
       onResizeSidebar={onResizeSidebar}
+      onToggleMode={onToggleMode}
       closeTitle="隐藏 AI 面板"
       headerLeft={
         <div className="flex min-w-0 items-center gap-3">
@@ -1763,7 +1787,7 @@ function WorkbenchPageContent() {
       aiToolPanel: {
         id: latestState?.aiToolPanel?.id || `ai-tool-panel-${workbench?.id || Date.now()}`,
         activeTool: 'studio',
-        mode: 'sidebar',
+        mode: latestState?.aiToolPanel?.mode || 'sidebar',
         isOpen: true,
         sidebarWidth: latestState?.aiToolPanel?.sidebarWidth || 520
       }
@@ -1803,7 +1827,7 @@ function WorkbenchPageContent() {
       aiToolPanel: {
         ...currentPanel,
         ...patch,
-        mode: 'sidebar',
+        mode: patch.mode || currentPanel.mode || 'sidebar',
         sidebarWidth: typeof patch.sidebarWidth === 'number' ? patch.sidebarWidth : currentPanel.sidebarWidth || 520
       }
     });
@@ -2302,7 +2326,7 @@ function WorkbenchPageContent() {
     isOpen: false,
     sidebarWidth: 520
   };
-  const aiToolPanelMode: AIAssistantMode = 'sidebar';
+  const aiToolPanelMode: AIAssistantMode = aiToolPanel.mode || 'sidebar';
   const isAiToolPanelOpen = Boolean(aiToolPanel.isOpen);
   const aiToolPanelSidebarWidth = aiToolPanel.sidebarWidth || 520;
 
@@ -2470,6 +2494,7 @@ function WorkbenchPageContent() {
             aiContext={aiAssistantContext}
             onClose={() => updateAiToolPanelState({ isOpen: false })}
             onResizeSidebar={(width) => updateAiToolPanelState({ sidebarWidth: width })}
+            onToggleMode={() => updateAiToolPanelState({ mode: aiToolPanelMode === 'fullscreen' ? 'sidebar' : 'fullscreen', isOpen: true })}
             onSelectTool={(activeTool) => updateAiToolPanelState({ activeTool, isOpen: true })}
             onSelectSession={handleSelectAiSession}
             onCreateSession={handleCreateAiSession}

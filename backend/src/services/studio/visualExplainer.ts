@@ -24,6 +24,7 @@ const VISUAL_ACTIONS: VisualExplainerAction[] = ['appear', 'focus', 'connect', '
 const VISUAL_RENDERERS: VisualExplainerRendererKind[] = ['reveal', 'mermaid', 'x6', 'vega_lite', 'tldraw', 'motion_canvas', 'jsav'];
 const MERMAID_DIAGRAM_TYPES: VisualExplainerMermaidDiagramType[] = ['flowchart', 'sequenceDiagram', 'stateDiagram', 'classDiagram', 'erDiagram', 'mindmap', 'timeline', 'graph'];
 const JSAV_DATA_STRUCTURES: VisualExplainerJsavDataStructure[] = ['array', 'list', 'tree', 'graph', 'matrix', 'heap', 'stack', 'queue'];
+const VISUAL_LESSON_MODEL_TYPES: VisualLessonModelType[] = ['table', 'graph', 'sequence', 'code_trace', 'datapath', 'flowchart', 'markdown_mermaid'];
 
 const finiteNumber = (value: unknown) => {
   const numeric = Number(value);
@@ -150,6 +151,62 @@ export interface VisualExplainerTimelineStep {
   narration: string;
   screenText?: string;
   durationMs?: number;
+  statePatch?: Record<string, unknown>;
+}
+
+export type VisualLessonModelType =
+  | 'table'
+  | 'graph'
+  | 'sequence'
+  | 'code_trace'
+  | 'datapath'
+  | 'flowchart'
+  | 'markdown_mermaid';
+
+export interface VisualLessonTimelineStep {
+  stepId: string;
+  action: string;
+  targetIds: string[];
+  screenText?: string;
+  narration: string;
+  statePatch: Record<string, unknown>;
+  durationMs: number;
+}
+
+export interface VisualLessonVisualModel {
+  type: VisualLessonModelType;
+  title: string;
+  objects: VisualExplainerObject[];
+  blocks: VisualExplainerBlock[];
+  markdown: string;
+  data?: Record<string, unknown>;
+}
+
+export interface VisualLessonSlide {
+  id: string;
+  title: string;
+  bodyMarkdown: string;
+  narration: string;
+  layout: 'text_visual' | 'visual_first' | 'text_first' | 'full_text';
+  visualModel: VisualLessonVisualModel;
+  timeline: VisualLessonTimelineStep[];
+  checkQuestion?: string;
+}
+
+export interface VisualLesson {
+  schemaVersion: 'visual_lesson.v1';
+  title: string;
+  summary: string;
+  sourceIds: string[];
+  slides: VisualLessonSlide[];
+}
+
+export interface VisualCodeLesson {
+  schemaVersion: 'visual_code_lesson.v1';
+  title: string;
+  summary: string;
+  sourceIds: string[];
+  contentMarkdown: string;
 }
 
 export type VisualExplainerBlock =
@@ -228,6 +285,7 @@ export interface VisualExplainerPayload {
   title: string;
   summary: string;
   sections: VisualExplainerSection[];
+  visualLesson?: VisualLesson;
   rendererPlan: {
     primary: 'section_player';
     libraries: string[];
@@ -374,6 +432,67 @@ export const VISUAL_EXPLAINER_SCHEMA_HINT = {
   }
 };
 
+export const VISUAL_LESSON_SCHEMA_HINT = {
+  schemaVersion: 'visual_lesson.v1',
+  title: '面向学习者的课件标题',
+  summary: '1-3 句话说明这份课件讲什么、用什么例子演示',
+  sourceIds: ['只填写输入 selectedSources 中出现过的 id；没有来源则为空数组'],
+  slides: [
+    {
+      id: 'stable-slide-id',
+      title: '短标题，不超过 24 个中文字符',
+      bodyMarkdown: '这一页左侧/正文区展示的 Markdown。必须是学习者可读内容，不包含内部字段说明。',
+      narration: '这一页的自然口播说明，解释为什么要看当前视觉变化。',
+      layout: 'text_visual | visual_first | text_first | full_text',
+      visualModel: {
+        type: 'table | graph | sequence | code_trace | datapath | flowchart | markdown_mermaid',
+        title: '视觉区域标题',
+        objects: [
+          {
+            id: 'stable-object-id',
+            kind: 'title | card | node | edge | formula | table | image_hint | chart_hint',
+            label: '屏幕上显示的短标签',
+            detail: '对象解释，可选',
+            role: 'main | support | example | warning | summary',
+            fromId: 'edge 起点，可选',
+            toId: 'edge 终点，可选'
+          }
+        ],
+        blocks: [
+          {
+            id: 'block-id',
+            kind: 'markdown | mermaid | x6 | vega_lite | tldraw | motion_canvas | jsav',
+            markdown: 'kind=markdown 时的 Markdown',
+            code: 'kind=mermaid 时的 Mermaid DSL，不要代码围栏',
+            graph: 'kind=x6 时的 { nodes, edges }',
+            spec: 'kind=vega_lite 时的 Vega-Lite spec',
+            dataStructure: 'kind=jsav 时的数据结构类型'
+          }
+        ],
+        markdown: '视觉模型的可读降级描述；前端渲染器不可用时展示',
+        data: {
+          note: '可选结构化数据。table 可放 leftTable/rightTable/resultTable/joinCondition；graph 可放 nodes/edges/start/target；sequence 可放 items；datapath 可放 components/signals/path。'
+        }
+      },
+      timeline: [
+        {
+          stepId: 'stable-step-id',
+          action: 'appear | focus | connect | move | transform | compare | annotate | fade',
+          targetIds: ['必须引用 visualModel.objects[].id；没有对象时可为空数组'],
+          screenText: '屏幕短提示，不超过 32 个中文字符',
+          narration: '这一小步讲什么',
+          statePatch: {
+            activeTargetIds: ['当前高亮对象 id'],
+            note: '渲染器状态增量。table 可放 highlightRows/connections/outputRows；graph 可放 activeNodes/visitedNodes/activeEdges/distances；sequence 可放 activeIndices/items；datapath 可放 activeComponents/activeSignals。'
+          },
+          durationMs: 900
+        }
+      ],
+      checkQuestion: '可选自检问题'
+    }
+  ]
+};
+
 export const VISUAL_EXPLAINER_CONTENT_MAP_SCHEMA_HINT = {
   schemaVersion: 'visual_explainer.content_map.v1',
   title: 'string',
@@ -398,6 +517,536 @@ export const VISUAL_EXPLAINER_SECTION_PLAN_SCHEMA_HINT = {
     sectionType: 'intro | concept | process | example | comparison | derivation | summary'
   }]
 };
+
+export const VISUAL_CODE_LESSON_SCHEMA_HINT = {
+  schemaVersion: 'visual_code_lesson.v1',
+  title: 'string',
+  summary: 'string',
+  sourceIds: ['selected source id'],
+  contentMarkdown: [
+    '# Title',
+    '',
+    'Teacher-facing explanation in Markdown.',
+    '',
+    '~~~REACT_VIZ',
+    'import { useState } from "react";',
+    '',
+    'export default function App() {',
+    '  return <div className="p-4 text-gray-900">Interactive visualization</div>;',
+    '}',
+    '~~~'
+  ].join('\n')
+};
+
+export const visualCodeLessonPrompt = (
+  userPrompt: string,
+  sources: Array<{ id: string; name: string; path?: string; content: string }>
+) => [
+  '你是 AI Studio 的教学可视化生成智能体。',
+  '你的任务是生成“讲解 Markdown + 可执行前端小动画/交互演示代码”。',
+  '',
+  '输出硬性要求：',
+  '- 只输出一个合法 JSON 对象，不要 Markdown 代码围栏包住 JSON，不要额外解释。',
+  '- JSON 顶层 schemaVersion 必须是 "visual_code_lesson.v1"。',
+  '- contentMarkdown 是最终展示给学生看的完整内容，里面可以包含普通 Markdown 和可执行可视化代码块。',
+  '- 至少生成 1 个可执行可视化代码块；适合交互时优先生成 REACT_VIZ。',
+  '',
+  '可视化代码块协议：',
+  '- React 模式用 ~~~REACT_VIZ 和 ~~~ 包裹 JSX/TSX，标记必须独占一行。',
+  '- React 模式必须 export default 导出一个函数组件。',
+  '- React 环境预装 React 18、ReactDOM、Babel、Recharts、Tailwind CSS；可以使用 Hooks。',
+  '- HTML 模式用 ~~~HTML_VIZ 和 ~~~ 包裹完整自包含 HTML，标记必须独占一行。',
+  '- HTML 模式适合 Canvas、SVG、CSS animation、少量 D3/Chart.js 类演示。',
+  '- 代码要完整、短小、能直接运行；宁可少做功能，也不要输出半截代码。',
+  '',
+  '安全限制：',
+  '- 不要使用 localStorage、sessionStorage、document.cookie。',
+  '- 不要访问 window.parent、parent.document、top、opener。',
+  '- 不要使用 fetch、XMLHttpRequest、WebSocket、EventSource、navigator.sendBeacon。',
+  '- 不要使用 eval、new Function、动态 import、外链脚本、外链样式或项目内部组件。',
+  '- 不要让代码依赖用户本地文件、后端 API、真实账号或环境变量。',
+  '',
+  '教学质量要求：',
+  '- contentMarkdown 要像老师讲课：先讲概念，再给例子，再让动画演示变化，最后给观察问题。',
+  '- 动画/交互必须服务于概念理解，不要做装饰性动效。',
+  '- 计算机课程内容要具体：算法给输入和状态变化；数据库给表、字段、条件、结果；组成原理给部件和数据流；网络给报文/状态/时序。',
+  '- 所有可视化中的文字必须清晰可读：白色/浅色背景，深色文字，不要大面积深色背景。',
+  '- 如果资料不足，要在 summary 或正文里说明保守生成，不要编造资料外事实。',
+  '',
+  '资料忠实度硬性要求：',
+  '- 如果「用户勾选资料全文」非空，讲解主题、动画对象、示例数据、术语和步骤必须来自这些资料。',
+  '- 不要因为用户要求笼统就另选常见 demo；例如资料是数据库，就不能生成排序、搜索、CPU 数据通路等无关演示。',
+  '- 如果用户要求和资料主题冲突，优先围绕资料生成，并在 summary 中用一句话说明已按勾选资料修正主题。',
+  '- 可视化代码中的表名、字段名、状态名、概念名应尽量使用资料里出现过的词；没有证据时使用“示例”并说明。',
+  '- 生成前先在内部确认：动画是否能被资料片段支持；不能支持的内容不要写进最终 JSON。',
+  '',
+  '上下文边界：',
+  '- 你只能使用「用户要求」和「用户勾选资料全文」。',
+  '- 严禁使用、推断或提及 Context Capsule、Workbench 全量资源、当前文件、学习者画像、历史记忆、推荐系统、未勾选资源或 AI Studio 内部工作流。',
+  '',
+  'Schema 参考：',
+  JSON.stringify(VISUAL_CODE_LESSON_SCHEMA_HINT, null, 2),
+  '',
+  `用户要求：${userPrompt || '把勾选资料转换成带交互动画的视觉化讲解。'}`,
+  '',
+  '# 用户勾选资料全文',
+  sources.length
+    ? sources.map((source, index) => [
+      `## Source ${index + 1}: ${source.name}`,
+      `SourceId: ${source.id}`,
+      source.path ? `Path: ${source.path}` : '',
+      '',
+      source.content || '(empty source text)'
+    ].filter(Boolean).join('\n')).join('\n\n---\n\n')
+    : '(no selected source text)'
+].join('\n');
+
+const stripDangerousVizCode = (value: string) => {
+  const text = preserveMarkdown(value);
+  if (!text) return '';
+  return text.replace(/~~~(REACT_VIZ|HTML_VIZ)\s*\n([\s\S]*?)~~~/g, (block, _kind, code) => {
+    const dangerous = /(localStorage|sessionStorage|document\.cookie|window\.parent|parent\.document|\btop\b|\bopener\b|fetch\s*\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon|eval\s*\(|new\s+Function|import\s*\(|<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=)/i.test(code);
+    return dangerous
+      ? [
+        '> 这个可视化代码块因为包含不允许的浏览器能力，已被安全策略拦截。',
+        '',
+        '```text',
+        'Blocked unsafe visualization code.',
+        '```'
+      ].join('\n')
+      : block;
+  });
+};
+
+export const normalizeVisualCodeLessonPayload = (
+  context: StudioGenerationContext,
+  value: unknown,
+  userPrompt: string,
+  selectedSourceIds: string[]
+): VisualCodeLesson => {
+  const raw = value && typeof value === 'object' ? value as any : {};
+  const contentMarkdown = stripDangerousVizCode(raw.contentMarkdown || raw.markdown || raw.content || '');
+  const fallbackContent = [
+    `# ${clip(userPrompt || context.template.title, 120)}`,
+    '',
+    '当前模型没有返回有效的可执行可视化内容。请稍后重试，或缩小主题范围后重新生成。'
+  ].join('\n');
+  const sourceIdSet = new Set(selectedSourceIds);
+  return {
+    schemaVersion: 'visual_code_lesson.v1',
+    title: clip(raw.title || userPrompt || context.template.title, 160),
+    summary: clip(raw.summary || '包含讲解文本和可执行前端可视化代码块的视觉化课程。', 400),
+    sourceIds: Array.isArray(raw.sourceIds)
+      ? raw.sourceIds.map((id: unknown) => clip(id, 120)).filter((id: string) => sourceIdSet.has(id)).slice(0, 20)
+      : selectedSourceIds.slice(0, 20),
+    contentMarkdown: contentMarkdown || fallbackContent
+  };
+};
+
+const AVL_REACT_VISUALIZATION_CODE = String.raw`
+import { useMemo, useState } from "react";
+
+const clone = (node) => node ? {
+  value: node.value,
+  height: node.height,
+  left: clone(node.left),
+  right: clone(node.right)
+} : null;
+
+const height = (node) => node ? node.height : 0;
+const update = (node) => {
+  if (node) node.height = Math.max(height(node.left), height(node.right)) + 1;
+  return node;
+};
+const balance = (node) => node ? height(node.left) - height(node.right) : 0;
+
+const rotateRight = (y) => {
+  const x = y.left;
+  const t2 = x.right;
+  x.right = y;
+  y.left = t2;
+  update(y);
+  update(x);
+  return x;
+};
+
+const rotateLeft = (x) => {
+  const y = x.right;
+  const t2 = y.left;
+  y.left = x;
+  x.right = t2;
+  update(x);
+  update(y);
+  return y;
+};
+
+const snapshot = (root, message, focus = [], kind = "normal") => ({
+  root: clone(root),
+  message,
+  focus: focus.map(String),
+  kind
+});
+
+const rebalance = (node, steps, context) => {
+  update(node);
+  const bf = balance(node);
+  steps.push(snapshot(context.root, "回溯到节点 " + node.value + "，高度=" + node.height + "，平衡因子=" + bf + "。", [node.value], Math.abs(bf) > 1 ? "warn" : "normal"));
+
+  if (bf > 1 && balance(node.left) >= 0) {
+    steps.push(snapshot(context.root, "LL 型失衡：对节点 " + node.value + " 做一次右旋。", [node.value, node.left.value], "rotate"));
+    return rotateRight(node);
+  }
+  if (bf > 1 && balance(node.left) < 0) {
+    steps.push(snapshot(context.root, "LR 型失衡：先对左孩子 " + node.left.value + " 左旋，再对节点 " + node.value + " 右旋。", [node.value, node.left.value], "rotate"));
+    node.left = rotateLeft(node.left);
+    return rotateRight(node);
+  }
+  if (bf < -1 && balance(node.right) <= 0) {
+    steps.push(snapshot(context.root, "RR 型失衡：对节点 " + node.value + " 做一次左旋。", [node.value, node.right.value], "rotate"));
+    return rotateLeft(node);
+  }
+  if (bf < -1 && balance(node.right) > 0) {
+    steps.push(snapshot(context.root, "RL 型失衡：先对右孩子 " + node.right.value + " 右旋，再对节点 " + node.value + " 左旋。", [node.value, node.right.value], "rotate"));
+    node.right = rotateRight(node.right);
+    return rotateLeft(node);
+  }
+  return node;
+};
+
+const insertNode = (node, value, steps, path, context) => {
+  if (!node) {
+    const created = { value, height: 1, left: null, right: null };
+    steps.push(snapshot(context.root || created, "插入新节点 " + value + "。", [value], "insert"));
+    return created;
+  }
+  path.push(node.value);
+  steps.push(snapshot(context.root, value + " 与 " + node.value + " 比较，" + (value < node.value ? "进入左子树。" : value > node.value ? "进入右子树。" : "已经存在，不重复插入。"), path, "search"));
+  if (value < node.value) node.left = insertNode(node.left, value, steps, path.slice(), context);
+  else if (value > node.value) node.right = insertNode(node.right, value, steps, path.slice(), context);
+  else return node;
+  return rebalance(node, steps, context);
+};
+
+const minValueNode = (node) => {
+  let current = node;
+  while (current.left) current = current.left;
+  return current;
+};
+
+const deleteNode = (node, value, steps, path, context) => {
+  if (!node) {
+    steps.push(snapshot(context.root, "没有找到 " + value + "，删除结束。", path, "warn"));
+    return null;
+  }
+  path.push(node.value);
+  steps.push(snapshot(context.root, "查找待删除节点 " + value + "，当前访问 " + node.value + "。", path, "search"));
+
+  if (value < node.value) node.left = deleteNode(node.left, value, steps, path.slice(), context);
+  else if (value > node.value) node.right = deleteNode(node.right, value, steps, path.slice(), context);
+  else {
+    if (!node.left || !node.right) {
+      steps.push(snapshot(context.root, "删除节点 " + node.value + "：它最多只有一个孩子，直接用孩子替换。", [node.value], "delete"));
+      return node.left || node.right;
+    }
+    const successor = minValueNode(node.right);
+    steps.push(snapshot(context.root, "删除节点 " + node.value + "：有两个孩子，用右子树最小值 " + successor.value + " 替换。", [node.value, successor.value], "delete"));
+    node.value = successor.value;
+    node.right = deleteNode(node.right, successor.value, steps, path.slice(), context);
+  }
+
+  if (!node) return null;
+  return rebalance(node, steps, context);
+};
+
+const searchNode = (root, value) => {
+  const steps = [];
+  let node = root;
+  const path = [];
+  while (node) {
+    path.push(node.value);
+    steps.push(snapshot(root, "查询 " + value + "：访问节点 " + node.value + "。", path, "search"));
+    if (value === node.value) {
+      steps.push(snapshot(root, "查询成功：找到节点 " + value + "。", path, "found"));
+      return steps;
+    }
+    node = value < node.value ? node.left : node.right;
+  }
+  steps.push(snapshot(root, "查询失败：路径走到空指针，没有 " + value + "。", path, "warn"));
+  return steps;
+};
+
+const layoutTree = (root) => {
+  const nodes = [];
+  const edges = [];
+  const walk = (node, depth, minX, maxX, parentKey) => {
+    if (!node) return;
+    const key = String(node.value);
+    const x = (minX + maxX) / 2;
+    const y = depth * 96 + 44;
+    const label = String(node.value);
+    const width = Math.max(60, label.length * 11 + 26);
+    nodes.push({ key, value: node.value, label, height: node.height, bf: balance(node), x, y, width });
+    if (parentKey) edges.push({ from: parentKey, to: key });
+    walk(node.left, depth + 1, minX, x - 18, key);
+    walk(node.right, depth + 1, x + 18, maxX, key);
+  };
+  walk(root, 0, 52, 908, null);
+  return { nodes, edges, height: Math.max(330, (Math.max(0, ...nodes.map((n) => n.y)) + 86)), width: 960 };
+};
+
+const buildInitial = () => {
+  let root = null;
+  [30, 20, 40, 10, 25, 35, 50].forEach((value) => {
+    const context = { root };
+    root = insertNode(root, value, [], [], context);
+  });
+  return root;
+};
+
+const countNodes = (node) => node ? 1 + countNodes(node.left) + countNodes(node.right) : 0;
+const maxAbsBalance = (node) => node ? Math.max(Math.abs(balance(node)), maxAbsBalance(node.left), maxAbsBalance(node.right)) : 0;
+
+export default function AvlTreeLab() {
+  const [root, setRoot] = useState(buildInitial());
+  const [input, setInput] = useState("45");
+  const [steps, setSteps] = useState([snapshot(buildInitial(), "初始 AVL 树：每个节点显示 value、height 和 BF。", [], "normal")]);
+  const [index, setIndex] = useState(0);
+  const current = steps[index] || steps[0];
+  const drawing = useMemo(() => layoutTree(current.root), [current]);
+
+  const parseValue = () => {
+    const value = Number(input);
+    if (!Number.isSafeInteger(value) || Math.abs(value) > 999999999) return null;
+    return value;
+  };
+
+  const runInsert = () => {
+    const value = parseValue();
+    if (value === null) {
+      setSteps([snapshot(root, "请输入 -999999999 到 999999999 之间的整数。", [], "warn")]);
+      setIndex(0);
+      return;
+    }
+    const nextRoot = clone(root);
+    const context = { root: nextRoot };
+    const nextSteps = [snapshot(nextRoot, "准备插入 " + value + "：先按二叉搜索树规则查找位置。", [], "normal")];
+    const result = insertNode(nextRoot, value, nextSteps, [], context);
+    nextSteps.push(snapshot(result, "插入完成：所有失衡节点已经通过旋转恢复 AVL 条件。", [value], "found"));
+    setRoot(result);
+    setSteps(nextSteps);
+    setIndex(0);
+  };
+
+  const runDelete = () => {
+    const value = parseValue();
+    if (value === null) {
+      setSteps([snapshot(root, "请输入 -999999999 到 999999999 之间的整数。", [], "warn")]);
+      setIndex(0);
+      return;
+    }
+    const nextRoot = clone(root);
+    const context = { root: nextRoot };
+    const nextSteps = [snapshot(nextRoot, "准备删除 " + value + "：先定位节点，再回溯检查平衡。", [], "normal")];
+    const result = deleteNode(nextRoot, value, nextSteps, [], context);
+    nextSteps.push(snapshot(result, "删除完成：沿删除路径回溯，必要时完成旋转。", [], "found"));
+    setRoot(result);
+    setSteps(nextSteps);
+    setIndex(0);
+  };
+
+  const runSearch = () => {
+    const value = parseValue();
+    if (value === null) {
+      setSteps([snapshot(root, "请输入 -999999999 到 999999999 之间的整数。", [], "warn")]);
+      setIndex(0);
+      return;
+    }
+    setSteps(searchNode(root, value));
+    setIndex(0);
+  };
+
+  const reset = () => {
+    const initial = buildInitial();
+    setRoot(initial);
+    setInput("45");
+    setSteps([snapshot(initial, "初始 AVL 树：插入、删除、查询都会展示访问路径和旋转原因。", [], "normal")]);
+    setIndex(0);
+  };
+
+  const color = current.kind === "rotate" ? "#f97316" : current.kind === "warn" ? "#dc2626" : current.kind === "found" ? "#16a34a" : current.kind === "delete" ? "#9333ea" : current.kind === "insert" ? "#2563eb" : "#334155";
+  const operationLabel = current.kind === "rotate" ? "旋转修复" : current.kind === "warn" ? "需要注意" : current.kind === "found" ? "操作完成" : current.kind === "delete" ? "删除节点" : current.kind === "insert" ? "插入节点" : current.kind === "search" ? "查找路径" : "观察状态";
+  const nodeCount = countNodes(root);
+  const treeHeight = height(root);
+  const worstBalance = maxAbsBalance(root);
+  const progress = steps.length <= 1 ? 100 : Math.round((index / (steps.length - 1)) * 100);
+
+  return (
+    <div className="w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-950 text-slate-100 shadow-sm">
+      <div className="border-b border-white/10 bg-[radial-gradient(circle_at_12%_0%,rgba(59,130,246,0.28),transparent_34%),linear-gradient(135deg,#0f172a,#111827)] px-5 py-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <div className="mb-2 inline-flex items-center rounded-full border border-blue-300/30 bg-blue-400/10 px-3 py-1 text-xs font-semibold text-blue-100">
+              AVL Tree Visual Lab
+            </div>
+            <h2 className="text-2xl font-bold tracking-normal text-white">AVL 树动态实验台</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">输入整数后执行插入、删除或查询，逐步观察搜索路径、节点高度、平衡因子和旋转修复过程。</p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-lg border border-white/10 bg-white/10 px-4 py-3">
+              <div className="text-xl font-bold text-white">{nodeCount}</div>
+              <div className="text-xs text-slate-300">节点数</div>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/10 px-4 py-3">
+              <div className="text-xl font-bold text-white">{treeHeight}</div>
+              <div className="text-xs text-slate-300">树高</div>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/10 px-4 py-3">
+              <div className={worstBalance > 1 ? "text-xl font-bold text-red-300" : "text-xl font-bold text-emerald-300"}>{worstBalance}</div>
+              <div className="text-xs text-slate-300">最大 |BF|</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-col gap-3 rounded-xl border border-white/10 bg-white/95 p-3 text-slate-900 lg:flex-row lg:items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="shrink-0 text-sm font-semibold text-slate-600">操作值</span>
+            <input className="h-11 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 text-base font-semibold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 lg:w-44" value={input} onChange={(event) => setInput(event.target.value.replace(/(?!^-)[^0-9-]/g, "").replace(/(?!^)-/g, ""))} placeholder="整数" />
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <button className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700" onClick={runInsert}>插入</button>
+            <button className="h-11 rounded-lg bg-violet-600 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-violet-700" onClick={runDelete}>删除</button>
+            <button className="h-11 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700" onClick={runSearch}>查询</button>
+            <button className="h-11 rounded-lg border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50" onClick={reset}>重置</button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="min-w-0 bg-slate-100 p-4">
+          <div className="mb-3 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide" style={{ color }}>{operationLabel}</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">步骤 {index + 1} / {steps.length}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 disabled:opacity-40" disabled={index === 0} onClick={() => setIndex(Math.max(0, index - 1))}>上一步</button>
+                <button className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 disabled:opacity-40" disabled={index >= steps.length - 1} onClick={() => setIndex(Math.min(steps.length - 1, index + 1))}>下一步</button>
+              </div>
+            </div>
+            <div className="px-4 py-3">
+              <p className="text-sm leading-6 text-slate-700">{current.message}</p>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div className="h-full rounded-full transition-all duration-300" style={{ width: progress + "%", backgroundColor: color }} />
+              </div>
+            </div>
+          </div>
+
+          <svg viewBox={"0 0 " + drawing.width + " " + drawing.height} className="h-auto w-full rounded-xl border border-slate-200 bg-white shadow-sm">
+            <defs>
+              <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+                <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#e2e8f0" strokeWidth="1" opacity="0.65" />
+              </pattern>
+              <filter id="nodeShadow" x="-25%" y="-25%" width="150%" height="150%">
+                <feDropShadow dx="0" dy="6" stdDeviation="5" floodColor="#0f172a" floodOpacity="0.16" />
+              </filter>
+            </defs>
+            <rect x="0" y="0" width={drawing.width} height={drawing.height} fill="url(#grid)" />
+        {drawing.edges.map((edge) => {
+          const from = drawing.nodes.find((node) => node.key === edge.from);
+          const to = drawing.nodes.find((node) => node.key === edge.to);
+          if (!from || !to) return null;
+          const active = current.focus.includes(from.key) && current.focus.includes(to.key);
+          return <line key={edge.from + "-" + edge.to} x1={from.x} y1={from.y + 28} x2={to.x} y2={to.y - 28} stroke={active ? color : "#94a3b8"} strokeWidth={active ? "4" : "3"} strokeLinecap="round" />;
+        })}
+        {drawing.nodes.map((node) => {
+          const active = current.focus.includes(node.key);
+          const bad = Math.abs(node.bf) > 1;
+          return (
+            <g key={node.key}>
+              <rect filter="url(#nodeShadow)" x={node.x - node.width / 2} y={node.y - 30} width={node.width} height="60" rx="20" fill={active ? color : bad ? "#fee2e2" : "#ffffff"} stroke={active ? color : bad ? "#ef4444" : "#64748b"} strokeWidth="3" />
+              <text x={node.x} y={node.y - 2} textAnchor="middle" className="select-none text-sm font-bold" fill={active ? "#fff" : "#0f172a"}>{node.label}</text>
+              <text x={node.x} y={node.y + 14} textAnchor="middle" className="select-none text-[10px]" fill={active ? "#fff" : "#475569"}>h{node.height} BF{node.bf}</text>
+            </g>
+          );
+        })}
+          </svg>
+        </div>
+
+        <aside className="border-t border-white/10 bg-slate-900 p-4 lg:border-l lg:border-t-0">
+          <div className="mb-4 text-sm font-bold text-white">步骤时间线</div>
+          <div className="max-h-[520px] space-y-2 overflow-auto pr-1">
+            {steps.map((step, stepIndex) => (
+              <button key={stepIndex} type="button" onClick={() => setIndex(stepIndex)} className={(stepIndex === index ? "border-blue-400 bg-blue-500/15 text-white" : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10") + " w-full rounded-lg border px-3 py-2 text-left transition"}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold">#{stepIndex + 1}</span>
+                  <span className="text-[11px] uppercase tracking-wide">{step.kind}</span>
+                </div>
+                <div className="mt-1 line-clamp-2 text-xs leading-5">{step.message}</div>
+              </button>
+            ))}
+          </div>
+          <div className="mt-5 grid gap-2 text-xs text-slate-300">
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="font-bold text-white">插入</div>
+              <p className="mt-1 leading-5">先按 BST 规则插入叶子，再回溯更新高度。</p>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="font-bold text-white">删除</div>
+              <p className="mt-1 leading-5">按孩子数量替换节点，再沿路径检查平衡。</p>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="font-bold text-white">旋转</div>
+              <p className="mt-1 leading-5">当 |BF| &gt; 1 时，通过单旋或双旋恢复平衡。</p>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+`;
+
+export const isAvlVisualExplainerRequest = (
+  userPrompt: string,
+  sources: Array<{ name?: string; content?: string }> = []
+) => {
+  const text = [
+    userPrompt,
+    ...sources.map((source) => `${source.name || ''} ${clip(source.content || '', 800)}`)
+  ].join('\n').toLowerCase();
+  return /\bavl\b|平衡二叉树|自平衡|二叉搜索树|balanced binary search tree/.test(text);
+};
+
+export const buildAvlVisualCodeLesson = (
+  context: StudioGenerationContext,
+  userPrompt: string,
+  selectedSourceIds: string[]
+): VisualCodeLesson => ({
+  schemaVersion: 'visual_code_lesson.v1',
+  title: 'AVL 树插入、删除、查询交互动画',
+  summary: '这是一个确定性 AVL 树专项演示：用户可以输入整数并执行插入、删除、查询，逐步观察访问路径、平衡因子和 LL/LR/RR/RL 旋转。',
+  sourceIds: selectedSourceIds.slice(0, 20),
+  contentMarkdown: [
+    '# AVL 树交互动画',
+    '',
+    userPrompt
+      ? `本演示按你的任务「${clip(userPrompt, 120)}」生成。`
+      : '本演示用于讲解 AVL 树如何在插入、删除、查询时保持高度平衡。',
+    '',
+    '你可以输入一个整数，然后点击 **插入**、**删除** 或 **查询**。动画会把操作拆成步骤，展示搜索路径、节点高度、平衡因子以及触发旋转的原因。',
+    '',
+    '~~~REACT_VIZ',
+    AVL_REACT_VISUALIZATION_CODE.trim(),
+    '~~~',
+    '',
+    '## 观察问题',
+    '',
+    '1. 为什么 AVL 树在普通 BST 插入之后还要沿路径回溯更新高度？',
+    '2. LL、LR、RR、RL 四种失衡分别对应什么旋转？',
+    '3. 删除节点后，为什么也可能触发旋转？'
+  ].join('\n')
+});
 
 export const VISUAL_EXPLAINER_SLIDE_TEXT_SCHEMA_HINT = {
   schemaVersion: 'visual_explainer.slide_text.v1',
@@ -454,6 +1103,65 @@ export const visualExplainerInstruction = [
   '不要输出 HTML、CSS、视频源码或 renderer 代码。'
 ].join('\n');
 
+export const visualLessonPrompt = (
+  userPrompt: string,
+  sources: Array<{ id: string; name: string; path?: string; content: string }>
+) => [
+  '你是 AI Studio 的教学可视化课件规划器。',
+  '你的任务是把用户要求和勾选资料转换成可播放的结构化课件 JSON。',
+  '',
+  '输出硬性要求：',
+  '- 只输出一个合法 JSON 对象，不要 Markdown 代码围栏，不要额外解释。',
+  '- JSON 顶层 schemaVersion 必须是 "visual_lesson.v1"。',
+  '- 不要输出 HTML、CSS、React、Canvas、视频源码或任意应用代码。',
+  '- 不要输出普通长文；正文必须放在 slides[].bodyMarkdown，逐步讲解必须放在 slides[].timeline。',
+  '- 所有 timeline[].targetIds 必须引用同页 visualModel.objects[].id；没有合适对象时使用空数组。',
+  '- 每页 timeline 至少 2 步；涉及算法、SQL、代码或数据通路时至少 3 步。',
+  '- statePatch 必须表达这一帧的视觉状态变化，不能总是空对象。',
+  '',
+  '上下文边界：',
+  '- 你只能使用「用户要求」和「用户勾选资料全文」。',
+  '- 严禁使用、推断或提及 Context Capsule、Workbench 全量资源、当前文件、学习者画像、历史记忆、推荐系统、未勾选资源或 AI Studio 内部工作流。',
+  '- 如果勾选资料存在，必须以资料内容为准；资料没有的信息只能做保守通用解释，不要编造细节。',
+  '',
+  'visualModel.type 选择规则：',
+  '- SQL JOIN、关系表、表格推导：table。',
+  '- Dijkstra、BFS、DFS、图遍历、最短路：graph。',
+  '- 栈、队列、堆、链表、排序、数组状态变化：sequence。',
+  '- 程序逐行执行、变量变化、递归/循环 trace：code_trace。',
+  '- CPU lw/sw、控制信号、寄存器堆、ALU、存储器、数据通路：datapath。',
+  '- 普通过程、流程、系统机制：flowchart。',
+  '- 只适合文字+简单图：markdown_mermaid。',
+  '',
+  '教学质量要求：',
+  '- slides 数量通常 3-6 页；每页只讲一个概念、步骤、对比或例子。',
+  '- bodyMarkdown 面向学生阅读，短段落、列表、表格、代码块都可以，但不要暴露 JSON 字段说明。',
+  '- narration 用老师口吻解释当前页为什么重要。',
+  '- timeline.screenText 要短，timeline.narration 解释该步发生了什么、为什么发生、当前结果是什么。',
+  '- 对 SQL/table：visualModel.data 应尽量包含 leftTable、rightTable、joinCondition、resultTable；statePatch 可包含 highlightRows、connections、outputRows。',
+  '- 对 graph：visualModel.data 应尽量包含 nodes、edges、start、target；statePatch 可包含 activeNodes、visitedNodes、activeEdges、distances、queue 或 priorityQueue。',
+  '- 对 sequence：visualModel.data 应尽量包含 initialItems 和 operations；statePatch 可包含 items、activeIndices、swaps、push、pop、enqueue、dequeue。',
+  '- 对 code_trace：visualModel.data 应尽量包含 code、language、variables；statePatch 可包含 currentLine、variables、callStack、output。',
+  '- 对 datapath：visualModel.data 应尽量包含 components、signals、instruction、path；statePatch 可包含 activeComponents、activeSignals、dataValues。',
+  '- 每份课件最后至少有 1 个 checkQuestion。',
+  '',
+  'Schema 参考：',
+  JSON.stringify(VISUAL_LESSON_SCHEMA_HINT, null, 2),
+  '',
+  `用户要求：${userPrompt || '把勾选资料转换成视觉化课件讲解。'}`,
+  '',
+  '# 用户勾选资料全文',
+  sources.length
+    ? sources.map((source, index) => [
+      `## Source ${index + 1}: ${source.name}`,
+      `SourceId: ${source.id}`,
+      source.path ? `Path: ${source.path}` : '',
+      '',
+      source.content || '(empty source text)'
+    ].filter(Boolean).join('\n')).join('\n\n---\n\n')
+    : '(no selected source text)'
+].join('\n');
+
 export const visualExplainerMarkdownPrompt = (userPrompt: string) => [
   '你只负责 Visual Explainer 的第一阶段：生成内容底稿。',
   '只根据用户要求回答，不要使用、提及或等待任何外部 sources、Context Capsule、AI Studio 模板、内部配置或系统工作流。',
@@ -475,6 +1183,38 @@ export const visualExplainerMarkdownPrompt = (userPrompt: string) => [
   '不要在开头写“当然可以”“以下是”等寒暄，不要在结尾询问是否需要更多内容；直接给出高质量 Markdown 底稿。',
   '',
   `用户要求：${userPrompt}`
+].join('\n');
+
+export const visualExplainerSelectedSourcesMarkdownPrompt = (
+  userPrompt: string,
+  sources: Array<{ id: string; name: string; path?: string; content: string }>
+) => [
+  '你只负责 Visual Explainer 的第一阶段：生成内容底稿。',
+  '你只能使用下面的「用户要求」和「用户勾选资料全文」。',
+  '严禁使用、推断或提及 Context Capsule、Workbench 全量资源、当前文件、学习者画像、历史记忆、推荐系统、未勾选资源或 AI Studio 内部工作流。',
+  '如果勾选资料为空，可以只根据用户要求生成通用教学底稿；如果勾选资料存在，必须以资料内容为准，不要引入资料外的细节。',
+  '输出必须是纯 Markdown 正文，不要输出 JSON，不要输出 YAML，不要输出 schemaVersion、markdownDraft、sections、objects、timeline、rendererPlan 等内部字段。',
+  '底稿目标是“可被拆成 PPT/动画分镜的计算机课程讲解 Markdown”，不是普通摘要。',
+  '每个一级/二级小节都要短而聚焦，保留完整解释、例子、状态变化、关键条件和易错点。',
+  '允许使用 Markdown 表格、公式、代码块、伪代码代码块，以及 ```mermaid 图代码块；不要输出 HTML、CSS、视频源码或应用内部资源协议。',
+  '计算机课程内容要特别具体：数据库要有表/字段/连接条件/中间结果；算法和数据结构要有输入样例、状态序列和关键变量；组成原理要有部件、控制信号、数据通路和时序。',
+  '每个涉及过程的小节都要包含“发生了什么 -> 为什么 -> 当前状态/结果 -> 下一步”的信息，方便后续生成 timeline。',
+  '每个涉及结构的小节都要明确实体、关系、方向、层级或包含关系，方便后续生成 diagram。',
+  '最后给出 2-4 个自检问题或观察点。',
+  '不要在开头写寒暄，不要在结尾询问是否需要更多内容；直接给出 Markdown 底稿。',
+  '',
+  `用户要求：${userPrompt || '把勾选资料转换成视觉化课件讲解。'}`,
+  '',
+  '# 用户勾选资料全文',
+  sources.length
+    ? sources.map((source, index) => [
+      `## Source ${index + 1}: ${source.name}`,
+      `SourceId: ${source.id}`,
+      source.path ? `Path: ${source.path}` : '',
+      '',
+      source.content || '(empty source text)'
+    ].filter(Boolean).join('\n')).join('\n\n---\n\n')
+    : '(no selected source text)'
 ].join('\n');
 
 export const visualExplainerStoryboardPrompt = [
@@ -1503,6 +2243,209 @@ export const normalizeVisualExplainerRendererBlocks = (
   };
 };
 
+const selectedSourceIdsFromContext = (context: StudioGenerationContext) => {
+  const selectedResourceIds = (context.input.context as any)?.selectedResourceIds;
+  return Array.isArray(selectedResourceIds)
+    ? Array.from(new Set(selectedResourceIds.map((id) => String(id || '').trim()).filter(Boolean)))
+    : [];
+};
+
+const visualLessonModelTypeForSection = (section: VisualExplainerSection): VisualLessonModelType => {
+  const text = `${section.title} ${section.focus} ${section.sourceMarkdown || ''} ${section.bodyMarkdown || ''}`.toLowerCase();
+  if (/(join|inner join|left join|right join|数据库|关系表|表连接|字段|主键|外键)/i.test(text)) return 'table';
+  if (/(dijkstra|bfs|dfs|最短路|图算法|节点|边|邻接|graph)/i.test(text)) return 'graph';
+  if (/(lw|load word|数据通路|datapath|控制信号|寄存器堆|alu|数据存储器|指令存储器)/i.test(text)) return 'datapath';
+  if (/(数组|链表|栈|队列|堆|排序|sequence|array|stack|queue|heap)/i.test(text)) return 'sequence';
+  if (/(代码|伪代码|变量|trace|执行到|循环|递归|function|for|while)/i.test(text)) return 'code_trace';
+  if ((section.visualBlocks || []).some((block) => block.kind === 'mermaid') || section.visualMode === 'process' || section.visualMode === 'diagram') {
+    return 'flowchart';
+  }
+  return 'markdown_mermaid';
+};
+
+const visualLessonLayoutForSection = (section: VisualExplainerSection): VisualLessonSlide['layout'] => {
+  if (section.preferredRenderer === 'reveal' || section.visualMode === 'summary') return 'text_first';
+  if (section.visualMode === 'diagram' || section.visualMode === 'process' || section.visualMode === 'chart') return 'visual_first';
+  return 'text_visual';
+};
+
+export const visualLessonFromExplainer = (
+  context: StudioGenerationContext,
+  payload: Omit<VisualExplainerPayload, 'visualLesson'>
+): VisualLesson => ({
+  schemaVersion: 'visual_lesson.v1',
+  title: payload.title,
+  summary: payload.summary,
+  sourceIds: selectedSourceIdsFromContext(context),
+  slides: payload.sections.map((section) => ({
+    id: section.id,
+    title: section.title,
+    bodyMarkdown: section.bodyMarkdown || section.sourceMarkdown || '',
+    narration: section.narration,
+    layout: visualLessonLayoutForSection(section),
+    visualModel: {
+      type: visualLessonModelTypeForSection(section),
+      title: section.title,
+      objects: section.objects,
+      blocks: section.visualBlocks || [],
+      markdown: section.sourceMarkdown || section.bodyMarkdown || ''
+    },
+    timeline: section.timeline.map((step) => ({
+      stepId: step.id,
+      action: step.action,
+      targetIds: step.targetIds,
+      screenText: step.screenText,
+      narration: step.narration,
+      statePatch: step.statePatch || {
+        activeTargetIds: step.targetIds,
+        action: step.action
+      },
+      durationMs: step.durationMs || 900
+    })),
+    checkQuestion: section.checkQuestion
+  }))
+});
+
+const visualLessonLayout = (value: unknown): VisualLessonSlide['layout'] =>
+  value === 'visual_first' || value === 'text_first' || value === 'full_text' || value === 'text_visual'
+    ? value
+    : 'text_visual';
+
+const visualLessonModelType = (value: unknown, fallback: VisualLessonModelType = 'markdown_mermaid'): VisualLessonModelType =>
+  VISUAL_LESSON_MODEL_TYPES.includes(String(value) as VisualLessonModelType)
+    ? String(value) as VisualLessonModelType
+    : fallback;
+
+const normalizeVisualLessonObjects = (rawObjects: unknown, slideId: string, slideTitle: string): VisualExplainerObject[] => {
+  const objects = Array.isArray(rawObjects)
+    ? rawObjects.slice(0, 40).map((object: any, index): VisualExplainerObject => ({
+      id: clip(object?.id || `${slideId}-object-${index + 1}`, 80),
+      kind: VISUAL_OBJECT_KINDS.includes(String(object?.kind) as VisualExplainerObjectKind) ? object.kind : 'card',
+      label: clip(object?.label || object?.title || `Object ${index + 1}`, 100),
+      detail: object?.detail || object?.description ? clip(object.detail || object.description, 500) : undefined,
+      role: ['main', 'support', 'example', 'warning', 'summary'].includes(String(object?.role)) ? object.role : 'support',
+      fromId: object?.fromId ? clip(object.fromId, 80) : undefined,
+      toId: object?.toId ? clip(object.toId, 80) : undefined
+    }))
+    : [];
+  return objects.length
+    ? objects
+    : [{
+      id: `${slideId}-main`,
+      kind: 'title',
+      label: slideTitle,
+      role: 'main'
+    }];
+};
+
+const normalizeVisualLessonTimeline = (
+  rawTimeline: unknown,
+  slideId: string,
+  objects: VisualExplainerObject[],
+  narration: string
+): VisualLessonTimelineStep[] => {
+  const objectIds = new Set(objects.map((object) => object.id));
+  const fallbackTargets = objects.slice(0, 1).map((object) => object.id);
+  const sourceSteps = Array.isArray(rawTimeline) && rawTimeline.length
+    ? rawTimeline
+    : [
+      { action: 'appear', targetIds: fallbackTargets, screenText: '观察这一页的核心对象', narration },
+      { action: 'focus', targetIds: fallbackTargets, screenText: '聚焦关键变化', narration }
+    ];
+  return sourceSteps.slice(0, 12).map((step: any, index): VisualLessonTimelineStep => {
+    const rawTargets = Array.isArray(step?.targetIds) ? step.targetIds : Array.isArray(step?.targets) ? step.targets : [];
+    const targetIds = rawTargets
+      .map((id: unknown) => clip(id, 80))
+      .filter((id: string) => objectIds.has(id));
+    const activeTargetIds = targetIds.length ? targetIds : fallbackTargets;
+    const action = VISUAL_ACTIONS.includes(String(step?.action) as VisualExplainerAction) ? String(step.action) : 'focus';
+    const rawStatePatch = step?.statePatch && typeof step.statePatch === 'object' && !Array.isArray(step.statePatch)
+      ? step.statePatch as Record<string, unknown>
+      : {};
+    return {
+      stepId: clip(step?.stepId || step?.id || `${slideId}-step-${index + 1}`, 80),
+      action,
+      targetIds: activeTargetIds,
+      screenText: step?.screenText ? clip(step.screenText, 120) : undefined,
+      narration: clip(step?.narration || narration || step?.screenText || '', 700),
+      statePatch: Object.keys(rawStatePatch).length
+        ? rawStatePatch
+        : { activeTargetIds, action },
+      durationMs: Number.isFinite(Number(step?.durationMs)) ? Math.max(400, Math.min(6000, Number(step.durationMs))) : 1000
+    };
+  });
+};
+
+export const normalizeVisualLessonPayload = (
+  context: StudioGenerationContext,
+  value: unknown,
+  userPrompt = '',
+  selectedSourceIds: string[] = []
+): VisualLesson => {
+  const raw = value && typeof value === 'object' ? value as any : {};
+  if (raw.schemaVersion !== 'visual_lesson.v1' || !Array.isArray(raw.slides) || raw.slides.length === 0) {
+    const fallbackTitle = clip(userPrompt || context.input.prompt || context.template.title || 'Visual Lesson', 100);
+    const fallback = buildFallbackVisualExplainer(
+      context,
+      [`# ${fallbackTitle}`, '', `请围绕「${fallbackTitle}」生成视觉化讲解。`].join('\n')
+    );
+    return {
+      ...visualLessonFromExplainer(context, fallback),
+      sourceIds: selectedSourceIds
+    };
+  }
+
+  const allowedSourceIds = new Set(selectedSourceIds);
+  const sourceIds = Array.isArray(raw.sourceIds)
+    ? raw.sourceIds.map((id: unknown) => String(id || '').trim()).filter((id: string) => allowedSourceIds.has(id))
+    : [];
+  const promptTitle = clip(context.template.title || userPrompt || context.input.prompt || 'Visual Lesson', 100);
+  const title = clip(raw.title || promptTitle, 100);
+  const summary = clip(raw.summary || `把「${promptTitle}」转换成可播放的视觉讲解。`, 500);
+  const slides = raw.slides.slice(0, 8).map((slide: any, index: number): VisualLessonSlide => {
+    const slideId = clip(slide?.id || `slide-${index + 1}`, 80);
+    const slideTitle = clip(slide?.title || `Slide ${index + 1}`, 100);
+    const bodyMarkdown = clipMarkdown(slide?.bodyMarkdown || slide?.markdown || slide?.narration || slideTitle, 6000);
+    const narration = clip(slide?.narration || slide?.speakerNotes || bodyMarkdown, 1000);
+    const rawVisualModel = slide?.visualModel && typeof slide.visualModel === 'object' ? slide.visualModel : {};
+    const objects = normalizeVisualLessonObjects(rawVisualModel.objects || slide?.objects, slideId, slideTitle);
+    const fallbackBlock: VisualExplainerBlock = {
+      id: `${slideId}-markdown`,
+      kind: 'markdown',
+      markdown: bodyMarkdown
+    };
+    const blocks = normalizeVisualBlocks(rawVisualModel.blocks || slide?.blocks, [fallbackBlock]);
+    const timeline = normalizeVisualLessonTimeline(slide?.timeline, slideId, objects, narration);
+    return {
+      id: slideId,
+      title: slideTitle,
+      bodyMarkdown,
+      narration,
+      layout: visualLessonLayout(slide?.layout),
+      visualModel: {
+        type: visualLessonModelType(rawVisualModel.type),
+        title: clip(rawVisualModel.title || slideTitle, 100),
+        objects,
+        blocks,
+        markdown: clipMarkdown(rawVisualModel.markdown || bodyMarkdown, 6000),
+        data: rawVisualModel.data && typeof rawVisualModel.data === 'object' && !Array.isArray(rawVisualModel.data)
+          ? rawVisualModel.data as Record<string, unknown>
+          : undefined
+      },
+      timeline,
+      checkQuestion: slide?.checkQuestion ? clip(slide.checkQuestion, 240) : undefined
+    };
+  });
+
+  return {
+    schemaVersion: 'visual_lesson.v1',
+    title,
+    summary,
+    sourceIds,
+    slides
+  };
+};
+
 export const buildVisualExplainerFromStages = (
   context: StudioGenerationContext,
   markdownDraft: string,
@@ -1547,7 +2490,11 @@ export const buildVisualExplainerFromStages = (
       exportTargets: ['web', 'video', 'pptx']
     }
   };
-  return normalizeVisualExplainerPayload(context, rawPayload, markdownDraft);
+  const normalized = normalizeVisualExplainerPayload(context, rawPayload, markdownDraft);
+  return {
+    ...normalized,
+    visualLesson: visualLessonFromExplainer(context, normalized)
+  };
 };
 
 export const validateVisualExplainerPayload = (payload: VisualExplainerPayload): VisualExplainerValidationReport => {
@@ -1628,7 +2575,10 @@ export const normalizeVisualExplainerPayload = (
           targetIds: targets.length ? targets : objects.slice(0, 1).map((object) => object.id),
           narration: clip(step.narration || section.narration || section.focus || '', 500),
           screenText: step.screenText ? clip(step.screenText, 120) : undefined,
-          durationMs: Number.isFinite(Number(step.durationMs)) ? Math.max(300, Math.min(4000, Number(step.durationMs))) : 900
+          durationMs: Number.isFinite(Number(step.durationMs)) ? Math.max(300, Math.min(4000, Number(step.durationMs))) : 900,
+          statePatch: step.statePatch && typeof step.statePatch === 'object'
+            ? step.statePatch as Record<string, unknown>
+            : undefined
         };
       });
       const visualMode: VisualExplainerSection['visualMode'] = VISUAL_MODES.includes(String(section.visualMode) as VisualExplainerSection['visualMode']) ? section.visualMode : 'slide';
@@ -1672,6 +2622,9 @@ export const normalizeVisualExplainerPayload = (
       primary: 'section_player',
       libraries: Array.isArray(raw.rendererPlan?.libraries) ? raw.rendererPlan.libraries.slice(0, 6).map((item: unknown) => clip(item, 60)) : fallback.rendererPlan.libraries,
       exportTargets: ['web', 'video', 'pptx']
-    }
+    },
+    visualLesson: raw.visualLesson?.schemaVersion === 'visual_lesson.v1' && Array.isArray(raw.visualLesson?.slides)
+      ? raw.visualLesson as VisualLesson
+      : undefined
   };
 };

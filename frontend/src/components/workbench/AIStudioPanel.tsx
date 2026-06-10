@@ -19,6 +19,7 @@ import {
   GraduationCap,
   Loader2,
   Maximize2,
+  Minimize2,
   MoreHorizontal,
   Network,
   Orbit,
@@ -34,7 +35,6 @@ import {
   ZoomOut
 } from 'lucide-react';
 import { ComponentType, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { Deck, Fragment as RevealFragment, Slide } from '@revealjs/react';
 import Editor from '@monaco-editor/react';
 import { Graph } from '@antv/x6';
 import ELK, { ElkNode } from 'elkjs/lib/elk.bundled.js';
@@ -100,7 +100,10 @@ type StudioModalState = {
   selectedResourceIds: string[];
 };
 
-type StudioSelectableResource = ResourceReference;
+type StudioSelectableResource = ResourceReference & {
+  createdAt?: string;
+  updatedAt?: string;
+};
 
 interface StudioGenerationProgressState {
   templateId?: string | null;
@@ -448,7 +451,67 @@ interface VisualExplainerTimelineStep {
   narration: string;
   screenText?: string;
   durationMs?: number;
+  statePatch?: Record<string, unknown>;
 }
+
+type VisualLessonModelType =
+  | 'table'
+  | 'graph'
+  | 'sequence'
+  | 'code_trace'
+  | 'datapath'
+  | 'flowchart'
+  | 'markdown_mermaid';
+
+interface VisualLessonTimelineStep {
+  stepId: string;
+  action: string;
+  targetIds: string[];
+  screenText?: string;
+  narration: string;
+  statePatch?: Record<string, unknown>;
+  durationMs?: number;
+}
+
+interface VisualLessonVisualModel {
+  type: VisualLessonModelType;
+  title: string;
+  objects?: VisualExplainerObject[];
+  blocks?: VisualExplainerBlock[];
+  markdown?: string;
+  data?: Record<string, unknown>;
+}
+
+interface VisualLessonSlide {
+  id: string;
+  title: string;
+  bodyMarkdown: string;
+  narration: string;
+  layout?: 'text_visual' | 'visual_first' | 'text_first' | 'full_text';
+  visualModel?: VisualLessonVisualModel;
+  timeline: VisualLessonTimelineStep[];
+  checkQuestion?: string;
+}
+
+interface VisualLessonPayload {
+  schemaVersion: 'visual_lesson.v1';
+  title: string;
+  summary: string;
+  sourceIds?: string[];
+  slides: VisualLessonSlide[];
+}
+
+interface VisualCodeLessonPayload {
+  schemaVersion: 'visual_code_lesson.v1';
+  title: string;
+  summary: string;
+  sourceIds?: string[];
+  contentMarkdown: string;
+}
+
+type VisualCodePart =
+  | { type: 'text'; content: string }
+  | { type: 'react' | 'html'; code: string };
 
 interface VisualExplainerSection {
   id: string;
@@ -473,6 +536,7 @@ interface VisualExplainerPayload {
   title: string;
   summary: string;
   sections: VisualExplainerSection[];
+  visualLesson?: VisualLessonPayload;
   rendererPlan?: {
     primary?: string;
     libraries?: string[];
@@ -757,17 +821,17 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     id: 'visual_explainer',
     version: '1.0.0',
     goal: 'visualize',
-    title: 'Visual Explainer',
-    shortTitle: 'Visual Explainer',
-    description: '先生成完整 Markdown 答案，再切成 section 分镜，并播放每个分镜内部的轻量动画。',
+    title: 'Animated Explainer',
+    shortTitle: 'Animated Explainer',
+    description: '生成可以操作和逐步观察的动画讲解页面。',
     generator: 'multimodal',
     renderer: 'visual_explainer',
     format: 'md',
     filename: 'visualize-visual-explainer.md',
     outputLabel: '视觉讲解动画',
-    recommendedUse: '适合把日常问题、知识解释、机制流程或推导回答升级为 PPT/动画式讲解。',
+    recommendedUse: '适合把知识点、算法、数据库、组成原理或系统流程转成可交互动画讲解。',
     legacyResourceType: 'visual_explainer',
-    tags: ['visual-explainer', 'storyboard', 'animation']
+    tags: ['visual-explainer', 'react-viz', 'animation']
   },
   {
     id: 'video_script',
@@ -919,11 +983,104 @@ const templateResourceType = (template?: AiStudioTemplate | null): AiStudioResou
   return 'report';
 };
 
+const visualExplainerDefaultPrompt = '生成 AVL 树的动画讲解：支持插入、删除、查询，并逐步展示平衡因子和旋转过程。';
+
+const fallbackVisualExplainerPromptExamples = [
+  '生成 AVL 树的动画讲解：支持插入、删除、查询，并逐步展示平衡因子和 LL/LR/RR/RL 旋转。',
+  '用动画讲解二分查找：数组如何缩小范围，left/right/mid 怎么变化。',
+  '用动画讲解 SQL LEFT JOIN：左表、右表如何按条件匹配，未匹配行为什么保留 NULL。'
+];
+
+const cleanResourceTitle = (resource: StudioSelectableResource) => {
+  const extension = (resource.extension || resource.name.split('.').pop() || '').toLowerCase();
+  const withoutExtension = extension && resource.name.toLowerCase().endsWith(`.${extension}`)
+    ? resource.name.slice(0, -(extension.length + 1))
+    : resource.name;
+  return withoutExtension.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || resource.name;
+};
+
+const clippedTitle = (value: string, maxLength = 36) => {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 1)}…`;
+};
+
+const resourceVisualAngle = (resource: StudioSelectableResource) => {
+  const extension = (resource.extension || resource.name.split('.').pop() || '').toLowerCase();
+  const mimeType = String(resource.mimeType || '').toLowerCase();
+  const fileCategory = String(resource.fileCategory || '').toLowerCase();
+  const resourceType = String(resource.resourceType || resource.type || '').toLowerCase();
+
+  if (resource.origin === 'web') return '网页资料的核心观点、证据链和概念关系';
+  if (['ts', 'tsx', 'js', 'jsx', 'py', 'java', 'c', 'cpp', 'go', 'rs'].includes(extension)) {
+    return '代码执行流程、关键状态变化和输入输出关系';
+  }
+  if (['csv', 'xlsx', 'xls'].includes(extension)) return '表格数据里的字段关系、变化趋势和计算过程';
+  if (['ppt', 'pptx'].includes(extension) || mimeType.includes('presentation')) return '课件里的章节结构、重点概念和推导过程';
+  if (['pdf', 'doc', 'docx'].includes(extension) || fileCategory.includes('document') || mimeType.includes('pdf')) {
+    return '文档里的核心概念、步骤推导和相互关系';
+  }
+  if (resourceType === 'note' || fileCategory.includes('note') || ['md', 'markdown', 'txt'].includes(extension)) {
+    return '笔记里的知识点结构、关键步骤和容易混淆的地方';
+  }
+  return '资料里的核心概念、过程变化和关键关系';
+};
+
+const resourceLabel = (resource: StudioSelectableResource) => `《${clippedTitle(cleanResourceTitle(resource))}》`;
+
+const resourceTimeValue = (resource: StudioSelectableResource) => {
+  const value = resource.updatedAt || resource.createdAt || '';
+  const time = value ? Date.parse(value) : 0;
+  return Number.isFinite(time) ? time : 0;
+};
+
+const defaultVisualResourceIds = (resources: StudioSelectableResource[]) =>
+  resources
+    .slice()
+    .sort((left, right) => resourceTimeValue(right) - resourceTimeValue(left))
+    .slice(0, 3)
+    .map((resource) => resource.id);
+
+const effectiveVisualResourceIds = (
+  selectedResourceIds: string[],
+  _resources: StudioSelectableResource[],
+  renderer?: string | null
+) => {
+  if (renderer !== 'visual_explainer') return selectedResourceIds;
+  return selectedResourceIds;
+};
+
+const buildVisualExplainerPromptExamples = (
+  resources: StudioSelectableResource[],
+  selectedResourceIds: string[]
+) => {
+  const selected = selectedResourceIds.length
+    ? resources.filter((resource) => selectedResourceIds.includes(resource.id))
+    : [];
+  const candidates = selected.length ? selected : resources.slice(0, 3);
+
+  if (!candidates.length) return fallbackVisualExplainerPromptExamples;
+
+  const examples: string[] = [];
+  if (candidates.length > 1) {
+    examples.push(
+      `综合 ${candidates.slice(0, 3).map(resourceLabel).join('、')} 生成一个动画讲解：提炼共同主题，展示概念之间的关系和学习路径。`
+    );
+  }
+
+  candidates.slice(0, 3).forEach((resource) => {
+    examples.push(
+      `根据 ${resourceLabel(resource)} 生成一个动画讲解：提炼${resourceVisualAngle(resource)}，做成可以操作和逐步观察的演示。`
+    );
+  });
+
+  return examples.slice(0, 3);
+};
+
 const defaultTemplateModalState = (template: AiStudioTemplate): StudioModalState => ({
   ...defaultModalState(templateResourceType(template)),
   templateId: template.id,
   goal: template.goal,
-  topic: ''
+  topic: template.renderer === 'visual_explainer' ? visualExplainerDefaultPrompt : ''
 });
 
 const defaultModalState = (resourceType: AiStudioResourceType): StudioModalState => ({
@@ -1760,7 +1917,9 @@ const toStudioSelectableResource = (resource: FileSystemObject | ResourceReferen
   extension: resource.extension,
   mimeType: resource.mimeType,
   fileCategory: resource.fileCategory,
-  isBinary: resource.isBinary
+  isBinary: resource.isBinary,
+  createdAt: 'createdAt' in resource ? resource.createdAt : undefined,
+  updatedAt: 'updatedAt' in resource ? resource.updatedAt : undefined
 });
 
 const studioResourceSection = (resource: FileSystemObject | ResourceReference): StudioResourceSection => {
@@ -1887,7 +2046,7 @@ function StudioSourcePicker({
                 <button
                   type="button"
                   onClick={() => onChange(selectedIds.filter((id) => id !== resource.id))}
-                  className="ml-1 hidden rounded-full text-gray-500 transition hover:text-black group-hover:block"
+                  className="ml-1 inline-flex rounded-full text-gray-500 transition hover:text-black"
                   aria-label="Remove source"
                 >
                   <X className="size-4" />
@@ -1910,7 +2069,7 @@ function StudioSourcePicker({
           </button>
 
           {open ? (
-            <div className="absolute left-0 top-10 z-[10000] text-black dark:text-white rounded-2xl shadow-lg border border-gray-200 dark:border-gray-800 flex flex-col bg-white dark:bg-gray-850 w-70 p-1.5">
+            <div className="absolute left-0 top-10 z-[10000] flex w-70 flex-col rounded-2xl border border-gray-200 bg-white p-1.5 text-[#202124] shadow-lg">
               <div className=" flex w-full space-x-2 px-2 pb-0.5">
                 <div className="flex flex-1">
                   <div className=" self-center mr-2">
@@ -1928,12 +2087,12 @@ function StudioSourcePicker({
 
               <div className="max-h-56 overflow-y-scroll gap-0.5 flex flex-col">
                 {loadingResources ? (
-                  <div className="flex items-center justify-center gap-2 pt-4 pb-6 text-xs text-gray-500 dark:text-gray-400">
+                  <div className="flex items-center justify-center gap-2 pt-4 pb-6 text-xs text-gray-500">
                     <Loader2 className="size-3.5 animate-spin" />
                     Loading sources...
                   </div>
                 ) : items.length === 0 ? (
-                  <div className="text-center text-xs text-gray-500 dark:text-gray-400 pt-4 pb-6">
+                  <div className="text-center text-xs text-gray-500 pt-4 pb-6">
                     {emptyLabel}
                   </div>
                 ) : (
@@ -1951,7 +2110,7 @@ function StudioSourcePicker({
                           </div>
                         ) : null}
 
-                        <div className=" px-2.5 py-1 rounded-xl w-full text-left flex justify-between items-center text-sm hover:bg-gray-50 hover:dark:bg-gray-800 hover:dark:text-gray-100 selected-command-option-button">
+                        <div className=" px-2.5 py-1 rounded-xl w-full text-left flex justify-between items-center text-sm text-[#202124] hover:bg-gray-50 selected-command-option-button">
                           <button
                             className="w-full flex-1"
                             type="button"
@@ -1964,14 +2123,14 @@ function StudioSourcePicker({
                               setOpen(false);
                             }}
                           >
-                            <div className="  text-black dark:text-gray-100 flex items-center gap-1 shrink-0">
+                            <div className="flex shrink-0 items-center gap-1 text-[#202124]">
                               <ResourceIcon className="size-4" />
                               <div className="line-clamp-1 flex-1 text-sm text-left">
                                 {item.resource.name}
                               </div>
                             </div>
                           </button>
-                          {selected ? <Check className="size-4 text-black dark:text-gray-100" /> : null}
+                          {selected ? <Check className="size-4 text-[#202124]" /> : null}
                         </div>
                       </div>
                     );
@@ -2393,10 +2552,48 @@ function StudioGenerationForm({
 }) {
   const resourceNotes = isResourceNotesTemplate(template.id);
   const resourceCompare = isResourceCompareTemplate(template.id);
-  const requirementLabel = resourceNotes ? 'Prompt' : resourceCompare ? 'Prompt' : 'Prompt';
+  const visualExplainer = template.renderer === 'visual_explainer';
+  const requirementLabel = visualExplainer ? '讲解任务' : resourceNotes ? 'Prompt' : resourceCompare ? 'Prompt' : 'Prompt';
   const canGenerate = resourceNotes || resourceCompare ? state.selectedResourceIds.length > 0 || state.topic.trim().length > 0 : state.topic.trim().length > 0;
-  const primaryLabel = resourceNotes ? 'Convert to Notes' : resourceCompare ? 'Compare Resources' : 'Generate';
+  const primaryLabel = visualExplainer ? '生成动画讲解' : resourceNotes ? 'Convert to Notes' : resourceCompare ? 'Compare Resources' : 'Generate';
   const selectOptions = templateOptions?.length ? templateOptions : [template];
+  const effectiveSelectedResourceIds = visualExplainer
+    ? effectiveVisualResourceIds(state.selectedResourceIds, resources, template.renderer)
+    : state.selectedResourceIds;
+  const visualPromptExamples = useMemo(
+    () => visualExplainer ? buildVisualExplainerPromptExamples(resources, effectiveSelectedResourceIds) : [],
+    [resources, effectiveSelectedResourceIds, visualExplainer]
+  );
+  const visualDefaultPrompt = visualPromptExamples[0] || visualExplainerDefaultPrompt;
+  const promptPlaceholder = visualExplainer
+    ? visualDefaultPrompt
+    : 'Write your model prompt content here';
+  const [sourceSelectionTouched, setSourceSelectionTouched] = useState(false);
+  const [visualSuggestionThinking, setVisualSuggestionThinking] = useState(false);
+  const handleResourceSelectionChange = (selectedResourceIds: string[]) => {
+    setSourceSelectionTouched(true);
+    setState({ selectedResourceIds });
+  };
+
+  useEffect(() => {
+    if (!visualExplainer || loadingResources || sourceSelectionTouched || state.selectedResourceIds.length || resources.length !== 1) return;
+    setState({ selectedResourceIds: [resources[0].id] });
+  }, [loadingResources, resources, setState, sourceSelectionTouched, state.selectedResourceIds.length, visualExplainer]);
+
+  useEffect(() => {
+    if (!visualExplainer || loadingResources) {
+      setVisualSuggestionThinking(false);
+      return;
+    }
+    setVisualSuggestionThinking(true);
+    const timer = window.setTimeout(() => setVisualSuggestionThinking(false), 1100);
+    return () => window.clearTimeout(timer);
+  }, [
+    visualExplainer,
+    loadingResources,
+    resources.map((resource) => resource.id).join('|'),
+    effectiveSelectedResourceIds.join('|')
+  ]);
 
   return (
     <form
@@ -2418,26 +2615,73 @@ function StudioGenerationForm({
       />
 
       <div className={compact ? 'my-2.5' : 'my-2.5'}>
-        <div className="mb-2 text-xs text-gray-500">{requirementLabel}</div>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div className="text-xs text-gray-500">{requirementLabel}</div>
+          {visualExplainer ? (
+            <button
+              type="button"
+              onClick={() => setState({ topic: visualDefaultPrompt })}
+              className="text-xs font-semibold text-[#2563eb] hover:text-[#174ea6]"
+            >
+              恢复默认
+            </button>
+          ) : null}
+        </div>
         <textarea
           value={state.topic}
           onChange={(event) => setState({ topic: event.target.value })}
           rows={compact ? 6 : 6}
-          className=" text-sm w-full bg-transparent outline-hidden resize-none"
-          placeholder="Write your model prompt content here"
+          className="w-full resize-none rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-sm leading-6 text-[#202124] outline-none transition focus:border-[#2563eb] focus:ring-2 focus:ring-[#dbeafe]"
+          placeholder={promptPlaceholder}
         />
+        {visualExplainer ? (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {visualSuggestionThinking ? (
+              <div className="flex w-full items-center gap-3 rounded-xl border border-[#dbeafe] bg-[#f8fbff] px-3 py-2 text-xs text-[#2563eb]">
+                <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#dbeafe]">
+                  <Sparkles className="h-4 w-4 animate-pulse" />
+                  <span className="absolute inset-0 rounded-full border border-[#93c5fd] animate-ping" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold">AI 正在阅读资料并提炼可视化任务</div>
+                  <div className="mt-0.5 text-[#64748b]">分析文件主题、关键概念和适合做成动画的步骤</div>
+                </div>
+                <span className="inline-flex items-center gap-0.5">
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb] [animation-delay:120ms]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb] [animation-delay:240ms]" />
+                </span>
+              </div>
+            ) : (
+              visualPromptExamples.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  onClick={() => setState({ topic: example })}
+                  className="rounded-full border border-[#dfe3ea] bg-white px-3 py-1.5 text-xs font-medium text-[#343a46] transition hover:border-[#2563eb] hover:bg-[#f8fbff] hover:text-[#174ea6]"
+                >
+                  {example}
+                </button>
+              ))
+            )}
+          </div>
+        ) : null}
       </div>
 
       <div className={compact ? 'my-2' : 'my-2'}>
         <div className="flex w-full justify-between">
-          <div className=" mb-2 text-xs text-gray-500">Knowledge</div>
+          <div className=" mb-2 text-xs text-gray-500">{visualExplainer ? '参考资料（可选）' : 'Knowledge'}</div>
           <div className=" mb-2 text-xs text-gray-500">
-            {state.selectedResourceIds.length ? `${state.selectedResourceIds.length} selected` : ''}
+            {state.selectedResourceIds.length
+              ? `${state.selectedResourceIds.length} selected`
+              : visualExplainer
+                ? '未选择资料时按任务生成'
+                : ''}
           </div>
         </div>
         <StudioSourcePicker
           selectedIds={state.selectedResourceIds}
-          onChange={(selectedResourceIds) => setState({ selectedResourceIds })}
+          onChange={handleResourceSelectionChange}
           resources={resources}
           loadingResources={loadingResources}
           emptyLabel="No knowledge found"
@@ -2576,22 +2820,19 @@ function StudioHome({
   onOpenResult: (id: string) => void;
   onDeleteResult: (result: StudioResult) => void;
 }) {
-  const [openResultMenuId, setOpenResultMenuId] = useState<string | null>(null);
   const effectiveTemplates = templates.length ? templates : visibleStudioTemplates(coreStudioTemplates);
   const goalCatalog = mergeGoalCatalog(goals);
   const selectedGoalInfo = selectedGoal ? goalCatalog.find((goal) => goal.id === selectedGoal) || null : null;
   const selectedGoalTemplates = selectedGoal ? effectiveTemplates.filter((template) => template.goal === selectedGoal) : [];
+  const preferredSelectedGoalTemplate = selectedGoal === 'visualize'
+    ? selectedGoalTemplates.find((template) => template.id === 'visual_explainer') || selectedGoalTemplates[0] || null
+    : selectedGoalTemplates[0] || null;
   const hasSelectedGoalTemplates = selectedGoalTemplates.length > 0;
   const [inlineModal, setInlineModal] = useState<StudioModalState | null>(null);
   const activeInlineTemplate =
     inlineModal?.templateId
       ? selectedGoalTemplates.find((template) => template.id === inlineModal.templateId) || selectedGoalTemplates[0] || null
-      : selectedGoalTemplates[0] || null;
-  const localArtifactIds = new Set(results.map((result) => result.artifact?.id).filter(Boolean));
-  const recentLocalResults = results.slice(0, 5);
-  const recentArtifacts = artifacts
-    .filter((artifact) => !localArtifactIds.has(artifact.id))
-    .slice(0, Math.max(0, 5 - recentLocalResults.length));
+      : preferredSelectedGoalTemplate;
   const selectedQuestionAmount =
     practiceQuestionAmountOptions.find((option) => option.id === practiceDraft.questionAmount) || practiceQuestionAmountOptions[1];
   const selectedDifficulty =
@@ -2602,7 +2843,7 @@ function StudioHome({
       setInlineModal(null);
       return;
     }
-    const firstTemplate = selectedGoalTemplates[0];
+    const firstTemplate = preferredSelectedGoalTemplate;
     if (!firstTemplate) {
       setInlineModal(null);
       return;
@@ -2611,21 +2852,27 @@ function StudioHome({
       if (current?.templateId && selectedGoalTemplates.some((template) => template.id === current.templateId)) return current;
       return defaultTemplateModalState(firstTemplate);
     });
-  }, [selectedGoal, selectedGoalTemplates.map((template) => template.id).join('|')]);
+  }, [selectedGoal, selectedGoalTemplates.map((template) => template.id).join('|'), preferredSelectedGoalTemplate?.id]);
 
   return (
     <div className="min-h-0 flex-1 overflow-auto bg-white p-4">
       {selectedGoal === 'practice' ? (
         <>
-          <section className="px-1">
-            <button
-              onClick={() => setSelectedGoal(null)}
-              className="mb-4 inline-flex items-center gap-1 text-sm font-semibold text-[#5f6673] hover:text-[#202124]"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              AI Studio
-            </button>
-            <h3 className="text-xl font-semibold tracking-normal text-[#202124]">Generate practice</h3>
+          <section className="sticky top-0 z-20 -mx-4 border-b border-[#eef0f4] bg-white px-5 pb-3 pt-1">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">AI Studio</div>
+                <h3 className="mt-1 truncate text-xl font-semibold tracking-normal text-[#202124]">Generate practice</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedGoal(null)}
+                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc]"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                返回
+              </button>
+            </div>
           </section>
 
           <section className="mt-5 px-1">
@@ -2755,15 +3002,21 @@ function StudioHome({
         </>
       ) : (
         <>
-          <section className="px-1">
-            <button
-              onClick={() => setSelectedGoal(null)}
-              className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-[#5f6673] hover:text-[#202124]"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              AI Studio
-            </button>
-            <h3 className="text-xl font-semibold tracking-normal text-[#202124]">{selectedGoalInfo?.en}</h3>
+          <section className="sticky top-0 z-20 -mx-4 border-b border-[#eef0f4] bg-white px-5 pb-3 pt-1">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">AI Studio</div>
+                <h3 className="mt-1 truncate text-xl font-semibold tracking-normal text-[#202124]">{selectedGoalInfo?.en}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedGoal(null)}
+                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc]"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                返回
+              </button>
+            </div>
           </section>
 
           {hasSelectedGoalTemplates ? (
@@ -2796,12 +3049,12 @@ function StudioHome({
         </>
       )}
 
-      {!selectedGoal && (results.length > 0 || recentArtifacts.length > 0) && (
+      {!selectedGoal && results.length > 0 && (
         <section className="mt-5 flex flex-col gap-1 px-1">
           <div className="mb-1.5 flex items-center justify-between">
             <div className="flex items-center gap-2 px-0.5 text-xl font-medium text-[#202124]">
               <div>Recent generations</div>
-              <div className="text-lg font-medium text-gray-500">{results.length + recentArtifacts.length}</div>
+              <div className="text-lg font-medium text-gray-500">{results.length}</div>
             </div>
           </div>
 
@@ -2813,92 +3066,54 @@ function StudioHome({
               return (
                 <div
                   key={result.id}
-                  onClick={() => onOpenResult(result.id)}
-                  className="relative flex min-h-[70px] w-full cursor-pointer items-center gap-4 rounded-2xl px-3 py-2.5 text-left transition hover:bg-gray-50"
+                  className="flex min-h-[70px] w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-left transition hover:bg-gray-50"
                 >
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
-                    <Icon className="size-4" />
-                  </span>
-                  <span className="min-w-0 flex-1 self-center">
-                    <span className="flex items-center justify-between gap-2 -my-1 h-8">
-                      <span className="min-w-0">
-                        <span className="rounded-lg bg-green-500/20 px-[5px] text-xs font-medium uppercase text-green-700">
-                          {result.goal || result.resourceType}
+                  <button
+                    type="button"
+                    onClick={() => onOpenResult(result.id)}
+                    className="flex min-w-0 flex-1 items-center gap-4 rounded-2xl px-0 py-0 text-left"
+                    title="Open generation"
+                  >
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
+                      <Icon className="size-4" />
+                    </span>
+                    <span className="min-w-0 flex-1 self-center">
+                      <span className="flex items-center justify-between gap-2 -my-1 h-8">
+                        <span className="min-w-0">
+                          <span className="rounded-lg bg-green-500/20 px-[5px] text-xs font-medium uppercase text-green-700">
+                            {result.goal || result.resourceType}
+                          </span>
+                        </span>
+                      </span>
+                      <span className="flex min-h-6 items-center gap-3 px-1.5 pr-0">
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-[#202124]">
+                          {resultDisplayTitle(result)}
+                        </span>
+                        <span className="hidden shrink-0 truncate text-xs text-gray-500 sm:block">
+                          {resultMeta || result.name}
                         </span>
                       </span>
                     </span>
-                    <span className="flex min-h-6 items-center gap-3 px-1.5 pr-0">
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-[#202124]">
-                        {resultDisplayTitle(result)}
-                      </span>
-                      <span className="hidden shrink-0 truncate text-xs text-gray-500 sm:block">
-                        {resultMeta || result.name}
-                      </span>
-                    </span>
-                  </span>
+                  </button>
                   <button
                     type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setOpenResultMenuId((current) => (current === result.id ? null : result.id));
-                    }}
-                    className="flex w-fit shrink-0 items-center self-center rounded-xl p-1.5 text-sm text-gray-700 transition hover:bg-black/5"
-                    title="More actions"
+                    onClick={() => onOpenResult(result.id)}
+                    className="flex w-fit shrink-0 items-center self-center rounded-xl px-2 py-1.5 text-xs font-semibold text-[#2563eb] transition hover:bg-[#eff6ff]"
+                    title="Open generation"
                   >
-                    <OWEllipsisHorizontalIcon className="size-5" />
+                    Open
                   </button>
-                  {openResultMenuId === result.id && (
-                    <div
-                      onClick={(event) => event.stopPropagation()}
-                      className="absolute right-10 top-10 z-20 min-w-[132px] overflow-hidden rounded-2xl border border-gray-100 bg-white px-1 py-1 text-sm text-gray-900 shadow-[0_20px_50px_rgba(32,33,36,0.14)]"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOpenResultMenuId(null);
-                          onDeleteResult(result);
-                        }}
-                        className="block w-full rounded-xl px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => onDeleteResult(result)}
+                    className="flex w-fit shrink-0 items-center self-center rounded-xl px-2 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                    title="Delete generation"
+                  >
+                    Delete
+                  </button>
                 </div>
               );
             })}
-            {recentArtifacts.map((artifact) => (
-              <div
-                key={artifact.id}
-                className="flex min-h-[70px] items-center gap-4 rounded-2xl px-3 py-2.5 text-left transition hover:bg-gray-50"
-              >
-                <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
-                  <OWDocumentPageIcon className="size-4" />
-                </div>
-                <div className="min-w-0 flex-1 self-center">
-                  <div className="flex items-center justify-between gap-2 -my-1 h-8">
-                    <div>
-                      <span className="rounded-lg bg-green-500/20 px-[5px] text-xs font-medium uppercase text-green-700">
-                        Artifact
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex min-h-6 items-center gap-3 px-1.5 pr-0">
-                    <div className="min-w-0 flex-1 truncate text-sm font-medium text-[#202124]">{artifact.title}</div>
-                    <div className="hidden shrink-0 truncate text-xs text-gray-500 sm:block">
-                      {artifact.summary || `${artifact.templateId} · ${artifact.templateVersion}`}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="flex w-fit shrink-0 items-center self-center rounded-xl p-1.5 text-sm text-gray-700 transition hover:bg-black/5"
-                  title="More actions"
-                >
-                  <OWEllipsisHorizontalIcon className="size-5" />
-                </button>
-              </div>
-            ))}
             </div>
           </div>
         </section>
@@ -4264,6 +4479,163 @@ const extractVisualExplainerPayload = (result: StudioResult): VisualExplainerPay
     return parsed as VisualExplainerPayload;
   }
   return null;
+};
+
+const visualLessonModelTypeForSection = (section: VisualExplainerSection): VisualLessonModelType => {
+  const text = `${section.title} ${section.focus || ''} ${section.sourceMarkdown || ''} ${section.bodyMarkdown || ''}`;
+  if (/(join|inner join|left join|right join|数据库|关系表|表连接|字段|主键|外键)/i.test(text)) return 'table';
+  if (/(dijkstra|bfs|dfs|最短路|图算法|节点|边|邻接|graph)/i.test(text)) return 'graph';
+  if (/(lw|load word|数据通路|datapath|控制信号|寄存器堆|alu|数据存储器|指令存储器)/i.test(text)) return 'datapath';
+  if (/(数组|链表|栈|队列|堆|排序|sequence|array|stack|queue|heap)/i.test(text)) return 'sequence';
+  if (/(代码|伪代码|变量|trace|执行到|循环|递归|function|for|while)/i.test(text)) return 'code_trace';
+  if (section.visualMode === 'process' || section.visualMode === 'diagram' || (section.visualBlocks || []).some((block) => block.kind === 'mermaid')) return 'flowchart';
+  return 'markdown_mermaid';
+};
+
+const visualLessonFromVisualExplainer = (payload: VisualExplainerPayload): VisualLessonPayload => ({
+  schemaVersion: 'visual_lesson.v1',
+  title: payload.title,
+  summary: payload.summary,
+  sourceIds: [],
+  slides: payload.sections.map((section) => ({
+    id: section.id,
+    title: section.title,
+    bodyMarkdown: section.bodyMarkdown || section.sourceMarkdown || '',
+    narration: section.narration || section.focus || '',
+    layout: section.visualMode === 'process' || section.visualMode === 'diagram' ? 'visual_first' : 'text_visual',
+    visualModel: {
+      type: visualLessonModelTypeForSection(section),
+      title: section.title,
+      objects: section.objects || [],
+      blocks: section.visualBlocks || [],
+      markdown: section.sourceMarkdown || section.bodyMarkdown || ''
+    },
+    timeline: (section.timeline || []).map((step) => ({
+      stepId: step.id,
+      action: step.action,
+      targetIds: step.targetIds || [],
+      screenText: step.screenText,
+      narration: step.narration,
+      statePatch: step.statePatch || { activeTargetIds: step.targetIds || [], action: step.action },
+      durationMs: step.durationMs || 900
+    })),
+    checkQuestion: section.checkQuestion
+  }))
+});
+
+const extractVisualLessonPayload = (result: StudioResult): VisualLessonPayload | null => {
+  const visualExplainer = extractVisualExplainerPayload(result);
+  if (visualExplainer?.visualLesson?.schemaVersion === 'visual_lesson.v1' && Array.isArray(visualExplainer.visualLesson.slides)) {
+    return visualExplainer.visualLesson;
+  }
+  if (visualExplainer) return visualLessonFromVisualExplainer(visualExplainer);
+  const structured = isObjectRecord(result.structured) ? result.structured : null;
+  const payload = isObjectRecord(structured?.payload) ? structured.payload : null;
+  if (payload?.schemaVersion === 'visual_lesson.v1' && Array.isArray(payload.slides)) {
+    return payload as unknown as VisualLessonPayload;
+  }
+  return null;
+};
+
+const extractVisualCodeLessonPayload = (result: StudioResult): VisualCodeLessonPayload | null => {
+  const structured = isObjectRecord(result.structured) ? result.structured : null;
+  const payload = isObjectRecord(structured?.payload) ? structured.payload : null;
+  if (payload?.schemaVersion === 'visual_code_lesson.v1' && typeof payload.contentMarkdown === 'string') {
+    return payload as unknown as VisualCodeLessonPayload;
+  }
+  const parsed = (() => {
+    try {
+      return JSON.parse(result.content);
+    } catch {
+      return null;
+    }
+  })();
+  if (isObjectRecord(parsed?.payload) && parsed.payload.schemaVersion === 'visual_code_lesson.v1' && typeof parsed.payload.contentMarkdown === 'string') {
+    return parsed.payload as unknown as VisualCodeLessonPayload;
+  }
+  if (isObjectRecord(parsed) && parsed.schemaVersion === 'visual_code_lesson.v1' && typeof parsed.contentMarkdown === 'string') {
+    return parsed as unknown as VisualCodeLessonPayload;
+  }
+  if (result.resourceType === 'visual_explainer' && /~~~(?:REACT_VIZ|HTML_VIZ)\s*\n/i.test(result.content)) {
+    return {
+      schemaVersion: 'visual_code_lesson.v1',
+      title: result.name,
+      summary: '包含讲解文本和可执行前端可视化代码块的视觉化课程。',
+      contentMarkdown: result.content
+    };
+  }
+  return null;
+};
+
+const parseVisualCodeMarkdown = (content: string): VisualCodePart[] => {
+  const parts: VisualCodePart[] = [];
+  const regex = /~~~(HTML_VIZ|REACT_VIZ)\s*\n([\s\S]*?)~~~/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const text = content.slice(lastIndex, match.index).trim();
+    if (text) parts.push({ type: 'text', content: text });
+    const code = match[2]?.trim();
+    if (code) parts.push({ type: match[1] === 'HTML_VIZ' ? 'html' : 'react', code });
+    lastIndex = match.index + match[0].length;
+  }
+
+  const tail = content.slice(lastIndex).trim();
+  if (tail) {
+    const truncated = tail.match(/^~~~(HTML_VIZ|REACT_VIZ)\s*\n([\s\S]+)/);
+    if (truncated) {
+      parts.push({ type: 'text', content: '> 可视化代码块可能被模型截断，下面会尝试渲染已返回的部分。' });
+      const code = truncated[2]?.trim();
+      if (code) parts.push({ type: truncated[1] === 'HTML_VIZ' ? 'html' : 'react', code });
+    } else {
+      parts.push({ type: 'text', content: tail });
+    }
+  }
+
+  return parts.length ? parts : [{ type: 'text', content }];
+};
+
+const unsafeVisualizationPattern = /(localStorage|sessionStorage|document\.cookie|window\.parent|parent\.document|\btop\b|\bopener\b|fetch\s*\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon|eval\s*\(|new\s+Function|import\s*\(|<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=)/i;
+
+const buildReactVisualizationSandboxHtml = (code: string) => {
+  const encodedCode = JSON.stringify(code);
+  return [
+    '<!DOCTYPE html><html><head><meta charset="UTF-8">',
+    '<meta name="viewport" content="width=device-width,initial-scale=1">',
+    '<script src="https://cdn.tailwindcss.com"></script>',
+    '<style>*{box-sizing:border-box}body{margin:0;background:#fff;color:#202124;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}#root{min-height:180px}.sandbox-error{margin:12px;padding:14px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;color:#991b1b;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}.sandbox-loading{display:flex;min-height:220px;align-items:center;justify-content:center;gap:10px;color:#64748b;font-size:13px}.spinner{width:18px;height:18px;border:2px solid #e2e8f0;border-top-color:#2563eb;border-radius:999px;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}</style>',
+    '</head><body><div id="root"><div class="sandbox-loading"><div class="spinner"></div><span>加载可视化运行环境...</span></div></div>',
+    '<script>',
+    'const scripts=[',
+    '{url:"https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js",name:"React",required:true},',
+    '{url:"https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js",name:"ReactDOM",required:true},',
+    '{url:"https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js",name:"Babel",required:true},',
+    '{url:"https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js",name:"Recharts",required:false}',
+    '];',
+    'function height(){const h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight,260);parent.postMessage({type:"visual-code-height",height:Math.min(h+16,900)},"*")}',
+    'function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}',
+    'function fail(msg){document.getElementById("root").innerHTML="<div class=sandbox-error>"+esc(msg)+"</div>";height()}',
+    'function load(i){if(i>=scripts.length){run();return}const item=scripts[i];const el=document.createElement("script");el.src=item.url;el.onload=()=>load(i+1);el.onerror=()=>item.required?fail("依赖加载失败: "+item.name):load(i+1);document.head.appendChild(el)}',
+    'function run(){try{',
+    'const registry={react:Object.assign({},React,{default:React}),"react-dom":Object.assign({default:ReactDOM},ReactDOM),"react-dom/client":Object.assign({default:ReactDOM},ReactDOM)};',
+    'if(typeof Recharts!=="undefined")registry.recharts=Object.assign({default:Recharts},Recharts);',
+    'function require(name){if(registry[name])return registry[name];throw new Error("不支持导入模块: "+name)}',
+    'const source=' + encodedCode + ';',
+    'const compiled=Babel.transform(source,{presets:["react"],plugins:["transform-modules-commonjs"],filename:"visual.jsx"}).code;',
+    'const module={exports:{}};const exports=module.exports;',
+    'new Function("require","module","exports","React","ReactDOM",compiled)(require,module,exports,React,ReactDOM);',
+    'const Component=module.exports.default||module.exports;',
+    'if(typeof Component!=="function")throw new Error("REACT_VIZ 必须 export default 导出函数组件");',
+    'const root=document.getElementById("root");',
+    'if(ReactDOM.createRoot)ReactDOM.createRoot(root).render(React.createElement(Component));else ReactDOM.render(React.createElement(Component),root);',
+    'setTimeout(height,80);setTimeout(height,500);setTimeout(height,1500);',
+    '}catch(error){fail("渲染错误:\\n"+(error&&error.message?error.message:String(error)))}}',
+    'window.onerror=(message)=>{fail("运行时错误:\\n"+message)};',
+    'setTimeout(()=>{if(document.querySelector(".sandbox-loading"))fail("可视化加载超时")},15000);',
+    'load(0);',
+    '</script></body></html>'
+  ].join('\n');
 };
 
 const cueForPrimitive = (step: ProcessStepIR, primitiveId: string) =>
@@ -5919,11 +6291,19 @@ function StudioGenerationProgressStrip({ progress }: { progress: StudioGeneratio
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold text-[#1f5fd0]">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <div className="relative flex h-7 w-7 items-center justify-center rounded-full bg-[#dbeafe] text-[#2563eb]">
+              <Sparkles className="h-4 w-4 animate-pulse" />
+              <span className="absolute inset-0 rounded-full border border-[#93c5fd] animate-ping" />
+            </div>
             {isVisual ? activeStage.label : 'Generating'}
+            <span className="inline-flex items-center gap-0.5 pl-1" aria-label="thinking">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb] [animation-delay:120ms]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb] [animation-delay:240ms]" />
+            </span>
           </div>
           <div className="mt-1 text-xs leading-5 text-[#667085]">
-            {isVisual ? activeStage.description : 'AI Studio 正在生成资源'} · {studioDurationLabel(progress.elapsedMs)}
+            思考中：{isVisual ? activeStage.description : 'AI Studio 正在生成资源'} · {studioDurationLabel(progress.elapsedMs)}
           </div>
         </div>
         <div className="w-full max-w-sm">
@@ -6425,11 +6805,197 @@ function RoutedSectionVisual({ section }: { section: VisualExplainerSection }) {
   return null;
 }
 
-function VisualExplainerViewer({ result }: { result: StudioResult }) {
-  const payload = useMemo(() => extractVisualExplainerPayload(result), [result]);
-  const sections = payload?.sections?.length ? payload.sections : [];
+const visualModeForLessonModel = (type?: VisualLessonModelType): VisualExplainerMode => {
+  if (type === 'graph' || type === 'datapath' || type === 'flowchart') return 'diagram';
+  if (type === 'sequence' || type === 'code_trace') return 'process';
+  if (type === 'table') return 'comparison';
+  return 'slide';
+};
 
-  if (!payload || !sections.length) {
+const rendererForLessonModel = (type?: VisualLessonModelType): VisualExplainerRendererKind => {
+  if (type === 'graph' || type === 'datapath' || type === 'flowchart') return 'x6';
+  return 'reveal';
+};
+
+const sectionFromLessonSlide = (slide: VisualLessonSlide): VisualExplainerSection => {
+  const objects = slide.visualModel?.objects || [];
+  const blocks = slide.visualModel?.blocks || [];
+  return {
+    id: slide.id,
+    title: slide.title,
+    focus: slide.narration,
+    sourceMarkdown: slide.visualModel?.markdown || slide.bodyMarkdown,
+    bodyMarkdown: slide.bodyMarkdown,
+    visualMode: visualModeForLessonModel(slide.visualModel?.type),
+    screenText: slide.timeline.map((step) => step.screenText || step.narration).filter(Boolean).slice(0, 6),
+    narration: slide.narration,
+    objects,
+    timeline: slide.timeline.map((step) => ({
+      id: step.stepId,
+      action: step.action as VisualExplainerAction,
+      targetIds: step.targetIds || [],
+      narration: step.narration,
+      screenText: step.screenText,
+      durationMs: step.durationMs,
+      statePatch: step.statePatch
+    })),
+    visualBlocks: blocks,
+    preferredRenderer: blocks.some((block) => block.kind === 'mermaid') ? 'mermaid' : rendererForLessonModel(slide.visualModel?.type),
+    checkQuestion: slide.checkQuestion
+  };
+};
+
+const activeTargetIdsForLessonStep = (step?: VisualLessonTimelineStep) => {
+  const patched = Array.isArray((step?.statePatch as any)?.activeTargetIds)
+    ? (step?.statePatch as any).activeTargetIds
+    : [];
+  return new Set([...(step?.targetIds || []), ...patched].map((id) => String(id)));
+};
+
+function VisualLessonObjectCards({
+  objects,
+  activeTargetIds
+}: {
+  objects: VisualExplainerObject[];
+  activeTargetIds: Set<string>;
+}) {
+  const visibleObjects = objects.filter((object) => object.kind !== 'edge').slice(0, 10);
+  if (!visibleObjects.length) return null;
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {visibleObjects.map((object) => {
+        const active = activeTargetIds.has(object.id);
+        return (
+          <div
+            key={object.id}
+            className={`min-h-[74px] rounded-lg border px-3 py-2 transition ${
+              active
+                ? 'border-[#2563eb] bg-[#eff6ff] shadow-sm'
+                : 'border-[#e2e8f0] bg-white'
+            }`}
+          >
+            <div className="text-xs font-semibold uppercase text-[#7b8190]">{object.kind}</div>
+            <div className="mt-1 text-sm font-semibold leading-snug text-[#202124]">{object.label}</div>
+            {object.detail ? <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-[#64748b]">{object.detail}</div> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function VisualLessonDatapathView({
+  objects,
+  activeTargetIds
+}: {
+  objects: VisualExplainerObject[];
+  activeTargetIds: Set<string>;
+}) {
+  const nodes = objects.filter((object) => object.kind !== 'edge').slice(0, 8);
+  if (!nodes.length) return null;
+  return (
+    <div className="flex min-h-[220px] items-center overflow-x-auto rounded-lg border border-[#e2e8f0] bg-[#f8fafc] p-4">
+      <div className="flex min-w-max items-center gap-3">
+        {nodes.map((node, index) => {
+          const active = activeTargetIds.has(node.id);
+          return (
+            <div key={node.id} className="flex items-center gap-3">
+              <div
+                className={`flex h-[96px] w-[150px] flex-col justify-center rounded-lg border px-3 text-center transition ${
+                  active
+                    ? 'border-[#2563eb] bg-white shadow-md'
+                    : 'border-[#cbd5e1] bg-white'
+                }`}
+              >
+                <div className="text-sm font-semibold leading-snug text-[#202124]">{node.label}</div>
+                {node.detail ? <div className="mt-1 line-clamp-2 text-xs text-[#64748b]">{node.detail}</div> : null}
+              </div>
+              {index < nodes.length - 1 ? <ChevronRight className="h-5 w-5 shrink-0 text-[#94a3b8]" /> : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function VisualLessonModelView({
+  slide,
+  activeStep
+}: {
+  slide: VisualLessonSlide;
+  activeStep?: VisualLessonTimelineStep;
+}) {
+  const section = useMemo(() => sectionFromLessonSlide(slide), [slide]);
+  const activeTargetIds = useMemo(() => activeTargetIdsForLessonStep(activeStep), [activeStep]);
+  const modelType = slide.visualModel?.type || 'markdown_mermaid';
+  const hasDiagram = routeVisualRenderer(section).renderer !== 'reveal';
+  const objects = slide.visualModel?.objects || [];
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold uppercase tracking-wide text-[#64748b]">
+          {modelType.replace('_', ' ')}
+        </div>
+        {activeStep?.screenText ? (
+          <div className="rounded-full bg-[#eef2ff] px-3 py-1 text-xs font-semibold text-[#3730a3]">
+            {activeStep.screenText}
+          </div>
+        ) : null}
+      </div>
+      <div className="min-h-[260px] flex-1 overflow-hidden rounded-lg border border-[#e2e8f0] bg-white p-3">
+        {modelType === 'datapath' ? (
+          <VisualLessonDatapathView objects={objects} activeTargetIds={activeTargetIds} />
+        ) : hasDiagram ? (
+          <div className="h-full min-h-[300px]">
+            <RoutedSectionVisual section={section} />
+          </div>
+        ) : (
+          <div className="h-full overflow-auto">
+            <MarkdownPreview content={slide.visualModel?.markdown || slide.bodyMarkdown || slide.narration} variant="message" />
+          </div>
+        )}
+      </div>
+      <VisualLessonObjectCards objects={objects} activeTargetIds={activeTargetIds} />
+    </div>
+  );
+}
+
+function VisualExplainerViewer({ result, onBack }: { result: StudioResult; onBack?: () => void }) {
+  const lesson = useMemo(() => extractVisualLessonPayload(result), [result]);
+  const slides = lesson?.slides?.length ? lesson.slides : [];
+  const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const currentSlide = slides[currentSlideIndex];
+  const steps = currentSlide?.timeline?.length ? currentSlide.timeline : [];
+  const activeStep = steps[currentStepIndex];
+
+  useEffect(() => {
+    setCurrentSlideIndex(0);
+    setCurrentStepIndex(0);
+    setIsPlaying(false);
+  }, [lesson?.title]);
+
+  useEffect(() => {
+    if (!isPlaying || !currentSlide) return;
+    const timer = window.setTimeout(() => {
+      if (currentStepIndex < Math.max(steps.length - 1, 0)) {
+        setCurrentStepIndex((index) => index + 1);
+        return;
+      }
+      if (currentSlideIndex < slides.length - 1) {
+        setCurrentSlideIndex((index) => index + 1);
+        setCurrentStepIndex(0);
+        return;
+      }
+      setIsPlaying(false);
+    }, Math.max(400, activeStep?.durationMs || 1100));
+    return () => window.clearTimeout(timer);
+  }, [activeStep?.durationMs, currentSlide, currentSlideIndex, currentStepIndex, isPlaying, slides.length, steps.length]);
+
+  if (!lesson || !slides.length || !currentSlide) {
     return (
       <div className="mx-auto max-w-4xl">
         <MarkdownPreview content={result.content} variant="document" />
@@ -6437,75 +7003,317 @@ function VisualExplainerViewer({ result }: { result: StudioResult }) {
     );
   }
 
+  const goSlide = (nextIndex: number) => {
+    setCurrentSlideIndex(Math.min(Math.max(nextIndex, 0), slides.length - 1));
+    setCurrentStepIndex(0);
+    setIsPlaying(false);
+  };
+
+  const resetCurrentSlide = () => {
+    setCurrentStepIndex(0);
+    setIsPlaying(false);
+  };
+
   return (
-    <section className="min-w-0 overflow-hidden bg-white">
-      <div className="px-5 py-4">
-        <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
-          Visual Explainer · {visualModeLabel[sections[0]?.visualMode] || 'Slide'}
+    <section className="min-w-0 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] px-5 py-4">
+        <div className="flex min-w-0 items-center gap-3">
+          {onBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc]"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              返回
+            </button>
+          ) : null}
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
+              Visual Lesson · {currentSlideIndex + 1}/{slides.length}
+            </div>
+            <h3 className="mt-1 truncate text-lg font-semibold text-[#202124]">{lesson.title}</h3>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => goSlide(currentSlideIndex - 1)}
+            disabled={currentSlideIndex === 0}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#dfe3ea] text-[#343a46] disabled:opacity-40"
+            title="Previous slide"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsPlaying((value) => !value)}
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#2563eb] px-3 text-sm font-semibold text-white"
+          >
+            {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            {isPlaying ? 'Pause' : 'Play'}
+          </button>
+          <button
+            type="button"
+            onClick={resetCurrentSlide}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#dfe3ea] text-[#343a46]"
+            title="Reset slide"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => goSlide(currentSlideIndex + 1)}
+            disabled={currentSlideIndex >= slides.length - 1}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#dfe3ea] text-[#343a46] disabled:opacity-40"
+            title="Next slide"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
         </div>
       </div>
-      <div className="h-[min(720px,calc(100vh-250px))] min-h-[520px] bg-white">
-        <Deck
-          config={{
-            width: 1280,
-            height: 720,
-            controls: true,
-            progress: true,
-            center: true,
-            hash: false,
-            transition: 'slide',
-            backgroundTransition: 'fade'
-          }}
-        >
-          {sections.map((section) => {
-            const route = routeVisualRenderer(section);
-            const hasRenderer = route.renderer === 'x6' || route.renderer === 'mermaid';
-            const narration = revealNarration(section);
-            const bodyMarkdown = sectionBodyMarkdown(section);
-            const focus = slideFocusText(section, bodyMarkdown);
+      <div className="grid min-h-[640px] grid-cols-1 gap-4 px-5 py-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <main className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)]">
+          <article className="flex min-h-[520px] min-w-0 flex-col rounded-lg border border-[#e5e7eb] bg-white">
+            <div className="border-b border-[#e5e7eb] px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-[#64748b]">
+                Slide {currentSlideIndex + 1}
+              </div>
+              <h2 className="mt-1 text-2xl font-semibold leading-tight text-[#202124]">{currentSlide.title}</h2>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+              <MarkdownPreview content={currentSlide.bodyMarkdown || currentSlide.narration} variant="message" />
+            </div>
+            {currentSlide.checkQuestion ? (
+              <div className="border-t border-[#e5e7eb] bg-[#f8fafc] px-4 py-3 text-sm font-medium text-[#334155]">
+                {currentSlide.checkQuestion}
+              </div>
+            ) : null}
+          </article>
+          <aside className="min-h-[520px] min-w-0 rounded-lg border border-[#e5e7eb] bg-[#fbfdff] p-4">
+            <VisualLessonModelView slide={currentSlide} activeStep={activeStep} />
+          </aside>
+        </main>
+        <aside className="flex min-h-[280px] flex-col rounded-lg border border-[#e5e7eb] bg-white">
+          <div className="border-b border-[#e5e7eb] px-4 py-3">
+            <div className="text-sm font-semibold text-[#202124]">Timeline</div>
+            <div className="mt-0.5 text-xs text-[#7b8190]">
+              {steps.length ? `${currentStepIndex + 1}/${steps.length}` : 'No steps'}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-3">
+            {steps.length ? (
+              <div className="space-y-2">
+                {steps.map((step, index) => {
+                  const active = index === currentStepIndex;
+                  return (
+                    <button
+                      key={step.stepId}
+                      type="button"
+                      onClick={() => {
+                        setCurrentStepIndex(index);
+                        setIsPlaying(false);
+                      }}
+                      className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                        active
+                          ? 'border-[#2563eb] bg-[#eff6ff]'
+                          : 'border-[#e2e8f0] bg-white hover:bg-[#f8fafc]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold uppercase text-[#64748b]">{step.action}</span>
+                        <span className="text-xs text-[#94a3b8]">{index + 1}</span>
+                      </div>
+                      <div className="mt-1 text-sm font-semibold leading-snug text-[#202124]">
+                        {step.screenText || step.narration}
+                      </div>
+                      {step.screenText && step.narration !== step.screenText ? (
+                        <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-[#64748b]">{step.narration}</div>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-lg bg-[#f8fafc] p-3 text-sm text-[#64748b]">
+                This slide has no timeline steps.
+              </div>
+            )}
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function VisualCodeSandbox({ part, index }: { part: Extract<VisualCodePart, { type: 'react' | 'html' }>; index: number }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [copied, setCopied] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const blocked = unsafeVisualizationPattern.test(part.code);
+  const label = part.type === 'react' ? 'React' : 'HTML';
+  const extension = part.type === 'react' ? 'jsx' : 'html';
+
+  const blobUrl = useMemo(() => {
+    if (blocked) return '';
+    const html = part.type === 'react' ? buildReactVisualizationSandboxHtml(part.code) : part.code;
+    return URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+  }, [blocked, part.code, part.type]);
+
+  useEffect(() => {
+    return () => {
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [blobUrl]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const iframe = iframeRef.current;
+      if (!iframe || event.source !== iframe.contentWindow) return;
+      if (event.data?.type === 'visual-code-height' && typeof event.data.height === 'number') {
+        if (isFullscreen) return;
+        iframe.style.height = `${Math.min(Math.max(event.data.height, 280), 900)}px`;
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isFullscreen]);
+
+  const copySource = async () => {
+    try {
+      await navigator.clipboard?.writeText(part.code);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  const downloadSource = () => {
+    const blob = new Blob([part.code], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `visualization-${index + 1}.${extension}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <section
+      className={
+        isFullscreen
+          ? 'fixed inset-3 z-[10000] flex flex-col overflow-hidden rounded-lg border border-[#dfe3ea] bg-white shadow-2xl'
+          : 'overflow-hidden rounded-lg border border-[#dfe3ea] bg-white'
+      }
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-[#e5e7eb] bg-[#f8fafc] px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Code className="h-4 w-4 text-[#2563eb]" />
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-[#202124]">可执行可视化 {index + 1}</div>
+            <div className="text-xs text-[#64748b]">{label} sandbox</div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={copySource}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-[#dfe3ea] bg-white px-2 text-xs font-semibold text-[#343a46] hover:bg-[#f8fafc]"
+          >
+            <ClipboardCheck className="h-3.5 w-3.5" />
+            {copied ? '已复制' : '源码'}
+          </button>
+          <button
+            type="button"
+            onClick={downloadSource}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-[#dfe3ea] bg-white px-2 text-xs font-semibold text-[#343a46] hover:bg-[#f8fafc]"
+          >
+            <Download className="h-3.5 w-3.5" />
+            .{extension}
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsFullscreen((value) => !value)}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-[#dfe3ea] bg-white px-2 text-xs font-semibold text-[#343a46] hover:bg-[#f8fafc]"
+          >
+            {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            {isFullscreen ? '退出全屏' : '全屏'}
+          </button>
+        </div>
+      </div>
+      {blocked ? (
+        <div className="m-4 rounded-lg border border-[#fecaca] bg-[#fef2f2] p-4 text-sm leading-6 text-[#991b1b]">
+          这个可视化代码块包含被禁用的浏览器能力，已阻止运行。请重新生成或查看源码后调整。
+        </div>
+      ) : (
+        <iframe
+          ref={iframeRef}
+          className={isFullscreen ? 'block w-full flex-1 border-0 bg-white' : 'block w-full border-0 bg-white'}
+          style={isFullscreen ? undefined : { height: 420 }}
+          sandbox="allow-scripts"
+          src={blobUrl}
+          title={`visual-code-${index + 1}`}
+        />
+      )}
+    </section>
+  );
+}
+
+function VisualCodeLessonViewer({ result, lesson, onBack }: { result: StudioResult; lesson: VisualCodeLessonPayload; onBack?: () => void }) {
+  const parts = useMemo(() => parseVisualCodeMarkdown(lesson.contentMarkdown || result.content), [lesson.contentMarkdown, result.content]);
+  let visualIndex = 0;
+
+  return (
+    <section className="min-w-0 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] px-5 py-4">
+        <div className="flex min-w-0 items-center gap-3">
+          {onBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc]"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              返回
+            </button>
+          ) : null}
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
+              Visual Code Lesson
+            </div>
+            <h3 className="mt-1 truncate text-lg font-semibold text-[#202124]">{lesson.title || result.name}</h3>
+          </div>
+        </div>
+      </div>
+      <div className="mx-auto flex max-w-6xl flex-col gap-5 px-5 py-5">
+        {lesson.summary ? (
+          <div className="rounded-lg border border-[#dfe3ea] bg-[#f8fafc] px-4 py-3 text-sm leading-6 text-[#475569]">
+            {lesson.summary}
+          </div>
+        ) : null}
+        {parts.map((part, index) => {
+          if (part.type === 'text') {
             return (
-              <Slide key={section.id} autoAnimate>
-                <section
-                  className={`mx-auto grid h-full text-left ${
-                    hasRenderer
-                      ? 'max-w-6xl grid-cols-[1.05fr_0.95fr] items-stretch gap-8 px-2 py-8'
-                      : 'max-w-5xl grid-cols-1 px-3 py-8'
-                  }`}
-                >
-                  <div className={`flex min-h-0 min-w-0 flex-col ${hasRenderer ? 'pr-4' : ''}`}>
-                    <div className="mb-3 text-sm font-semibold uppercase tracking-wide text-[#64748b]">
-                      {visualModeLabel[section.visualMode] || section.visualMode}
-                    </div>
-                    <h2 className="!mb-4 !text-[34px] !font-semibold !leading-tight !text-[#202124]">
-                      {cleanRevealText(section.title, 72)}
-                    </h2>
-                    {focus ? (
-                      <p className="!mx-0 !mb-4 !text-[20px] !leading-snug !text-[#475569]">
-                        {focus}
-                      </p>
-                    ) : null}
-                    {bodyMarkdown ? (
-                      <RevealFragment animation="fade-up" as="div">
-                        <div className={`min-h-0 flex-1 overflow-y-auto text-left ${hasRenderer ? 'pr-3' : 'pr-2'}`}>
-                          <MarkdownPreview content={bodyMarkdown} variant="message" />
-                        </div>
-                      </RevealFragment>
-                    ) : narration ? (
-                      <RevealFragment animation="fade-up" as="p">
-                        <span className="block !text-[19px] !leading-relaxed !text-[#334155]">{narration}</span>
-                      </RevealFragment>
-                    ) : null}
-                  </div>
-                  {hasRenderer ? (
-                    <div className="flex min-h-0 min-w-0 items-center border-l border-[#e2e8f0] pl-8">
-                      <RoutedSectionVisual section={section} />
-                    </div>
-                  ) : null}
-                </section>
-              </Slide>
+              <article key={`text-${index}`} className="rounded-lg border border-[#e5e7eb] bg-white px-5 py-4">
+                <MarkdownPreview content={part.content} variant="document" />
+              </article>
             );
-          })}
-        </Deck>
+          }
+          visualIndex += 1;
+          return <VisualCodeSandbox key={`${part.type}-${index}`} part={part} index={visualIndex - 1} />;
+        })}
       </div>
     </section>
   );
@@ -8038,7 +8846,8 @@ function ResultView({
   const headerMeta = `${studioResultTypeLabel(result)} · Based on ${sourceCount} sources`;
   const hasGeneratedFileViewer = Boolean(result.delivery && result.delivery.kind !== 'markdown');
   const teachingVisualization = extractTeachingVisualizationPayload(result);
-  const visualExplainer = extractVisualExplainerPayload(result);
+  const visualCodeLesson = extractVisualCodeLessonPayload(result);
+  const visualLesson = extractVisualLessonPayload(result);
   const [resourceNote, setResourceNote] = useState<FileSystemObject | null>(result.createdNote || null);
   const [resourceNoteError, setResourceNoteError] = useState<string | null>(result.autoCreateNoteError || null);
   const [openingNote, setOpeningNote] = useState(false);
@@ -8088,27 +8897,42 @@ function ResultView({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white">
-      <div className="flex items-center justify-between gap-4 bg-white px-6 pb-3 pt-5">
+      <div className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-[#eef0f4] bg-white px-6 pb-3 pt-5">
         <div className="min-w-0">
-          <button onClick={onBack} className="mb-1 inline-flex items-center gap-1 text-sm font-medium text-[#5f6368] hover:text-[#202124]">
-            <ArrowLeft className="h-4 w-4" /> Studio
+          <button
+            type="button"
+            onClick={onBack}
+            className="mb-2 inline-flex h-9 items-center gap-2 rounded-lg border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc]"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            返回 AI Studio
           </button>
           <h2 className="truncate text-[22px] font-semibold text-[#202124]">{headerTitle}</h2>
           <div className="mt-0.5 text-xs text-[#777a80]">
             {headerMeta}
           </div>
         </div>
-        {resourceNotes && (
+        <div className="flex shrink-0 items-center gap-2">
+          {resourceNotes && (
+            <button
+              type="button"
+              onClick={() => void openOrCreateResourceNote()}
+              disabled={openingNote}
+              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[#dfe3ea] px-4 py-2 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {openingNote && <Loader2 className="h-4 w-4 animate-spin" />}
+              Open Note
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => void openOrCreateResourceNote()}
-            disabled={openingNote}
-            className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[#dfe3ea] px-4 py-2 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={onBack}
+            className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-[#202124] px-4 text-sm font-semibold text-white transition hover:bg-[#34373c]"
           >
-            {openingNote && <Loader2 className="h-4 w-4 animate-spin" />}
-            Open Note
+            <ArrowLeft className="h-4 w-4" />
+            返回原界面
           </button>
-        )}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="min-h-full bg-white px-6 pb-6 pt-1">
@@ -8119,8 +8943,10 @@ function ResultView({
             sourceLabel={headerTitle}
           >
             <div className="min-w-0">
-              {visualExplainer ? (
-                <VisualExplainerViewer result={result} />
+              {visualCodeLesson ? (
+                <VisualCodeLessonViewer result={result} lesson={visualCodeLesson} onBack={onBack} />
+              ) : visualLesson ? (
+                <VisualExplainerViewer result={result} onBack={onBack} />
               ) : teachingVisualization ? (
                 <TeachingVisualizationViewer result={result} />
               ) : hasGeneratedFileViewer ? (
@@ -8433,40 +9259,53 @@ export default function AIStudioPanel({
   const generate = async (overrideModal?: StudioModalState) => {
     const activeModal = overrideModal || modal;
     if (!activeModal || generating) return;
+    const activeTemplate = activeModal.templateId
+      ? effectiveTemplates.find((template) => template.id === activeModal.templateId) || null
+      : selectedTemplate;
+    const activeRenderer = activeTemplate?.renderer || null;
+    const generationResourceIds = effectiveVisualResourceIds(
+      activeModal.selectedResourceIds,
+      studioResources,
+      activeRenderer
+    );
+    const modalForGeneration: StudioModalState = {
+      ...activeModal,
+      selectedResourceIds: generationResourceIds
+    };
     const sourceFirstTemplate = isResourceNotesTemplate(activeModal.templateId) || isResourceCompareTemplate(activeModal.templateId);
-    if (!activeModal.topic.trim() && !(sourceFirstTemplate && activeModal.selectedResourceIds.length)) {
+    if (!modalForGeneration.topic.trim() && !(sourceFirstTemplate && modalForGeneration.selectedResourceIds.length)) {
       setError(sourceFirstTemplate ? '请先选择至少一个 source，或填写转换要求。' : '请先填写生成要求。');
       return;
     }
     setGenerating(true);
     setGenerationProgress({
       templateId: activeModal.templateId,
-      renderer: (activeModal.templateId ? effectiveTemplates.find((template) => template.id === activeModal.templateId)?.renderer : selectedTemplate?.renderer) || null,
+      renderer: activeRenderer,
       startedAt: Date.now(),
       elapsedMs: 0,
       stageIndex: 0
     });
     setError(null);
     try {
-      const contextPayload = buildSelectedSourcesOnlyContext(activeModal.selectedResourceIds);
+      const contextPayload = buildSelectedSourcesOnlyContext(modalForGeneration.selectedResourceIds);
       const response = await aiApi.generateStudioResource({
         workspaceId,
         workbenchId: effectiveWorkbenchId,
-        resourceType: activeModal.templateId ? undefined : activeModal.resourceType,
-        templateId: activeModal.templateId,
-        goal: activeModal.goal,
-        prompt: buildPrompt(activeModal),
-        options: templateOptionsFor(activeModal),
+        resourceType: modalForGeneration.templateId ? undefined : modalForGeneration.resourceType,
+        templateId: modalForGeneration.templateId,
+        goal: modalForGeneration.goal,
+        prompt: buildPrompt(modalForGeneration),
+        options: templateOptionsFor(modalForGeneration),
         context: contextPayload
       });
-      const responseTemplate = response.template || (activeModal.templateId ? effectiveTemplates.find((template) => template.id === activeModal.templateId) : null);
+      const responseTemplate = response.template || activeTemplate;
       let result: StudioResult = {
         id: response.file.id,
         name: response.file.name,
         path: response.file.path,
         resourceType: response.resourceType || templateResourceType(responseTemplate),
         template: responseTemplate || null,
-        goal: response.goal || activeModal.goal,
+        goal: response.goal || modalForGeneration.goal,
         generator: response.generator,
         renderer: response.renderer,
         content: response.content,
@@ -8475,7 +9314,7 @@ export default function AIStudioPanel({
         source: response.source,
         metadata: {
           ...(response.metadata || {}),
-          selectedResourceIds: activeModal.selectedResourceIds
+          selectedResourceIds: modalForGeneration.selectedResourceIds
         },
         flashcardDeck: response.flashcardDeck || null,
         summary: response.usedContextSummary,
@@ -8727,6 +9566,9 @@ export default function AIStudioPanel({
         onDeleteResult={async (result) => {
           try {
             await fileSystemApi.remove(workspaceId, result.id);
+            if (result.artifact?.id) {
+              setArtifacts((current) => current.filter((artifact) => artifact.id !== result.artifact?.id));
+            }
             onUpdateViewState?.(editor.id, {
               studioResults: results.filter((item) => item.id !== result.id),
               activeStudioResultId: activeResultId === result.id ? null : activeResultId
