@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+import fs from 'fs/promises';
+import JSZip from 'jszip';
 import { FileSystemService } from '../services/fileSystemService';
 import { DocumentPreviewService } from '../services/documentPreviewService';
 import { documentTextExtractionService } from '../services/documentTextExtractionService';
@@ -126,6 +128,28 @@ const buildSourceManifest = (source: {
 const parsePositiveInteger = (value: unknown) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+};
+
+const safeArchiveSegment = (value: string) =>
+  value
+    .replace(/[\\/:*?"<>|#{}[\]`]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim() || 'untitled';
+
+const safeArchivePath = (value: string) =>
+  value
+    .split('/')
+    .map((segment) => safeArchiveSegment(segment))
+    .filter(Boolean)
+    .join('/');
+
+const zipDownloadName = (name: string) => `${safeArchiveSegment(name).replace(/\.zip$/i, '')}.zip`;
+
+const relativeArchivePath = (root: { name: string; path: string }, item: { name: string; path: string }) => {
+  const relativeByPath = item.path.startsWith(`${root.path}/`)
+    ? item.path.slice(root.path.length + 1)
+    : item.name;
+  return safeArchivePath(`${root.name}/${relativeByPath}`);
 };
 
 const handleError = (res: Response, error: any) => {
@@ -617,8 +641,70 @@ export const downloadFile = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
+    if (file.nodeType === 'folder') {
+      const workspaceObjects = await prisma.fileSystemObject.findMany({
+        where: { workspaceId },
+        orderBy: [{ path: 'asc' }, { name: 'asc' }]
+      });
+      const childrenByParentId = new Map<string, typeof workspaceObjects>();
+      for (const item of workspaceObjects) {
+        if (!item.parentId) continue;
+        childrenByParentId.set(item.parentId, [...(childrenByParentId.get(item.parentId) || []), item]);
+      }
+
+      const descendantsById = new Map<string, (typeof workspaceObjects)[number]>();
+      const visit = (parentId: string) => {
+        for (const child of childrenByParentId.get(parentId) || []) {
+          if (descendantsById.has(child.id)) continue;
+          descendantsById.set(child.id, child);
+          if (child.nodeType === 'folder') visit(child.id);
+        }
+      };
+      visit(file.id);
+
+      for (const item of workspaceObjects) {
+        if (item.id !== file.id && item.path.startsWith(`${file.path}/`)) {
+          descendantsById.set(item.id, item);
+        }
+      }
+
+      const descendants = Array.from(descendantsById.values()).sort((a, b) => a.path.localeCompare(b.path));
+      const folders = descendants.filter((item) => item.nodeType === 'folder');
+      const files = descendants.filter((item) => item.nodeType === 'file');
+      const zip = new JSZip();
+      const { LocalStorageService } = require('../services/storage/localStorageService');
+
+      zip.folder(safeArchiveSegment(file.name));
+      for (const folder of folders) {
+        zip.folder(relativeArchivePath(file, folder));
+      }
+
+      for (const child of files) {
+        const relativePath = relativeArchivePath(file, child);
+        if (!relativePath) continue;
+
+        if (child.storageKey) {
+          const childPath = LocalStorageService.getFilePath(child.storageKey);
+          zip.file(relativePath, await fs.readFile(childPath));
+        } else {
+          zip.file(relativePath, child.content || '');
+        }
+      }
+
+      if (!files.length) {
+        zip.file(`${safeArchiveSegment(file.name)}/.empty`, '');
+      }
+
+      const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+      const filename = zipDownloadName(file.name);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Length', String(buffer.length));
+      return res.send(buffer);
+    }
+
     if (file.nodeType !== 'file') {
-      return res.status(400).json({ error: 'Cannot download a folder' });
+      return res.status(400).json({ error: 'Cannot download this item' });
     }
 
     const extension = file.name.split('.').pop()?.toLowerCase() || '';

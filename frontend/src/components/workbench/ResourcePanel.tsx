@@ -29,18 +29,18 @@ export default function ResourcePanel({ panel, onClose, onRemove, onReplaceRefer
         {!panel.referencedFileId ? (
           <div className="text-center">
             <File className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-            <p className="text-sm text-gray-500 mb-4">No resource selected</p>
+            <p className="text-sm text-gray-500 mb-4">未选择资源</p>
             <button 
               onClick={onReplaceReference}
               className="px-4 py-2 bg-white border border-gray-200 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
             >
-              Select File
+              选择文件
             </button>
           </div>
         ) : isPdf ? (
           <div className="w-full h-full bg-white border border-gray-200 shadow-sm flex flex-col">
             <div className="bg-gray-100 border-b border-gray-200 p-2 flex justify-between items-center text-xs text-gray-500">
-              <span>Page 1 / 42</span>
+              <span>第 1 页 / 共 42 页</span>
               <div className="flex gap-2">
                 <button className="hover:text-gray-800">-</button>
                 <span>100%</span>
@@ -48,13 +48,13 @@ export default function ResourcePanel({ panel, onClose, onRemove, onReplaceRefer
               </div>
             </div>
             <div className="flex-1 p-8 flex items-center justify-center text-gray-400">
-              [PDF Content Mock: {panel.referencedFileId}]
+              [PDF 内容预览：{panel.referencedFileId}]
             </div>
           </div>
         ) : isImage ? (
           <div className="w-full h-full flex items-center justify-center bg-gray-100 rounded border border-gray-200">
             <ImageIcon className="w-16 h-16 text-gray-300" />
-            <span className="ml-2 text-gray-400 text-sm">Image Preview</span>
+            <span className="ml-2 text-gray-400 text-sm">图片预览</span>
           </div>
         ) : isVideo ? (
           <div className="w-full aspect-video bg-black rounded flex items-center justify-center group cursor-pointer relative">
@@ -65,7 +65,7 @@ export default function ResourcePanel({ panel, onClose, onRemove, onReplaceRefer
           </div>
         ) : (
           <div className="w-full h-full bg-white border border-gray-200 p-6 text-sm text-gray-700 font-mono whitespace-pre-wrap overflow-auto">
-            {`// Mock text content for ${panel.referencedFileId}
+            {`// ${panel.referencedFileId} 的文本内容预览
 
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.`}
           </div>

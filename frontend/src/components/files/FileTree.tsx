@@ -94,25 +94,25 @@ const getEmptyStateCopy = (
   hasFilterQuery: boolean
 ) => {
   if (hasFilterQuery) {
-    return 'No resources match this filter.';
+    return '没有资源匹配当前筛选。';
   }
 
   if (explorerView === 'tags') {
-    if (fileFilterMode === 'source') return 'No tagged sources in this scope yet.';
-    if (fileFilterMode === 'generated') return 'No tagged generated outputs yet.';
-    if (fileFilterMode === 'workspace') return 'No tagged workspace files in this scope yet.';
-    return 'No tagged files in this scope yet.';
+    if (fileFilterMode === 'source') return '当前范围还没有带标签的来源。';
+    if (fileFilterMode === 'generated') return '还没有带标签的生成结果。';
+    if (fileFilterMode === 'workspace') return '当前范围还没有带标签的 workspace 文件。';
+    return '当前范围还没有带标签的文件。';
   }
 
-  if (fileFilterMode === 'source') return 'No sources yet. Add files, links, or pasted text.';
-  if (fileFilterMode === 'generated') return 'No generated outputs yet.';
-  if (fileFilterMode === 'workspace') return 'No workspace files yet. Create a note or file to begin.';
-  return 'No files in this folder yet.';
+  if (fileFilterMode === 'source') return '还没有来源。可以添加文件、链接或粘贴文本。';
+  if (fileFilterMode === 'generated') return '还没有生成结果。';
+  if (fileFilterMode === 'workspace') return '还没有 workspace 文件。新建笔记或文件即可开始。';
+  return '这个文件夹里还没有文件。';
 };
 
 const getEmptyStateAction = (fileFilterMode: FileTreeProps['fileFilterMode']) => {
   if (fileFilterMode === 'workspace') {
-    return 'Create a folder to start';
+    return '创建文件夹开始';
   }
 
   return null;
@@ -429,7 +429,7 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
     try {
       await commands.moveNode(dragIds[0], parentId);
     } catch (moveError: any) {
-      alert(moveError?.response?.data?.error || moveError?.message || 'Failed to move file');
+      alert(moveError?.response?.data?.error || moveError?.message || '移动文件失败');
     }
   };
 
@@ -438,7 +438,7 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
     try {
       await commands.renameNode(id, name);
     } catch (renameError: any) {
-      alert(renameError?.response?.data?.error || renameError?.message || 'Failed to rename file');
+      alert(renameError?.response?.data?.error || renameError?.message || '重命名文件失败');
     }
   };
 
@@ -460,7 +460,7 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
       const target = parentId || parentPath ? { parentId, parentPath } : getDefaultTarget();
       await commands.createFile(name, target.parentId || undefined, target.parentPath || undefined);
     } catch (createError: any) {
-      alert(createError?.response?.data?.error || createError?.message || 'Failed to create file');
+      alert(createError?.response?.data?.error || createError?.message || '创建文件失败');
     }
   };
 
@@ -473,7 +473,7 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
       const normalizedName = /\.[^./]+$/.test(name) ? name : `${name}.md`;
       await commands.createFile(normalizedName, target.parentId || undefined, target.parentPath || undefined);
     } catch (createError: any) {
-      alert(createError?.response?.data?.error || createError?.message || 'Failed to create note');
+      alert(createError?.response?.data?.error || createError?.message || '创建笔记失败');
     }
   };
 
@@ -485,7 +485,7 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
       const target = parentId || parentPath ? { parentId, parentPath } : getDefaultTarget();
       await commands.createFolder(name, target.parentId || undefined, target.parentPath || undefined);
     } catch (createError: any) {
-      alert(createError?.response?.data?.error || createError?.message || 'Failed to create folder');
+      alert(createError?.response?.data?.error || createError?.message || '创建文件夹失败');
     }
   };
 
@@ -505,14 +505,14 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
           target.parentPath || undefined
         );
       } catch (uploadError: any) {
-        alert(uploadError?.response?.data?.error || uploadError?.message || 'Failed to upload files');
+        alert(uploadError?.response?.data?.error || uploadError?.message || '上传文件失败');
       }
     };
     input.click();
   };
 
   const handleMoveTo = async (id: string) => {
-    const targetPath = prompt('Move to folder path (use / for root):', '/');
+    const targetPath = prompt('移动到文件夹路径（使用 / 表示根目录）：', '/');
     if (targetPath == null) return;
 
     const normalizedTargetPath = normalizePath(targetPath);
@@ -522,19 +522,19 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
         : visibleFiles.find((file) => file.nodeType === 'folder' && file.path === normalizedTargetPath);
 
     if (normalizedTargetPath !== '/' && !targetParent) {
-      alert(`Folder not found: ${normalizedTargetPath}`);
+      alert(`未找到文件夹：${normalizedTargetPath}`);
       return;
     }
 
     try {
       await commands.moveNode(id, targetParent?.id || undefined);
     } catch (moveError: any) {
-      alert(moveError?.response?.data?.error || moveError?.message || 'Failed to move file');
+      alert(moveError?.response?.data?.error || moveError?.message || '移动文件失败');
     }
   };
 
   if (visibleLoading && visibleFiles.length === 0) {
-    return <div className="p-4 text-sm text-[var(--wb-text-muted)]">Loading files...</div>;
+    return <div className="p-4 text-sm text-[var(--wb-text-muted)]">正在加载文件...</div>;
   }
 
   if (visibleError) {
@@ -609,7 +609,7 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
             }`}
           >
             <Tag className="h-3.5 w-3.5" />
-            Tags
+            标签
           </button>
         </div>
       </div>
@@ -695,7 +695,7 @@ export const FileTreeComponent: React.FC<FileTreeProps> = ({
           onClose={() => setContextMenu(null)}
           onRename={(id) => treeRef.current?.get(id)?.edit()}
           onDelete={async (id) => {
-            if (confirm('Delete this item?')) {
+            if (confirm('删除这个项目吗？')) {
               await commands.deleteNode(id);
             }
           }}

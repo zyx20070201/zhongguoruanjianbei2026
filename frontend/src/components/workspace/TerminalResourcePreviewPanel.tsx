@@ -44,6 +44,20 @@ const parseJsonRecord = (value: string): Record<string, any> | null => {
   }
 };
 
+const looksLikeLightVisualLessonContent = (content: string) => {
+  const parsed = parseJsonRecord(content);
+  const payload = isRecord(parsed?.payload) ? parsed.payload : parsed;
+  return Array.isArray(payload?.slides) && (
+    payload.schemaVersion === 'light_visual_lesson.v1' ||
+    payload.schemaVersion === 'light_visual_lesson' ||
+    typeof payload.title === 'string' ||
+    payload.slides.some((slide: any) => isRecord(slide) && ('header' in slide || 'visuals' in slide || 'timeline' in slide))
+  );
+};
+
+const looksLikeReactChatVisualContent = (content: string) =>
+  /~~~(?:REACT_VIZ|HTML_VIZ)(?:[^\S\r\n]*\r?\n|[^\S\r\n]+|$)/i.test(content);
+
 const isLightVisualPreview = (preview: TerminalResourcePreview) =>
   preview.templateId === 'light_visual_lesson' ||
   preview.renderer === 'light_visual_lesson' ||
@@ -81,7 +95,7 @@ const extractVisualCodeLessonPayloadFromText = (
   if (payload?.schemaVersion === 'visual_code_lesson.v1' && typeof payload.contentMarkdown === 'string') {
     return payload as unknown as VisualCodeLessonPayload;
   }
-  if (/~~~(?:REACT_VIZ|HTML_VIZ)\s*\n/i.test(content)) {
+  if (looksLikeReactChatVisualContent(content)) {
     return {
       schemaVersion: 'visual_code_lesson.v1',
       title,
@@ -174,7 +188,7 @@ function UrlPreviewBody({
         if (!cancelled) setPreviewData(result);
       })
       .catch((previewError) => {
-        if (!cancelled) setError(previewError?.response?.data?.error || previewError?.message || 'Failed to extract webpage content.');
+        if (!cancelled) setError(previewError?.response?.data?.error || previewError?.message || '提取网页内容失败。');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -209,7 +223,7 @@ function UrlPreviewBody({
     return (
       <div className="flex h-full items-center justify-center gap-3 bg-white px-6 text-sm text-gray-500">
         <Loader2 className="size-4 animate-spin" />
-        Extracting webpage content...
+        正在提取网页内容...
       </div>
     );
   }
@@ -228,9 +242,9 @@ function UrlPreviewBody({
             <div className="mt-3 break-all text-sm text-[#777a80]">{displayedUrl}</div>
             {(previewData?.byline || previewData?.siteName || previewData?.excerpt) ? (
               <div className="mt-4 space-y-1 text-sm leading-6 text-[#70757a]">
-                {previewData.siteName ? <div>Site: {previewData.siteName}</div> : null}
-                {previewData.byline ? <div>Byline: {previewData.byline}</div> : null}
-                {previewData.excerpt ? <div>Excerpt: {previewData.excerpt}</div> : null}
+                {previewData.siteName ? <div>网站：{previewData.siteName}</div> : null}
+                {previewData.byline ? <div>作者：{previewData.byline}</div> : null}
+                {previewData.excerpt ? <div>摘要：{previewData.excerpt}</div> : null}
               </div>
             ) : null}
           </div>
@@ -253,7 +267,7 @@ function UrlPreviewBody({
 
   return (
     <div className="flex h-full items-center justify-center p-6 text-center text-sm text-gray-500">
-      {error || 'No readable webpage content could be extracted from this link.'}
+      {error || '无法从这个链接提取可读网页内容。'}
     </div>
   );
 }
@@ -292,7 +306,7 @@ function PreviewBody({
         if (!cancelled) setFileContent(String(result.content || ''));
       })
       .catch((contentError) => {
-        if (!cancelled) setFileContentError(contentError?.response?.data?.error || contentError?.message || 'Failed to load file content.');
+        if (!cancelled) setFileContentError(contentError?.response?.data?.error || contentError?.message || '加载文件内容失败。');
       })
       .finally(() => {
         if (!cancelled) setFileContentLoading(false);
@@ -303,6 +317,8 @@ function PreviewBody({
   }, [preview.fileObjectId, shouldLoadFileContent, workspaceId]);
 
   const content = String(fileContent || preview.previewContent || '').trim();
+  const contentLooksLikeLightVisual = looksLikeLightVisualLessonContent(content);
+  const contentLooksLikeReactChatVisual = looksLikeReactChatVisualContent(content);
   const parts = useMemo(() => parseResponse(content), [content]);
   const displayParts = parts.filter((part) => part.type === 'text' || part.code.trim());
   const hasVisualParts = displayParts.some((part) => part.type === 'html' || part.type === 'react');
@@ -311,10 +327,20 @@ function PreviewBody({
     [content, preview.title]
   );
   const visualCodeLesson = useMemo(
-    () => isReactChatVisualPreview(preview)
+    () => isReactChatVisualPreview(preview) || contentLooksLikeReactChatVisual
       ? extractVisualCodeLessonPayloadFromText(content, preview.title)
       : null,
-    [content, preview]
+    [
+      content,
+      contentLooksLikeReactChatVisual,
+      preview.filename,
+      preview.framework,
+      preview.kind,
+      preview.renderer,
+      preview.subtitle,
+      preview.templateId,
+      preview.title
+    ]
   );
   const quizPractice = useMemo(
     () => extractQuizPracticePayloadFromText(content, preview.title),
@@ -329,12 +355,12 @@ function PreviewBody({
     return (
       <div className="flex h-full items-center justify-center gap-3 bg-white px-6 text-sm text-gray-500">
         <Loader2 className="size-4 animate-spin" />
-        Loading full preview...
+        正在加载完整预览...
       </div>
     );
   }
 
-  if (isLightVisualPreview(preview) || lightVisualLesson) {
+  if (isLightVisualPreview(preview) || contentLooksLikeLightVisual || lightVisualLesson) {
     return (
       <LightVisualLessonViewer
         result={{ name: preview.title, content }}
@@ -358,7 +384,7 @@ function PreviewBody({
     }
     return (
       <div className="flex h-full min-h-[420px] items-center justify-center p-6 text-center text-sm text-gray-500">
-        Practice preview is still loading or the quiz payload could not be parsed.
+        练习预览仍在加载，或无法解析测验内容。
       </div>
     );
   }
@@ -389,7 +415,7 @@ function PreviewBody({
               <div key={`${part.type}-${index}`} className="h-[440px] overflow-hidden rounded-lg border border-gray-100 bg-white">
                 <HtmlFrame
                   content={part.code}
-                  title={`Preview ${visualIndex}`}
+                  title={`预览 ${visualIndex}`}
                 />
               </div>
             );
@@ -400,7 +426,7 @@ function PreviewBody({
               vizId={`terminal-preview-${preview.id}-${index}`}
               type={part.type}
               code={part.code}
-              title={`Preview ${visualIndex}`}
+              title={`预览 ${visualIndex}`}
               initialHeight={440}
             />
           );
@@ -435,7 +461,7 @@ function PreviewBody({
     <div className="flex h-full min-h-[420px] items-center justify-center p-6 text-center text-sm text-gray-500">
       <div>
         <FileText className="mx-auto mb-3 size-6 text-gray-300" />
-        No preview content is available for this resource.
+        这个资源暂无可预览内容。
       </div>
     </div>
   );
@@ -457,7 +483,7 @@ export default function TerminalResourcePreviewPanel({
   const content = String(preview.previewContent || preview.url || '');
   const [importing, setImporting] = useState(false);
   const [imported, setImported] = useState(false);
-  const importLabel = workbenchId ? 'Import to workbench' : 'Import';
+  const importLabel = workbenchId ? '导入到 workbench' : '导入';
 
   const importSource = async () => {
     if (!preview.url || importing || imported) return;
@@ -475,11 +501,11 @@ export default function TerminalResourcePreviewPanel({
   };
 
   return (
-    <div id="artifacts-container" className="relative flex h-full min-h-0 w-full flex-col bg-white">
-      <div className="relative flex h-full w-full flex-1 flex-col">
-        <div className="pointer-events-auto z-20 flex items-center justify-between p-2.5 text-gray-900">
-          <div className="flex flex-1 items-center justify-between pr-1">
-            <div className="flex items-center space-x-2">
+    <div id="artifacts-container" className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-white">
+      <div className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="pointer-events-auto z-20 flex min-w-0 shrink-0 items-center justify-between gap-2 p-2.5 text-gray-900">
+          <div className="flex min-w-0 flex-1 items-center justify-between gap-2 pr-1">
+            <div className="min-w-0 flex items-center space-x-2">
               <div className="flex min-w-fit items-center gap-0.5 self-center" dir="ltr">
                 <button
                   type="button"
@@ -498,7 +524,7 @@ export default function TerminalResourcePreviewPanel({
                   </svg>
                 </button>
 
-                <div className="min-w-fit self-center text-xs">Version 1 of 1</div>
+                <div className="min-w-fit self-center text-xs">版本 1 / 1</div>
 
                 <button
                   type="button"
@@ -519,7 +545,7 @@ export default function TerminalResourcePreviewPanel({
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 shrink-0 items-center gap-1.5">
               {preview.url ? (
                 <button
                   type="button"
@@ -529,7 +555,7 @@ export default function TerminalResourcePreviewPanel({
                   title={importLabel}
                 >
                   {imported ? <FileCheck2 className="size-3.5" /> : importing ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
-                  {imported ? 'Imported' : 'Import'}
+                  {imported ? '已导入' : '导入'}
                 </button>
               ) : null}
               <button
@@ -538,7 +564,7 @@ export default function TerminalResourcePreviewPanel({
                 disabled={!content}
                 className="copy-code-button rounded-md border-none bg-gray-50 px-1.5 py-0.5 text-xs transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Copy
+                复制
               </button>
 
               {fileUrl ? (
@@ -546,7 +572,7 @@ export default function TerminalResourcePreviewPanel({
                   href={fileUrl}
                   download
                   className="rounded-md border-none bg-gray-50 p-0.5 text-xs transition hover:bg-gray-100"
-                  title="Download"
+                  title="下载"
                 >
                   <Download className="size-3.5" />
                 </a>
@@ -558,7 +584,7 @@ export default function TerminalResourcePreviewPanel({
                   target="_blank"
                   rel="noreferrer"
                   className="rounded-md border-none bg-gray-50 p-0.5 text-xs transition hover:bg-gray-100"
-                  title="Open in full screen"
+                  title="全屏打开"
                 >
                   <Expand className="size-3.5" />
                 </a>
@@ -569,14 +595,14 @@ export default function TerminalResourcePreviewPanel({
           <button
             type="button"
             onClick={onClose}
-            className="pointer-events-auto self-center rounded-full bg-white p-1"
-            aria-label="Close resource preview"
+            className="pointer-events-auto shrink-0 self-center rounded-full bg-white p-1"
+            aria-label="关闭资源预览"
           >
             <X className="size-3.5 text-gray-900" />
           </button>
         </div>
 
-        <div className="h-full w-full flex-1">
+        <div className="min-h-0 w-full flex-1 overflow-hidden">
           <div className="flex h-full flex-col">
             <div className="h-full w-full max-w-full">
               <PreviewBody preview={preview} workspaceId={workspaceId} />

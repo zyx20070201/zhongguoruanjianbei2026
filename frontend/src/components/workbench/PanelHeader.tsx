@@ -36,8 +36,8 @@ export default function PanelHeader({ panel, onClose, onRemove, onReplaceReferen
       </div>
       
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        {panel.state?.saving && <span className="text-[10px] text-gray-400 mr-2">Saving...</span>}
-        {panel.state?.saved && <span className="text-[10px] text-green-500 mr-2">Saved</span>}
+        {panel.state?.saving && <span className="text-[10px] text-gray-400 mr-2">保存中...</span>}
+        {panel.state?.saved && <span className="text-[10px] text-green-500 mr-2">已保存</span>}
         
         <div className="relative">
           <button 
@@ -54,16 +54,16 @@ export default function PanelHeader({ panel, onClose, onRemove, onReplaceReferen
                 {panel.type !== 'ai-assistant' && (
                   <>
                     <button className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2" onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onReplaceReference(); }}>
-                      <ExternalLink className="w-3.5 h-3.5" /> Replace Reference
+                      <ExternalLink className="w-3.5 h-3.5" /> 替换引用
                     </button>
-                    <button className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2" onClick={(e) => { e.stopPropagation(); setMenuOpen(false); alert('Mock: Open in File System'); }}>
-                      <BookOpen className="w-3.5 h-3.5" /> Open in File System
+                    <button className="w-full text-left px-4 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2" onClick={(e) => { e.stopPropagation(); setMenuOpen(false); alert('预览：在文件系统中打开'); }}>
+                      <BookOpen className="w-3.5 h-3.5" /> 在文件系统中打开
                     </button>
                     <div className="h-px bg-gray-100 my-1"></div>
                   </>
                 )}
                 <button className="w-full text-left px-4 py-2 text-xs text-red-600 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onRemove(); }}>
-                  Remove from Workbench
+                  从 workbench 中移除
                 </button>
               </div>
             </>

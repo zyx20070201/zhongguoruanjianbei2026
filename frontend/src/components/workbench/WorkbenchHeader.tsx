@@ -57,7 +57,7 @@ export default function WorkbenchHeader({
         <button 
           onClick={() => navigate(`/workspaces/${workspaceId}`)}
           className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 transition-colors"
-          title="Back to Workspace"
+          title="返回 Workspace"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
@@ -70,7 +70,7 @@ export default function WorkbenchHeader({
             {getTypeIcon(workbenchType)}
             {workbenchType}
           </div>
-          <span className="text-xs text-gray-400 ml-2">Updated {updatedAt}</span>
+          <span className="text-xs text-gray-400 ml-2">更新于 {updatedAt}</span>
         </div>
       </div>
 
@@ -80,7 +80,7 @@ export default function WorkbenchHeader({
           className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-100 rounded-md transition-colors"
         >
           <Plus className="w-4 h-4" />
-          <span>Add Panel</span>
+          <span>添加面板</span>
         </button>
         
         <button 
@@ -88,7 +88,7 @@ export default function WorkbenchHeader({
           className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
         >
           <LayoutTemplate className="w-4 h-4" />
-          <span className="hidden sm:inline">Templates</span>
+          <span className="hidden sm:inline">模板</span>
         </button>
 
         <div className="w-px h-5 bg-gray-200 mx-1"></div>
@@ -98,7 +98,7 @@ export default function WorkbenchHeader({
           className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md shadow-sm transition-colors"
         >
           <Save className="w-4 h-4" />
-          <span>Save Layout</span>
+          <span>保存布局</span>
         </button>
 
         <div className="relative">
@@ -113,10 +113,10 @@ export default function WorkbenchHeader({
             <>
               <div className="fixed inset-0 z-10" onClick={() => setMoreMenuOpen(false)}></div>
               <div className="absolute right-0 mt-1 w-48 bg-white rounded-md shadow-lg border border-gray-100 py-1 z-20">
-                <button className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50" onClick={() => { setMoreMenuOpen(false); onRename(); }}>Rename Workbench</button>
-                <button className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50" onClick={() => { setMoreMenuOpen(false); onDuplicate(); }}>Duplicate Workbench</button>
+                <button className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50" onClick={() => { setMoreMenuOpen(false); onRename(); }}>重命名 Workbench</button>
+                <button className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50" onClick={() => { setMoreMenuOpen(false); onDuplicate(); }}>复制 Workbench</button>
                 <div className="h-px bg-gray-100 my-1"></div>
-                <button className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50" onClick={() => { setMoreMenuOpen(false); onDelete(); }}>Delete Workbench</button>
+                <button className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50" onClick={() => { setMoreMenuOpen(false); onDelete(); }}>删除 Workbench</button>
               </div>
             </>
           )}

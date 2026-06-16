@@ -45,7 +45,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
   workbenchId,
   onFileSelect,
   onFileDoubleClick,
-  title = 'Explorer',
+  title = '文件浏览器',
   embedded = false,
   hideHeader = false,
   showEmbeddedActions = false,
@@ -117,31 +117,31 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
   };
 
   const handleCreateFile = async () => {
-    const name = prompt('Enter file name (e.g., new-file.md):');
+    const name = prompt('请输入文件名（例如 new-file.md）：');
     if (!name) return;
 
     const { parentId, parentPath } = getTargetFolder();
     try {
       await createFile(name, parentId, parentPath);
     } catch (error: any) {
-      alert(getErrorMessage(error, 'Failed to create file'));
+      alert(getErrorMessage(error, '创建文件失败'));
     }
   };
 
   const handleCreateFolder = async () => {
-    const name = prompt('Enter folder name:');
+    const name = prompt('请输入文件夹名称：');
     if (!name) return;
 
     const { parentId, parentPath } = getTargetFolder();
     try {
       await createFolder(name, parentId, parentPath);
     } catch (error: any) {
-      alert(getErrorMessage(error, 'Failed to create folder'));
+      alert(getErrorMessage(error, '创建文件夹失败'));
     }
   };
 
   const handleCreateNote = async () => {
-    const name = prompt('Enter note name (e.g., untitled-note.md):', 'untitled-note.md');
+    const name = prompt('请输入笔记名称（例如 untitled-note.md）：', 'untitled-note.md');
     if (!name) return;
 
     const finalName = /\.[^./]+$/.test(name) ? name : `${name}.md`;
@@ -155,7 +155,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
       });
       setIsCreateMenuOpen(false);
     } catch (error: any) {
-      alert(getErrorMessage(error, 'Failed to create note'));
+      alert(getErrorMessage(error, '创建笔记失败'));
     }
   };
 
@@ -168,7 +168,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
     try {
       await uploadFiles(files, parentId, parentPath);
     } catch (error: any) {
-      alert(getErrorMessage(error, 'Failed to upload files'));
+      alert(getErrorMessage(error, '上传文件失败'));
     }
   };
 
@@ -256,7 +256,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
           codexPanel ? 'text-[#34373c] hover:bg-[#f6f6f4]' : 'text-[var(--wb-text)] hover:bg-white/5'
         }`}
       >
-        <FilePlus2 size={14} /> New File
+        <FilePlus2 size={14} /> 新建文件
       </button>
       <button
         onClick={() => void handleCreateNote()}
@@ -264,7 +264,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
           codexPanel ? 'text-[#34373c] hover:bg-[#f6f6f4]' : 'text-[var(--wb-text)] hover:bg-white/5'
         }`}
       >
-        <FileText size={14} /> New Note
+        <FileText size={14} /> 新建笔记
       </button>
       <button
         onClick={() => {
@@ -275,7 +275,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
           codexPanel ? 'text-[#34373c] hover:bg-[#f6f6f4]' : 'text-[var(--wb-text)] hover:bg-white/5'
         }`}
       >
-        <FolderPlus size={14} /> New Folder
+        <FolderPlus size={14} /> 新建文件夹
       </button>
     </div>
   );
@@ -321,7 +321,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
         <div className={`pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-[var(--wb-accent)] bg-[rgba(90,166,255,0.14)] text-sm font-medium ${
           codexPanel ? 'text-[#1683ff]' : 'text-[#d9eaff]'
         }`}>
-          Drop files to upload
+          松开即可上传文件
         </div>
       )}
       {embedded && showEmbeddedActions && (
@@ -341,7 +341,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
                   ? 'inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[#777b80] hover:bg-[#f1f1ef] hover:text-[#202124]'
                   : 'inline-flex h-6 items-center gap-1 rounded px-2 text-[var(--wb-text-dim)] hover:bg-white/5 hover:text-[var(--wb-text)]'
                 }
-                title="Create"
+                title="新建"
               >
                 <FilePlus2 size={15} />
                 <ChevronDown size={12} />
@@ -351,14 +351,14 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
             <button 
               onClick={handleUpload}
               className={explorerButtonClass}
-              title="Upload"
+              title="上传"
             >
               <Upload size={15} />
             </button>
             <button 
               onClick={() => setCollapseSignal(signal => signal + 1)}
               className={explorerButtonClass}
-              title="Collapse Folders"
+              title="折叠文件夹"
             >
               <ChevronsUp size={15} />
             </button>
@@ -366,7 +366,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
               onClick={refresh}
               disabled={loading}
               className={explorerButtonClass}
-              title="Refresh Explorer"
+              title="刷新文件浏览器"
             >
               <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
             </button>
@@ -381,7 +381,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
               value={filterQuery}
               onChange={(event) => setFilterQuery(event.target.value)}
               className="min-w-0 flex-1 bg-transparent text-sm text-[#202124] outline-none placeholder:text-[#a8aaad]"
-              placeholder="Filter files..."
+              placeholder="筛选文件..."
             />
           </label>
         </div>
@@ -397,7 +397,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
         <button
           onClick={() => setIsCollapsed(value => !value)}
           className="absolute -right-3 top-1/2 z-30 inline-flex h-8 w-6 -translate-y-1/2 items-center justify-center rounded-r-md border border-l-0 border-[var(--wb-border)] bg-[var(--wb-sidebar-alt)] text-[var(--wb-text-dim)] shadow-sm hover:bg-[var(--wb-sidebar)] hover:text-[var(--wb-text)]"
-          title={isCollapsed ? 'Open Explorer' : 'Minimize Explorer'}
+          title={isCollapsed ? '展开文件浏览器' : '收起文件浏览器'}
         >
           {isCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
         </button>
@@ -410,7 +410,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
             <button
               onClick={() => setIsCreateMenuOpen((value) => !value)}
               className="inline-flex h-6 items-center gap-1 rounded px-2 text-[var(--wb-text-dim)] hover:bg-white/5 hover:text-[var(--wb-text)]"
-              title="Create"
+              title="新建"
             >
               <FilePlus2 size={15} />
               <ChevronDown size={12} />
@@ -420,14 +420,14 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
           <button 
             onClick={handleUpload}
             className={explorerButtonClass}
-            title="Upload"
+            title="上传"
           >
             <Upload size={15} />
           </button>
           <button 
             onClick={() => setCollapseSignal(signal => signal + 1)}
             className={explorerButtonClass}
-            title="Collapse Folders"
+            title="折叠文件夹"
           >
             <ChevronsUp size={15} />
           </button>
@@ -435,7 +435,7 @@ export const FileSystemSidebar: React.FC<FileSystemSidebarProps> = ({
             onClick={refresh}
             disabled={loading}
             className={explorerButtonClass}
-            title="Refresh Explorer"
+            title="刷新文件浏览器"
           >
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
           </button>

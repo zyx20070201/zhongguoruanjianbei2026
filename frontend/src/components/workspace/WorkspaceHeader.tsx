@@ -29,7 +29,7 @@ export default function WorkspaceHeader({
         <button 
           onClick={() => navigate('/workspaces')}
           className="rounded-full p-2 text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)]"
-          title="Back to Dashboard"
+          title="返回控制台"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
@@ -44,7 +44,7 @@ export default function WorkspaceHeader({
             </span>
           </div>
           <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--app-muted)]">
-            Updated {updatedAt}
+            更新于 {updatedAt}
           </p>
         </div>
       </div>
@@ -55,7 +55,7 @@ export default function WorkspaceHeader({
           className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--app-text)] transition-colors hover:bg-[var(--app-hover)]"
         >
           <Upload className="w-4 h-4" />
-          <span className="hidden sm:inline">Upload</span>
+          <span className="hidden sm:inline">上传</span>
         </button>
         
         <button 
@@ -63,13 +63,13 @@ export default function WorkspaceHeader({
           className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--app-text)] transition-colors hover:bg-[var(--app-hover)]"
         >
           <Plus className="w-4 h-4" />
-          <span className="hidden sm:inline">New Workbench</span>
+          <span className="hidden sm:inline">新建 Workbench</span>
         </button>
 
         <button 
           onClick={onOpenSettings}
           className="rounded-lg p-2 text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)]"
-          title="Workspace Settings"
+          title="Workspace 设置"
         >
           <Settings className="w-5 h-5" />
         </button>
@@ -77,7 +77,7 @@ export default function WorkspaceHeader({
         <button
           onClick={onLogout}
           className="rounded-lg p-2 text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)]"
-          title="Logout"
+          title="退出登录"
         >
           <LogOut className="w-5 h-5" />
         </button>

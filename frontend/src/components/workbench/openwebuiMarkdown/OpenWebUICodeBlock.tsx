@@ -220,12 +220,12 @@ function MermaidPreview({ code, id }: { code: string; id: string }) {
   if (error) {
     return (
       <div className="border border-red-600/10 bg-red-600/10 px-4 py-3 text-sm text-red-800">
-        Failed to render diagram: {error}
+        图表渲染失败：{error}
       </div>
     );
   }
 
-  return <div className="px-4 py-3 text-xs text-gray-500">Rendering diagram...</div>;
+  return <div className="px-4 py-3 text-xs text-gray-500">正在渲染图表...</div>;
 }
 
 export default function OpenWebUICodeBlock({
@@ -242,7 +242,7 @@ export default function OpenWebUICodeBlock({
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
   const normalizedLang = lang.trim().toLowerCase();
-  const displayLang = lang || 'Code';
+  const displayLang = lang || '代码';
   const closedFence = raw ? raw.trimEnd().endsWith('```') || raw.trimEnd().endsWith('~~~') : true;
   const canRenderMermaid = normalizedLang === 'mermaid' && closedFence;
 
@@ -290,7 +290,7 @@ export default function OpenWebUICodeBlock({
                   <span className="-translate-y-[0.5px]">
                     <ChevronsUpDown className="size-3" />
                   </span>
-                  <span>{collapsed ? 'Expand' : 'Collapse'}</span>
+                  <span>{collapsed ? '展开' : '收起'}</span>
                 </button>
 
                 {editable ? (
@@ -299,7 +299,7 @@ export default function OpenWebUICodeBlock({
                     onClick={saveCode}
                     className="rounded-md border-none bg-white px-1.5 py-0.5 transition hover:bg-gray-50"
                   >
-                    {saved ? 'Saved' : 'Save'}
+                    {saved ? '已保存' : '保存'}
                   </button>
                 ) : null}
 
@@ -309,7 +309,7 @@ export default function OpenWebUICodeBlock({
                   className="flex items-center gap-1 rounded-md border-none bg-white px-1.5 py-0.5 transition hover:bg-gray-50"
                 >
                   {copied ? <Check className="size-3" /> : null}
-                  <span>{copied ? 'Copied' : 'Copy'}</span>
+                  <span>{copied ? '已复制' : '复制'}</span>
                 </button>
               </div>
             </div>
@@ -317,7 +317,7 @@ export default function OpenWebUICodeBlock({
             <div className={`language-${normalizedLang} overflow-hidden ${collapsed ? 'rounded-b-2xl' : ''}`}>
               {collapsed ? (
                 <div className="flex flex-col gap-2 rounded-b-2xl bg-white px-4 pb-2 pt-1 text-xs">
-                  <span className="italic text-gray-500">{value.split('\n').length} hidden lines</span>
+                  <span className="italic text-gray-500">已隐藏 {value.split('\n').length} 行</span>
                 </div>
               ) : (
                 <OpenWebUICodeEditor id={id} code={value} lang={normalizedLang} editable={editable} onChange={setValue} onSave={saveCode} />

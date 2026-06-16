@@ -653,6 +653,19 @@ export default function WorkspaceDetailPage() {
     if (!title) return;
     void createWorkbench(title);
   };
+  const removeWorkbenchesLocally = (workbenchIds: string[]) => {
+    const idSet = new Set(workbenchIds);
+    setWorkbenches((current) => current.filter((workbench) => !idSet.has(workbench.id)));
+    setWorkspace((current) => current
+      ? {
+          ...current,
+          workbenches: Array.isArray(current.workbenches)
+            ? current.workbenches.filter((workbench) => !idSet.has(workbench.id))
+            : current.workbenches
+        }
+      : current
+    );
+  };
   const deleteWorkbench = async (workbenchId: string) => {
     const target = workbenches.find((workbench) => workbench.id === workbenchId);
     const title = target?.title || '这个学习现场';
@@ -663,7 +676,7 @@ export default function WorkspaceDetailPage() {
     setWorkbenchActionError(null);
     try {
       await workbenchApi.delete(workbenchId);
-      await fetchWorkspace();
+      removeWorkbenchesLocally([workbenchId]);
       setOpenWorkbenchMenuId(null);
       setWorkbenchMenuPosition(null);
       setSelectedWorkbenchIds((current) => {
@@ -693,10 +706,10 @@ export default function WorkspaceDetailPage() {
     setWorkbenchActionError(null);
     try {
       await Promise.all(ids.map((workbenchId) => workbenchApi.delete(workbenchId)));
+      removeWorkbenchesLocally(ids);
       setSelectedWorkbenchIds(new Set());
       setOpenWorkbenchMenuId(null);
       setWorkbenchMenuPosition(null);
-      await fetchWorkspace();
     } catch (error) {
       console.error('Failed to delete selected workbenches:', error);
       const message = axios.isAxiosError(error)

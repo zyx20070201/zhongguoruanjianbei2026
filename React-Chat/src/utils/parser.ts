@@ -2,7 +2,7 @@ import type { ParsedPart } from '../types';
 
 export function parseResponse(text: string): ParsedPart[] {
   const parts: ParsedPart[] = [];
-  const regex = /~~~(HTML_VIZ|REACT_VIZ)\s*\n([\s\S]*?)~~~/g;
+  const regex = /~~~(HTML_VIZ|REACT_VIZ)[^\S\r\n]*(?:\r?\n)?([\s\S]*?)~~~/g;
   let last = 0;
   let match: RegExpExecArray | null;
 
@@ -21,7 +21,7 @@ export function parseResponse(text: string): ParsedPart[] {
   if (after) {
     // Handle truncated output — opening tag without closing
     const truncMatch = after.match(
-      /^~~~(HTML_VIZ|REACT_VIZ)\s*\n([\s\S]+)/,
+      /^~~~(HTML_VIZ|REACT_VIZ)[^\S\r\n]*(?:\r?\n)?([\s\S]+)/,
     );
     if (truncMatch) {
       const vt = truncMatch[1] === 'HTML_VIZ' ? 'html' : 'react';

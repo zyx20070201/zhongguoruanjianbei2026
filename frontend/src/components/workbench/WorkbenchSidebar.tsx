@@ -1,6 +1,8 @@
 import {
   ChevronDown,
   CheckCircle2,
+  ChevronRight,
+  Folder,
   Target,
   Upload
 } from 'lucide-react';
@@ -11,14 +13,15 @@ import {
   OWDocumentPageIcon,
   OWEllipsisHorizontalIcon,
   OWPencilSquareIcon,
-  OWSearchIcon,
   OWWorkspaceIcon
 } from '../common/openWebUIIcons';
 import { EditorState, ResourceReference } from '../../types';
+import type { FileSystemObject } from '../../types';
 
 interface WorkbenchSidebarProps {
   editors: EditorState[];
   resources: ResourceReference[];
+  workspaceFiles?: FileSystemObject[];
   plans?: WorkbenchSidebarPlan[];
   currentWorkbenchId: string;
   activeEditorId: string | null;
@@ -26,12 +29,11 @@ interface WorkbenchSidebarProps {
   isExpanded: boolean;
   onActivateEditor: (editorId: string) => void;
   onResourceOpen: (resource: ResourceReference) => void;
+  onWorkspaceFileOpen?: (file: FileSystemObject) => void;
   onNewChat: () => void;
   onNewNote: () => void;
-  onNewPlan: () => void;
   onOpenAIStudio: () => void;
   onUploadResources: () => void;
-  onSearch: () => void;
   onResourceDuplicate: (resource: ResourceReference) => void;
   onResourceDelete: (resource: ResourceReference) => void;
   onResourceReorder: (orderedIds: string[]) => void;
@@ -77,6 +79,14 @@ interface WorkbenchSidebarPlan {
 
 type ResourceSectionKey = 'source' | 'workspace' | 'generated';
 type WorkbenchSidebarSectionKey = ResourceSectionKey | 'plans';
+type WorkspaceTreeNode = {
+  id: string;
+  name: string;
+  path: string;
+  type: 'folder' | 'file';
+  file?: FileSystemObject;
+  children: WorkspaceTreeNode[];
+};
 type SidebarVisualState = 'collapsed' | 'opening' | 'expanded' | 'closing';
 type DragResourceItem = {
   type: 'WORKBENCH_RESOURCE';
@@ -118,10 +128,10 @@ const getResourceSize = (resource: ResourceReference) => {
 };
 
 const getResourceCapsuleType = (resource: ResourceReference, sectionKey: ResourceSectionKey) => {
-  if (sectionKey === 'source') return 'Source';
-  if (resource.resourceType === 'note' || resource.fileCategory?.includes('note')) return 'Note';
-  if (sectionKey === 'generated') return 'Generated';
-  return 'File';
+  if (sectionKey === 'source') return '资料源';
+  if (resource.resourceType === 'note' || resource.fileCategory?.includes('note')) return '笔记';
+  if (sectionKey === 'generated') return '生成内容';
+  return '文件';
 };
 
 const formatPlanDate = (value?: string) => {
@@ -132,7 +142,7 @@ const formatPlanDate = (value?: string) => {
 };
 
 const getPlanTitle = (plan: WorkbenchSidebarPlan) =>
-  String(plan.structuredPlan?.objective || plan.objective || plan.structuredPlan?.title || 'Learning plan').replace(/\s+/g, ' ').trim();
+  String(plan.structuredPlan?.objective || plan.objective || plan.structuredPlan?.title || '学习计划').replace(/\s+/g, ' ').trim();
 
 const getPlanStageCount = (plan: WorkbenchSidebarPlan) =>
   (Array.isArray(plan.structuredPlan?.stages) ? plan.structuredPlan?.stages.length : 0) ||
@@ -258,30 +268,102 @@ const stepStatusClass = (value?: string) => {
 };
 
 const planStepStatusOptions = [
-  { status: 'active' as const, label: 'Set current' },
-  { status: 'done' as const, label: 'Mark done' },
-  { status: 'blocked' as const, label: 'Mark blocked' },
-  { status: 'skipped' as const, label: 'Skip' },
-  { status: 'pending' as const, label: 'Reset pending' }
+  { status: 'active' as const, label: '设为当前' },
+  { status: 'done' as const, label: '标记完成' },
+  { status: 'blocked' as const, label: '标记受阻' },
+  { status: 'skipped' as const, label: '跳过' },
+  { status: 'pending' as const, label: '重置为待处理' }
 ];
 
 const planActionOptions = [
-  { action: 'set_primary' as const, label: 'Set as primary' },
-  { action: 'pause' as const, label: 'Pause plan' },
-  { action: 'resume' as const, label: 'Resume plan' },
-  { action: 'complete' as const, label: 'Complete plan' },
-  { action: 'duplicate' as const, label: 'Duplicate plan' },
-  { action: 'archive' as const, label: 'Archive plan' }
+  { action: 'set_primary' as const, label: '设为主计划' },
+  { action: 'pause' as const, label: '暂停计划' },
+  { action: 'resume' as const, label: '继续计划' },
+  { action: 'complete' as const, label: '完成计划' },
+  { action: 'duplicate' as const, label: '复制计划' },
+  { action: 'archive' as const, label: '归档计划' }
 ];
 
 const feedbackOptions = [
-  { category: 'too_hard' as const, label: 'Too hard' },
-  { category: 'too_easy' as const, label: 'Too easy' },
-  { category: 'blocked' as const, label: 'Blocked' },
-  { category: 'resource_mismatch' as const, label: 'Bad resources' },
-  { category: 'replan' as const, label: 'Replan this' },
-  { category: 'other' as const, label: 'Other feedback' }
+  { category: 'too_hard' as const, label: '太难' },
+  { category: 'too_easy' as const, label: '太简单' },
+  { category: 'blocked' as const, label: '遇到阻碍' },
+  { category: 'resource_mismatch' as const, label: '资料不匹配' },
+  { category: 'replan' as const, label: '重新规划' },
+  { category: 'other' as const, label: '其他反馈' }
 ];
+
+const getWorkspaceFilePathParts = (file: FileSystemObject) => {
+  const path = (file.path || file.name).replace(/^\/+|\/+$/g, '');
+  const parts = path.split('/').filter(Boolean);
+  return parts.length ? parts : [file.name];
+};
+
+const buildWorkspaceTree = (files: FileSystemObject[]): WorkspaceTreeNode[] => {
+  const flattenFiles = (items: FileSystemObject[]): FileSystemObject[] =>
+    items.flatMap((item) => [item, ...flattenFiles(item.children || [])]);
+
+  const roots: WorkspaceTreeNode[] = [];
+  const folderMap = new Map<string, WorkspaceTreeNode>();
+
+  flattenFiles(files)
+    .filter((file) => file.scope !== 'chat')
+    .sort((a, b) => {
+      if (a.nodeType !== b.nodeType) return a.nodeType === 'folder' ? -1 : 1;
+      return (a.path || a.name).localeCompare(b.path || b.name);
+    })
+    .forEach((file) => {
+      const parts = getWorkspaceFilePathParts(file);
+      let siblings = roots;
+      let currentPath = '';
+
+      parts.forEach((part, index) => {
+        currentPath = currentPath ? `${currentPath}/${part}` : part;
+        const isLeaf = index === parts.length - 1;
+        const isFolder = !isLeaf || file.nodeType === 'folder';
+
+        if (isFolder) {
+          const folderId = `folder:${currentPath}`;
+          let folder = folderMap.get(folderId);
+          if (!folder) {
+            folder = {
+              id: folderId,
+              name: part,
+              path: currentPath,
+              type: 'folder',
+              file: isLeaf && file.nodeType === 'folder' ? file : undefined,
+              children: []
+            };
+            folderMap.set(folderId, folder);
+            siblings.push(folder);
+          } else if (isLeaf && file.nodeType === 'folder') {
+            folder.file = file;
+          }
+          siblings = folder.children;
+          return;
+        }
+
+        siblings.push({
+          id: file.id,
+          name: file.name || part,
+          path: file.path || currentPath,
+          type: 'file',
+          file,
+          children: []
+        });
+      });
+    });
+
+  const sortNodes = (nodes: WorkspaceTreeNode[]): WorkspaceTreeNode[] =>
+    nodes
+      .sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      })
+      .map((node) => ({ ...node, children: sortNodes(node.children) }));
+
+  return sortNodes(roots);
+};
 
 function safeStageList(value: unknown) {
   return Array.isArray(value) ? value.map(cleanPlanText).filter(Boolean) : [];
@@ -373,7 +455,7 @@ function ResourceRow({
             </div>
           </div>
         </div>
-        {hasOpenEditor ? <span className="sr-only">Open</span> : null}
+        {hasOpenEditor ? <span className="sr-only">已打开</span> : null}
       </button>
       <button
         type="button"
@@ -385,8 +467,8 @@ function ResourceRow({
           onSetOpenResourceMenuId(isMenuOpen ? null : resource.id);
         }}
         className="absolute -right-1 -top-1 rounded-full border border-gray-50 bg-white text-black invisible transition group-hover/resource:visible"
-        title="More"
-        aria-label="More Options"
+        title="更多"
+        aria-label="更多选项"
       >
         <OWEllipsisHorizontalIcon className="size-4" />
       </button>
@@ -403,7 +485,7 @@ function ResourceRow({
             }}
             className="flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs text-[#3f4348] hover:bg-[#f5f5f2]"
           >
-            Open
+            打开
           </button>
           <button
             type="button"
@@ -413,7 +495,7 @@ function ResourceRow({
             }}
             className="flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs text-[#3f4348] hover:bg-[#f5f5f2]"
           >
-            Duplicate
+            创建副本
           </button>
           <button
             type="button"
@@ -423,8 +505,75 @@ function ResourceRow({
             }}
             className="flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs text-[#b33d3d] hover:bg-[#fdf1f1]"
           >
-            Delete
+            删除
           </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkspaceTreeRow({
+  node,
+  depth,
+  activeResourceId,
+  openFolderIds,
+  onToggleFolder,
+  onOpenFile
+}: {
+  node: WorkspaceTreeNode;
+  depth: number;
+  activeResourceId: string | null;
+  openFolderIds: Set<string>;
+  onToggleFolder: (nodeId: string) => void;
+  onOpenFile: (file: FileSystemObject) => void;
+}) {
+  const isFolder = node.type === 'folder';
+  const isOpen = openFolderIds.has(node.id);
+  const isActive = Boolean(node.file && activeResourceId === node.file.id);
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => {
+          if (isFolder) {
+            onToggleFolder(node.id);
+            return;
+          }
+          if (node.file) onOpenFile(node.file);
+        }}
+        className={`group flex h-8 w-full items-center gap-1.5 rounded-xl py-1 pr-2 text-left text-sm transition hover:bg-gray-100 ${
+          isActive ? 'bg-gray-100 text-gray-950' : 'text-gray-800'
+        }`}
+        style={{ paddingLeft: 8 + depth * 14 }}
+        title={node.path}
+      >
+        <span className="flex size-4 shrink-0 items-center justify-center text-gray-500">
+          {isFolder ? (
+            isOpen ? <ChevronDown className="size-3.5" strokeWidth={2.2} /> : <ChevronRight className="size-3.5" strokeWidth={2.2} />
+          ) : (
+            <span className="size-3.5" />
+          )}
+        </span>
+        <span className="flex size-4 shrink-0 items-center justify-center text-gray-500">
+          {isFolder ? <Folder className="size-4" strokeWidth={1.8} /> : <OWDocumentPageIcon className="size-4" />}
+        </span>
+        <span className="min-w-0 flex-1 truncate">{node.name}</span>
+      </button>
+      {isFolder && isOpen ? (
+        <div>
+          {node.children.map((child) => (
+            <WorkspaceTreeRow
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              activeResourceId={activeResourceId}
+              openFolderIds={openFolderIds}
+              onToggleFolder={onToggleFolder}
+              onOpenFile={onOpenFile}
+            />
+          ))}
         </div>
       ) : null}
     </div>
@@ -445,18 +594,18 @@ const getWorkbenchEmoji = (title: string) => {
 export default function WorkbenchSidebar({
   editors,
   resources,
+  workspaceFiles = [],
   plans = [],
   activeEditorId,
   currentWorkbenchTitle,
   isExpanded,
   onActivateEditor,
   onResourceOpen,
+  onWorkspaceFileOpen,
   onNewChat,
   onNewNote,
-  onNewPlan,
   onOpenAIStudio,
   onUploadResources,
-  onSearch,
   onResourceDuplicate,
   onResourceDelete,
   onResourceReorder,
@@ -466,7 +615,6 @@ export default function WorkbenchSidebar({
   onPlanStepUpdate,
   onPlanFeedback
 }: WorkbenchSidebarProps) {
-  const [activeSection, setActiveSection] = useState<WorkbenchSidebarSectionKey>('source');
   const [visualState, setVisualState] = useState<SidebarVisualState>(isExpanded ? 'expanded' : 'collapsed');
   const [openResourceMenuId, setOpenResourceMenuId] = useState<string | null>(null);
   const [openPlanStepMenuId, setOpenPlanStepMenuId] = useState<string | null>(null);
@@ -476,6 +624,7 @@ export default function WorkbenchSidebar({
   const [planActionError, setPlanActionError] = useState<string | null>(null);
   const [expandedPlanStepId, setExpandedPlanStepId] = useState<string | null>(null);
   const [showArchivedSteps, setShowArchivedSteps] = useState(false);
+  const [openWorkspaceFolderIds, setOpenWorkspaceFolderIds] = useState<Set<string>>(() => new Set(['folder:Knowledge']));
 
   useEffect(() => {
     if (isExpanded) {
@@ -520,19 +669,6 @@ export default function WorkbenchSidebar({
     return () => window.removeEventListener('pointerdown', closeMenu);
   }, [openPlanActionMenu]);
 
-  const resourceActionClass =
-    'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 hover:text-gray-900';
-
-  const sectionTabs: Array<{
-    key: WorkbenchSidebarSectionKey;
-    title: string;
-  }> = [
-    { key: 'source', title: 'Sources' },
-    { key: 'workspace', title: 'Files' },
-    { key: 'generated', title: 'Generates' },
-    { key: 'plans', title: 'Plans' }
-  ];
-
   const resourceSections: Array<{
     key: 'source' | 'workspace' | 'generated';
     title: string;
@@ -555,7 +691,24 @@ export default function WorkbenchSidebar({
     }
   ];
 
-  const activeResourceSection = resourceSections.find((section) => section.key === activeSection);
+  const workspaceTree = buildWorkspaceTree(workspaceFiles.length ? workspaceFiles : resources.map((resource) => ({
+    id: resource.id,
+    name: resource.name,
+    nodeType: 'file' as const,
+    path: resource.path,
+    fileCategory: resource.fileCategory,
+    resourceType: resource.resourceType,
+    scope: resource.scope,
+    origin: resource.origin,
+    metadata: resource.metadata,
+    extension: resource.extension,
+    size: resource.size,
+    isBinary: resource.isBinary,
+    mimeType: resource.mimeType,
+    createdAt: '',
+    updatedAt: '',
+    workspaceId: ''
+  })));
   const primaryPlan = getPrimaryPlan(plans);
   const primaryPlanProgress = getPlanProgress(primaryPlan);
   const activePlanSteps = primaryPlanProgress.steps.filter((step) => !isArchivedPlanStep(step.status));
@@ -577,7 +730,7 @@ export default function WorkbenchSidebar({
     try {
       await onPlanStepStatusChange(planId, stepId, status);
     } catch (error: any) {
-      setPlanActionError(error?.message || 'Failed to update step status.');
+      setPlanActionError(error?.message || '更新步骤状态失败。');
     } finally {
       setUpdatingPlanStepId(null);
     }
@@ -594,22 +747,22 @@ export default function WorkbenchSidebar({
     try {
       await onPlanAction(planId, action, options);
     } catch (error: any) {
-      setPlanActionError(error?.message || 'Failed to update plan.');
+      setPlanActionError(error?.message || '更新计划失败。');
     } finally {
       setUpdatingPlanId(null);
     }
   };
   const runPlanStepUpdate = async (planId: string, stepId: string, currentTitle: string, currentNote?: string) => {
     if (!onPlanStepUpdate) return;
-    const title = window.prompt('Step title', currentTitle);
+    const title = window.prompt('步骤标题', currentTitle);
     if (title == null) return;
-    const note = window.prompt('Step note', currentNote || '');
+    const note = window.prompt('步骤备注', currentNote || '');
     if (note == null) return;
     setPlanActionError(null);
     try {
       await onPlanStepUpdate(planId, stepId, { title, note });
     } catch (error: any) {
-      setPlanActionError(error?.message || 'Failed to update step.');
+      setPlanActionError(error?.message || '更新步骤失败。');
     }
   };
   const runPlanFeedback = async (
@@ -618,19 +771,19 @@ export default function WorkbenchSidebar({
     category: 'too_hard' | 'too_easy' | 'blocked' | 'resource_mismatch' | 'replan' | 'other'
   ) => {
     if (!onPlanFeedback) return;
-    const note = window.prompt('Feedback note', '');
+    const note = window.prompt('反馈备注', '');
     if (note == null) return;
     setPlanActionError(null);
     try {
       await onPlanFeedback(planId, { stepId, category, note });
     } catch (error: any) {
-      setPlanActionError(error?.message || 'Failed to record feedback.');
+      setPlanActionError(error?.message || '记录反馈失败。');
     }
   };
-  const shouldShowResourceSearch = activeSection === 'source';
   const activeResourceId = activeEditorId
     ? editors.find((editor) => editor.id === activeEditorId)?.resourceId
     : null;
+  const normalizedActiveResourceId = activeResourceId || null;
 
   const [orderedResources, setOrderedResources] = useState<ResourceReference[]>([]);
   useEffect(() => {
@@ -688,17 +841,47 @@ export default function WorkbenchSidebar({
             />
           );
         })}
-        {options.compact && sectionResources.length > visibleResources.length && (
-          <button
-            type="button"
-            onClick={() => setActiveSection(section.key)}
-            className="px-3 py-1 text-left text-xs font-medium text-[#8a8e94] hover:text-[#303338]"
-          >
-            View {sectionResources.length - visibleResources.length} more
-          </button>
-        )}
+        {options.compact && sectionResources.length > visibleResources.length ? (
+          <div className="px-3 py-1 text-left text-xs font-medium text-[#8a8e94]">
+            {sectionResources.length - visibleResources.length} more
+          </div>
+        ) : null}
       </div>
     );
+  };
+
+  const toggleWorkspaceFolder = (nodeId: string) => {
+    setOpenWorkspaceFolderIds((current) => {
+      const next = new Set(current);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      return next;
+    });
+  };
+
+  const openWorkspaceFile = (file: FileSystemObject) => {
+    if (onWorkspaceFileOpen) {
+      onWorkspaceFileOpen(file);
+      return;
+    }
+    onResourceOpen({
+      id: file.id,
+      name: file.name,
+      path: file.path,
+      type: file.fileCategory || file.extension || 'file',
+      extension: file.extension,
+      mimeType: file.mimeType,
+      fileCategory: file.fileCategory,
+      resourceType: file.resourceType,
+      scope: file.scope,
+      origin: file.origin,
+      metadata: file.metadata,
+      tags: file.tags,
+      isBinary: file.isBinary,
+      size: file.size,
+      knowledgeIndexJobs: file.knowledgeIndexJobs,
+      _count: file._count
+    });
   };
 
   const workbenchEmoji = getWorkbenchEmoji(currentWorkbenchTitle);
@@ -718,8 +901,8 @@ export default function WorkbenchSidebar({
             type="button"
             onClick={onToggleSidebar}
             className="flex rounded-xl transition hover:bg-gray-100"
-            title="Open Sidebar"
-            aria-label="Open Sidebar"
+            title="打开侧边栏"
+            aria-label="打开侧边栏"
           >
             <div className="flex size-9 items-center justify-center self-center">
               <span className="flex size-6 translate-y-px items-center justify-center rounded-full bg-white text-[13px] leading-none text-gray-900 shadow-sm ring-1 ring-gray-200">
@@ -731,8 +914,8 @@ export default function WorkbenchSidebar({
             type="button"
             onClick={onNewChat}
             className="flex rounded-xl transition hover:bg-gray-100"
-            title="New chat"
-            aria-label="New chat"
+            title="新建对话"
+            aria-label="新建对话"
           >
             <div className="flex size-9 items-center justify-center self-center">
               <OWPencilSquareIcon className="size-[1.125rem]" strokeWidth={2} />
@@ -740,21 +923,10 @@ export default function WorkbenchSidebar({
           </button>
           <button
             type="button"
-            onClick={onSearch}
-            className="flex rounded-xl transition hover:bg-gray-100"
-            title="Search"
-            aria-label="Search"
-          >
-            <div className="flex size-9 items-center justify-center self-center">
-              <OWSearchIcon className="size-[1.125rem]" strokeWidth={2} />
-            </div>
-          </button>
-          <button
-            type="button"
             onClick={onNewNote}
             className="flex rounded-xl transition hover:bg-gray-100"
-            title="New note"
-            aria-label="New note"
+            title="新建笔记"
+            aria-label="新建笔记"
           >
             <div className="flex size-9 items-center justify-center self-center">
               <OWDocumentPageIcon className="size-[1.125rem]" strokeWidth={2} />
@@ -764,22 +936,11 @@ export default function WorkbenchSidebar({
             type="button"
             onClick={onOpenAIStudio}
             className="flex rounded-xl transition hover:bg-gray-100"
-            title="AI Studio"
-            aria-label="AI Studio"
+            title="AI 工作室"
+            aria-label="AI 工作室"
           >
             <div className="flex size-9 items-center justify-center self-center">
               <OWWorkspaceIcon className="size-[1.125rem]" strokeWidth={2} />
-            </div>
-          </button>
-          <button
-            type="button"
-            onClick={onNewPlan}
-            className="flex rounded-xl transition hover:bg-gray-100"
-            title="New plan"
-            aria-label="New plan"
-          >
-            <div className="flex size-9 items-center justify-center self-center">
-              <Target className="size-[1.125rem]" strokeWidth={2} />
             </div>
           </button>
         </div>
@@ -803,8 +964,8 @@ export default function WorkbenchSidebar({
           type="button"
           onClick={onToggleSidebar}
           className="absolute right-[0.5625rem] top-2 z-30 flex size-[2.125rem] shrink-0 cursor-[w-resize] items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100/50 hover:text-gray-900"
-          title="Close Sidebar"
-          aria-label="Close Sidebar"
+          title="关闭侧边栏"
+          aria-label="关闭侧边栏"
         >
           <div className="self-center p-1.5">
             <OpenWebUISidebarIcon className="size-5" />
@@ -822,8 +983,8 @@ export default function WorkbenchSidebar({
               type="button"
               onClick={onToggleSidebar}
               className="no-drag-region flex h-[2.125rem] w-[2.125rem] shrink-0 items-center justify-center rounded-xl transition hover:bg-gray-100/50"
-              title={shouldRenderExpandedContent ? currentWorkbenchTitle : 'Open Sidebar'}
-              aria-label={shouldRenderExpandedContent ? currentWorkbenchTitle : 'Open Sidebar'}
+              title={shouldRenderExpandedContent ? currentWorkbenchTitle : '打开侧边栏'}
+              aria-label={shouldRenderExpandedContent ? currentWorkbenchTitle : '打开侧边栏'}
             >
               <span className="flex size-6 translate-y-px items-center justify-center rounded-full bg-white text-[13px] leading-none text-gray-900 shadow-sm ring-1 ring-gray-200">
                 {workbenchEmoji}
@@ -852,29 +1013,13 @@ export default function WorkbenchSidebar({
                     type="button"
                     onClick={onNewChat}
                     className="group flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left outline-none transition hover:bg-gray-100"
-                    aria-label="New chat"
+                    aria-label="新建对话"
                   >
                     <div className="self-center">
                       <OWPencilSquareIcon className="size-[1.125rem]" strokeWidth={2} />
                     </div>
                     <div className="flex flex-1 self-center translate-y-[0.5px]">
-                      <div className="self-center font-primary text-sm">New Chat</div>
-                    </div>
-                  </button>
-                </div>
-
-                <div className="px-[0.4375rem] flex justify-center text-gray-800">
-                  <button
-                    type="button"
-                    onClick={onSearch}
-                    className="group flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left outline-none transition hover:bg-gray-100"
-                    aria-label="Search"
-                  >
-                    <div className="self-center">
-                      <OWSearchIcon className="size-[1.125rem]" strokeWidth={2} />
-                    </div>
-                    <div className="flex flex-1 self-center translate-y-[0.5px]">
-                      <div className="self-center font-primary text-sm">Search</div>
+                      <div className="self-center font-primary text-sm">新建对话</div>
                     </div>
                   </button>
                 </div>
@@ -884,13 +1029,13 @@ export default function WorkbenchSidebar({
                     type="button"
                     onClick={onNewNote}
                     className="flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left transition hover:bg-gray-100"
-                    aria-label="New note"
+                    aria-label="新建笔记"
                   >
                     <div className="self-center">
                       <OWDocumentPageIcon className="size-[1.125rem]" strokeWidth={2} />
                     </div>
                     <div className="flex flex-1 self-center translate-y-[0.5px]">
-                      <div className="self-center font-primary text-sm">Notes</div>
+                      <div className="self-center font-primary text-sm">笔记</div>
                     </div>
                   </button>
                 </div>
@@ -900,104 +1045,57 @@ export default function WorkbenchSidebar({
                     type="button"
                     onClick={onOpenAIStudio}
                     className="flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left transition hover:bg-gray-100"
-                    aria-label="AI Studio"
+                    aria-label="AI 工作室"
                   >
                     <div className="self-center">
                       <OWWorkspaceIcon className="size-[1.125rem]" strokeWidth={2} />
                     </div>
                     <div className="flex flex-1 self-center translate-y-[0.5px]">
-                      <div className="self-center font-primary text-sm">AI Studio</div>
+                      <div className="self-center font-primary text-sm">AI 工作室</div>
                     </div>
                   </button>
                 </div>
 
-                <div className="px-[0.4375rem] flex justify-center text-gray-800">
-                  <button
-                    type="button"
-                    onClick={onNewPlan}
-                    className="flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left transition hover:bg-gray-100"
-                    aria-label="New plan"
-                  >
-                    <div className="self-center">
-                      <Target className="size-[1.125rem]" strokeWidth={2} />
-                    </div>
-                    <div className="flex flex-1 self-center translate-y-[0.5px]">
-                      <div className="self-center font-primary text-sm">New Plan</div>
-                    </div>
-                  </button>
-                </div>
               </div>
-
-              <section className="mb-3 flex shrink-0 items-center gap-1 px-[0.4375rem] pt-1">
-                <div className="flex gap-1 scrollbar-none overflow-x-auto w-fit text-center text-sm font-medium rounded-full bg-transparent py-1 touch-auto pointer-events-auto">
-                  {sectionTabs.map((section) => {
-                    const isActive = activeSection === section.key;
-                    return (
-                      <button
-                        key={section.key}
-                        type="button"
-                        onClick={() => setActiveSection(section.key)}
-                        aria-current={isActive ? 'page' : undefined}
-                        className={`min-w-fit p-1.5 ${isActive ? '' : 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none`}
-                        title={section.title}
-                      >
-                        {section.title}
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
             </>
           ) : null}
 
           {shouldRenderExpandedContent ? (
           <section className="mt-2 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden pb-3">
-            {shouldShowResourceSearch && (
-            <div className="px-[0.4375rem]">
-              <button
-                type="button"
-                onClick={onUploadResources}
-                className="flex h-10 w-full items-center gap-2 rounded-xl border border-[#e7e6e1] bg-white/80 px-3 text-left text-sm text-[#666b72] transition-all duration-200 ease-out hover:-translate-y-px hover:border-[#d9d8d2] hover:bg-white hover:shadow-[0_8px_22px_rgba(0,0,0,0.055)]"
-              >
-                <OWSearchIcon className="h-4 w-4 text-[#8a8e94]" strokeWidth={2} />
-                <span className="min-w-0 flex-1 truncate">Search or upload resources</span>
-                <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[#7f8388] hover:bg-[#f3f2ee]">
+            <div className="flex min-h-0 flex-1 flex-col px-[0.4375rem]">
+              <div className="mb-1 flex items-center justify-between px-2.5">
+                <h2 className="text-xs font-medium text-gray-500">工作区文件</h2>
+                <button
+                  type="button"
+                  onClick={onUploadResources}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 hover:text-gray-900"
+                  title="上传文件"
+                >
                   <Upload className="h-4 w-4" />
-                </span>
-              </button>
-            </div>
-            )}
-
-            {activeResourceSection && (
-              <div className="flex min-h-0 flex-col overflow-visible px-[0.4375rem]">
-                <div className="mb-2 flex items-center justify-between px-2.5">
-                  <h2 className="text-sm font-medium text-[#464a50]">{activeResourceSection.title}</h2>
-                  {activeResourceSection.key === 'source' ? (
-                    <button
-                      onClick={onUploadResources}
-                      className={resourceActionClass}
-                      title="Add source"
-                    >
-                      <Upload className="h-4 w-4" />
-                    </button>
-                  ) : activeResourceSection.key === 'workspace' ? (
-                    <button
-                      onClick={onUploadResources}
-                      className={resourceActionClass}
-                      title="Upload file"
-                    >
-                      <Upload className="h-4 w-4" />
-                    </button>
-                  ) : null}
-                </div>
-                <div className="min-h-0">
-                  {renderResourceList(activeResourceSection)}
-                </div>
+                </button>
               </div>
-            )}
-
-            {activeSection === 'plans' && (
-              <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
+              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                {workspaceTree.length ? (
+                  workspaceTree.map((node) => (
+                    <WorkspaceTreeRow
+                      key={node.id}
+                      node={node}
+                      depth={0}
+                      activeResourceId={normalizedActiveResourceId}
+                      openFolderIds={openWorkspaceFolderIds}
+                      onToggleFolder={toggleWorkspaceFolder}
+                      onOpenFile={openWorkspaceFile}
+                    />
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-[#e2e1dc] bg-white/55 px-3 py-4 text-sm text-[#85898f]">
+                    暂无工作区文件。
+                  </div>
+                )}
+              </div>
+            </div>
+            {false && (
+              <div className="hidden min-h-0 flex-1 overflow-y-auto px-1 py-1">
                 {primaryPlan ? (
                   <div className="space-y-2">
                     <div className="px-2 pb-3 pt-1">
@@ -1022,7 +1120,7 @@ export default function WorkbenchSidebar({
                             disabled={updatingPlanId === primaryPlan.id}
                             className="inline-flex h-7 items-center gap-1 rounded-md border border-[#e2e1dc] bg-white px-2 text-[10px] font-medium text-[#55585d] transition hover:bg-[#f1f1ef] disabled:opacity-60"
                           >
-                            {updatingPlanId === primaryPlan.id ? 'Updating' : 'Plan'}
+                            {updatingPlanId === primaryPlan.id ? '更新中' : '计划'}
                             <ChevronDown className="h-3 w-3" />
                           </button>
                           {openPlanActionMenu ? (
@@ -1050,7 +1148,7 @@ export default function WorkbenchSidebar({
                                 }}
                                 className="flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs text-[#3f4348] hover:bg-[#f5f5f2]"
                               >
-                                Plan feedback
+                                计划反馈
                               </button>
                               <button
                                 type="button"
@@ -1061,7 +1159,7 @@ export default function WorkbenchSidebar({
                                 }}
                                 className="flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs text-[#3f4348] hover:bg-[#f5f5f2]"
                               >
-                                Request replan
+                                请求重新规划
                               </button>
                             </div>
                           ) : null}
@@ -1072,10 +1170,10 @@ export default function WorkbenchSidebar({
                           <div className="h-full rounded-full bg-[#202124]" style={{ width: `${primaryPlanProgress.percent}%` }} />
                         </div>
                         <div className="mt-2 flex items-center justify-between text-[11px] text-[#8a8e94]">
-                          <span>{primaryPlanProgress.percent}% complete</span>
+                          <span>{primaryPlanProgress.percent}% 已完成</span>
                           <span>
                             {primaryPlan.status || 'active'}
-                            {primaryPlanFeedbackCount ? ` · ${primaryPlanFeedbackCount} feedback` : ''}
+                            {primaryPlanFeedbackCount ? ` · ${primaryPlanFeedbackCount} 条反馈` : ''}
                           </span>
                         </div>
                       </div>
@@ -1085,8 +1183,8 @@ export default function WorkbenchSidebar({
                           onClick={() => setExpandedPlanStepId(primaryPlanProgress.nextStep ? `${primaryPlan.id}:${primaryPlanProgress.nextStep.id}` : null)}
                           className="mt-3 flex w-full items-center gap-2 rounded-lg bg-white/55 px-3 py-2 text-left transition hover:bg-white"
                         >
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#96999d]">Next step</p>
-                          <p className="min-w-0 flex-1 truncate text-[12px] font-medium leading-5 text-[#34373c]">{primaryPlanProgress.nextStep.title}</p>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#96999d]">下一步</p>
+                          <p className="min-w-0 flex-1 truncate text-[12px] font-medium leading-5 text-[#34373c]">{primaryPlanProgress.nextStep?.title}</p>
                         </button>
                       ) : null}
                     </div>
@@ -1151,9 +1249,9 @@ export default function WorkbenchSidebar({
                                     }}
                                     disabled={updatingPlanStepId === `${primaryPlan.id}:${step.id}`}
                                     className="inline-flex h-7 items-center gap-1 rounded-md border border-[#e2e1dc] bg-white px-2 text-[10px] font-medium text-[#55585d] transition hover:bg-[#f1f1ef] disabled:opacity-60"
-                                    title="Step actions"
+                                    title="步骤操作"
                                   >
-                                    {updatingPlanStepId === `${primaryPlan.id}:${step.id}` ? 'Updating' : 'Actions'}
+                                    {updatingPlanStepId === `${primaryPlan.id}:${step.id}` ? '更新中' : '操作'}
                                     <ChevronDown className="h-3 w-3" />
                                   </button>
                                   {openPlanStepMenuId === `${primaryPlan.id}:${step.id}` ? (
@@ -1182,7 +1280,7 @@ export default function WorkbenchSidebar({
                                         }}
                                         className="flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs text-[#3f4348] hover:bg-[#f5f5f2]"
                                       >
-                                        Edit title/note
+                                        编辑标题/备注
                                       </button>
                                       {feedbackOptions.map((option) => (
                                         <button
@@ -1207,7 +1305,7 @@ export default function WorkbenchSidebar({
                         );
                       })}
                       {!activePlanSteps.length ? (
-                        <p className="px-3 py-4 text-sm text-[#6e7278]">No open steps. Archived steps are below.</p>
+                        <p className="px-3 py-4 text-sm text-[#6e7278]">暂无进行中的步骤。归档步骤在下方。</p>
                       ) : null}
                     </div>
 
@@ -1219,7 +1317,7 @@ export default function WorkbenchSidebar({
                           className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[12px] font-medium text-[#6e7278] transition hover:bg-white/70"
                         >
                           <ChevronDown className={`h-3.5 w-3.5 text-[#9ba0a6] transition-transform ${showArchivedSteps ? '' : '-rotate-90'}`} />
-                          Archived steps
+                          已归档步骤
                           <span className="ml-auto text-[11px] text-[#9a9ea4]">{archivedPlanSteps.length}</span>
                         </button>
                         {showArchivedSteps ? (
@@ -1248,7 +1346,7 @@ export default function WorkbenchSidebar({
                                         onClick={() => void runPlanStepStatusChange(primaryPlan.id, step.id, 'pending')}
                                         className="mt-2 rounded-md border border-[#e2e1dc] bg-white px-2 py-1 text-[10px] font-medium text-[#55585d] transition hover:bg-[#f1f1ef]"
                                       >
-                                        Restore to open
+                                        恢复为进行中
                                       </button>
                                     </div>
                                   ) : null}
@@ -1268,7 +1366,7 @@ export default function WorkbenchSidebar({
                           className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[12px] font-medium text-[#6e7278] transition hover:bg-white/70"
                         >
                           <ChevronDown className={`h-3.5 w-3.5 text-[#9ba0a6] transition-transform ${showPlanHistory ? '' : '-rotate-90'}`} />
-                          History / candidates
+                          历史 / 候选
                           <span className="ml-auto text-[11px] text-[#9a9ea4]">{secondaryPlans.length}</span>
                         </button>
                         {showPlanHistory ? (
@@ -1277,7 +1375,7 @@ export default function WorkbenchSidebar({
                               <div key={plan.id} className="py-2">
                                 <p className="line-clamp-2 text-[12px] font-medium text-[#3f4348]">{getPlanTitle(plan)}</p>
                                 <p className="mt-1 text-[11px] text-[#9a9ea4]">
-                                  {getPlanStageCount(plan)} steps · {plan.status || 'candidate'}
+                                  {getPlanStageCount(plan)} 个步骤 · {plan.status || '候选'}
                                   {formatPlanDate(plan.updatedAt) ? ` · ${formatPlanDate(plan.updatedAt)}` : ''}
                                 </p>
                                 <div className="mt-2 flex flex-wrap gap-1">
@@ -1286,14 +1384,14 @@ export default function WorkbenchSidebar({
                                     onClick={() => void runPlanAction(plan.id, 'set_primary')}
                                     className="rounded-md border border-[#e2e1dc] bg-white px-2 py-1 text-[10px] font-medium text-[#55585d] transition hover:bg-[#f1f1ef]"
                                   >
-                                    Set primary
+                                    设为主计划
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => void runPlanAction(primaryPlan.id, 'restore', { targetPlanId: plan.id })}
                                     className="rounded-md border border-[#e2e1dc] bg-white px-2 py-1 text-[10px] font-medium text-[#55585d] transition hover:bg-[#f1f1ef]"
                                   >
-                                    Restore
+                                    恢复
                                   </button>
                                 </div>
                               </div>
@@ -1305,7 +1403,7 @@ export default function WorkbenchSidebar({
                   </div>
                 ) : (
                   <div className="rounded-xl bg-white/70 px-4 py-4 text-sm text-[#6e7278]">
-                    No plans applied to this workbench yet.
+                    当前 workbench 暂无应用的计划。
                   </div>
                 )}
               </div>

@@ -25,7 +25,7 @@ export default function AITerminalDrawer({ isOpen, onClose, workspaceName }: AIT
         <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-indigo-50">
           <div className="flex items-center gap-2 text-indigo-700">
             <Sparkles className="w-5 h-5" />
-            <h2 className="font-bold">AI Terminal</h2>
+            <h2 className="font-bold">AI Chat</h2>
           </div>
           <div className="flex items-center gap-1">
             <button className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-white/50 rounded-md transition-colors">
@@ -42,9 +42,9 @@ export default function AITerminalDrawer({ isOpen, onClose, workspaceName }: AIT
 
         {/* Context info */}
         <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 text-xs text-gray-500 flex items-center justify-between">
-          <span className="truncate">Context: {workspaceName} Workspace</span>
+          <span className="truncate">上下文：{workspaceName} Workspace</span>
           <span className="flex items-center gap-1 text-green-600 font-medium">
-            <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div> Active
+            <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div> 活跃
           </span>
         </div>
 
@@ -55,8 +55,8 @@ export default function AITerminalDrawer({ isOpen, onClose, workspaceName }: AIT
               <Sparkles className="w-4 h-4" />
             </div>
             <div className="bg-gray-100 rounded-2xl rounded-tl-none p-3 text-sm text-gray-800">
-              <p>Hi! I'm your AI Terminal for <strong>{workspaceName}</strong>. I can help you organize files, summarize materials, create workbenches, or suggest your next learning task.</p>
-              <p className="mt-2 text-gray-500 text-xs">What would you like to do?</p>
+              <p>你好！我是 <strong>{workspaceName}</strong> 的 AI Chat。我可以帮你整理文件、总结资料、创建 workbench，或建议下一步学习任务。</p>
+              <p className="mt-2 text-gray-500 text-xs">你想先做什么？</p>
             </div>
           </div>
           
@@ -65,7 +65,7 @@ export default function AITerminalDrawer({ isOpen, onClose, workspaceName }: AIT
               ME
             </div>
             <div className="bg-blue-600 text-white rounded-2xl rounded-tr-none p-3 text-sm shadow-sm">
-              Can you help me set up this workspace?
+              能帮我设置这个 workspace 吗？
             </div>
           </div>
           
@@ -74,16 +74,16 @@ export default function AITerminalDrawer({ isOpen, onClose, workspaceName }: AIT
               <Sparkles className="w-4 h-4" />
             </div>
             <div className="bg-gray-100 rounded-2xl rounded-tl-none p-3 text-sm text-gray-800">
-              <p>Sure! I can scan your uploaded materials and suggest an initial structure.</p>
+              <p>当然！我可以扫描你上传的资料，并建议一个初始结构。</p>
               
               <div className="mt-3 border border-gray-200 bg-white rounded-lg p-3 shadow-sm">
-                <p className="font-bold text-xs text-gray-500 uppercase tracking-wider mb-2">Suggested Actions</p>
+                <p className="font-bold text-xs text-gray-500 uppercase tracking-wider mb-2">建议操作</p>
                 <div className="space-y-2">
                   <button className="w-full text-left px-3 py-2 text-sm border border-blue-100 hover:border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md transition-colors flex items-center gap-2">
-                    <Folder className="w-4 h-4" /> Create default folder structure
+                    <Folder className="w-4 h-4" /> 创建默认文件夹结构
                   </button>
                   <button className="w-full text-left px-3 py-2 text-sm border border-gray-200 hover:border-gray-300 bg-white text-gray-700 rounded-md transition-colors flex items-center gap-2">
-                    <Layout className="w-4 h-4 text-gray-400" /> Create "Intro Study" workbench
+                    <Layout className="w-4 h-4 text-gray-400" /> 创建“入门学习”workbench
                   </button>
                 </div>
               </div>
@@ -95,20 +95,20 @@ export default function AITerminalDrawer({ isOpen, onClose, workspaceName }: AIT
         <div className="p-4 border-t border-gray-200 bg-white">
           <div className="flex flex-wrap gap-2 mb-3">
             <button className="px-2.5 py-1 text-xs border border-gray-200 rounded-full hover:bg-gray-50 text-gray-600 flex items-center gap-1 transition-colors">
-              <FileText className="w-3 h-3" /> Summarize
+              <FileText className="w-3 h-3" /> 总结
             </button>
             <button className="px-2.5 py-1 text-xs border border-gray-200 rounded-full hover:bg-gray-50 text-gray-600 flex items-center gap-1 transition-colors">
-              <Layout className="w-3 h-3" /> New Workbench
+              <Layout className="w-3 h-3" /> 新建 Workbench
             </button>
             <button className="px-2.5 py-1 text-xs border border-gray-200 rounded-full hover:bg-gray-50 text-gray-600 flex items-center gap-1 transition-colors">
-              <Lightbulb className="w-3 h-3" /> Suggest Next Task
+              <Lightbulb className="w-3 h-3" /> 建议下一步
             </button>
           </div>
           
           <div className="relative flex items-end shadow-sm rounded-xl border border-gray-300 bg-white focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 transition-shadow overflow-hidden">
             <textarea 
               className="w-full max-h-32 min-h-[44px] py-3 pl-3 pr-10 text-sm outline-none resize-none bg-transparent"
-              placeholder="Ask AI Terminal..."
+              placeholder="询问 AI Chat..."
               rows={1}
             />
             <button className="absolute right-2 bottom-2 p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50">
@@ -116,7 +116,7 @@ export default function AITerminalDrawer({ isOpen, onClose, workspaceName }: AIT
             </button>
           </div>
           <div className="text-[10px] text-center text-gray-400 mt-2">
-            AI Terminal has full access to this workspace's files and tasks.
+            AI Chat 可以访问这个 workspace 的文件和任务。
           </div>
         </div>
 

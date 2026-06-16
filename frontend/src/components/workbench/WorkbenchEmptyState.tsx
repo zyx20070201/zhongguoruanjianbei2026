@@ -15,7 +15,7 @@ export default function WorkbenchEmptyState({ onAddPanel, onUseTemplate, onAskAI
           <LayoutTemplate className="w-8 h-8 text-blue-600" />
         </div>
         
-        <h2 className="text-2xl font-bold text-gray-900 mb-3">Build this workbench for your task</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-3">为你的任务搭建这个 workbench</h2>
         <p className="text-gray-500 mb-8 max-w-lg mx-auto">
           This workbench stores layout, references and task context, not duplicated content. Panels will reference files from the workspace file system.
         </p>
@@ -29,8 +29,8 @@ export default function WorkbenchEmptyState({ onAddPanel, onUseTemplate, onAskAI
               <BookOpen className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-semibold text-gray-800 mb-1">Add Resource Panel</h3>
-              <p className="text-xs text-gray-500">View PDFs, videos, or images</p>
+              <h3 className="font-semibold text-gray-800 mb-1">添加资源面板</h3>
+              <p className="text-xs text-gray-500">查看 PDF、视频或图片</p>
             </div>
           </button>
           
@@ -42,8 +42,8 @@ export default function WorkbenchEmptyState({ onAddPanel, onUseTemplate, onAskAI
               <FileText className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-semibold text-gray-800 mb-1">Add Notes Panel</h3>
-              <p className="text-xs text-gray-500">Edit markdown notes</p>
+              <h3 className="font-semibold text-gray-800 mb-1">添加笔记面板</h3>
+              <p className="text-xs text-gray-500">编辑 Markdown 笔记</p>
             </div>
           </button>
           
@@ -55,8 +55,8 @@ export default function WorkbenchEmptyState({ onAddPanel, onUseTemplate, onAskAI
               <Code className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-semibold text-gray-800 mb-1">Add Code Panel</h3>
-              <p className="text-xs text-gray-500">Write and run code</p>
+              <h3 className="font-semibold text-gray-800 mb-1">添加代码面板</h3>
+              <p className="text-xs text-gray-500">编写并运行代码</p>
             </div>
           </button>
           
@@ -68,8 +68,8 @@ export default function WorkbenchEmptyState({ onAddPanel, onUseTemplate, onAskAI
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-semibold text-gray-800 mb-1">Add AI Assistant</h3>
-              <p className="text-xs text-gray-500">Local AI helper for this task</p>
+              <h3 className="font-semibold text-gray-800 mb-1">添加 AI 助手</h3>
+              <p className="text-xs text-gray-500">这个任务的本地 AI 帮手</p>
             </div>
           </button>
         </div>

@@ -26,7 +26,7 @@ export default function WorkspaceOverviewCard({
             </div>
             
             <p className="text-gray-600 text-sm mb-4 max-w-2xl">
-              {overview.description || 'No description provided for this course workspace.'}
+              {overview.description || '这个课程 workspace 暂无描述。'}
             </p>
             
             <div className="flex flex-wrap gap-4 text-sm text-gray-500 mb-6">
@@ -34,17 +34,17 @@ export default function WorkspaceOverviewCard({
                 <div className="w-5 h-5 rounded bg-blue-50 text-blue-600 flex items-center justify-center">
                   <PlayCircle className="w-3.5 h-3.5" />
                 </div>
-                <span className="font-medium text-gray-700">{overview.workbenchCount}</span> Workbenches
+                <span className="font-medium text-gray-700">{overview.workbenchCount}</span> 个 workbench
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-5 h-5 rounded bg-gray-100 text-gray-600 flex items-center justify-center">
                   <Folder className="w-3.5 h-3.5" />
                 </div>
-                <span className="font-medium text-gray-700">{overview.fileCount}</span> Files
+                <span className="font-medium text-gray-700">{overview.fileCount}</span> 个文件
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-gray-400">•</span>
-                <span>Updated {overview.updatedAt}</span>
+                <span>更新于 {overview.updatedAt}</span>
               </div>
             </div>
             
@@ -52,7 +52,7 @@ export default function WorkspaceOverviewCard({
               <div className="flex flex-col sm:flex-row sm:items-center gap-4 text-sm">
                 {overview.recentActivity && (
                   <div className="flex-1">
-                    <span className="text-gray-500 mr-2">Last activity:</span>
+                    <span className="text-gray-500 mr-2">最近活动：</span>
                     <span className="font-medium text-gray-800">{overview.recentActivity}</span>
                   </div>
                 )}
@@ -65,19 +65,19 @@ export default function WorkspaceOverviewCard({
               onClick={onResumeTask}
               className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
             >
-              Resume Recent Task
+              继续最近任务
             </button>
             <button 
               onClick={onCreateWorkbench}
               className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium rounded-lg border border-gray-200 transition-colors"
             >
-              <Plus className="w-4 h-4 text-gray-400" /> Create Workbench
+              <Plus className="w-4 h-4 text-gray-400" /> 创建 Workbench
             </button>
             <button 
               onClick={onUploadMaterials}
               className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium rounded-lg border border-gray-200 transition-colors"
             >
-              <Upload className="w-4 h-4 text-gray-400" /> Upload Materials
+              <Upload className="w-4 h-4 text-gray-400" /> 上传资料
             </button>
           </div>
           

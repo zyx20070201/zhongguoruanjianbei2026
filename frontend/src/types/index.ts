@@ -319,6 +319,7 @@ export interface LearningTerminalMessage {
   role: 'user' | 'assistant';
   content: string;
   files?: TerminalChatFile[];
+  sessionTitle?: string;
   mode?: 'chat' | 'agentic' | 'new_agentic';
   agentEvents?: AgentUiEvent[];
   statusHistory?: Array<{
@@ -557,6 +558,7 @@ export interface LearningTerminalResponse {
   goalDraft?: LearningGoalDraft;
   suggestedActions?: LearningTerminalAction[];
   sessionId?: string;
+  sessionTitle?: string;
   runId?: string;
   checkpointThreadId?: string;
   status?: 'completed' | 'approval_required';

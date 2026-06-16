@@ -1,3 +1,4 @@
+import { ArrowLeft } from 'lucide-react';
 import { useMemo } from 'react';
 import { SandboxView } from '@react-chat/components/Sandbox/SandboxView';
 import { parseResponse } from '@react-chat/utils/parser';
@@ -55,9 +56,10 @@ export function VisualCodeLessonViewer({
             <button
               type="button"
               onClick={onBack}
-              className="inline-flex min-w-fit shrink-0 p-1.5 text-sm font-medium text-gray-900 transition select-none hover:text-gray-700 dark:text-gray-200 dark:hover:text-white"
+              className="inline-flex min-w-fit shrink-0 items-center gap-1 p-1.5 text-sm font-medium text-gray-900 transition select-none hover:text-gray-700 dark:text-gray-200 dark:hover:text-white"
             >
-              <span className="whitespace-nowrap">&lt;AI Studio</span>
+              <ArrowLeft className="h-4 w-4 shrink-0" />
+              <span className="whitespace-nowrap">AI Studio</span>
             </button>
           ) : null}
           <div className="min-w-0">

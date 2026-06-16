@@ -890,14 +890,27 @@ const goalColorMap: Record<AiStudioGoalCategory, { icon: string; bg: string; bor
 };
 
 const studioGoalCatalog: AiStudioGoalInfo[] = [
-  { id: 'understand', zh: 'Resource Understand', en: 'Resource Understand', description: 'Turn uploaded sources into editable notes or compare multiple resources.' },
-  { id: 'map', zh: 'Knowledge Map', en: 'Knowledge Map', description: 'Create mind maps, knowledge graphs, and concept maps.' },
-  { id: 'practice', zh: 'Practice', en: 'Practice', description: 'Generate practice from selected sources with your own requirements.' },
-  { id: 'review', zh: 'Review', en: 'Review', description: 'Build flashcards, quick review sheets, and spaced review plans.' },
-  { id: 'lab', zh: 'Lab', en: 'Lab', description: 'Create code labs, starter code, and debugging tasks.' },
-  { id: 'visualize', zh: 'Visualize', en: 'Visualize', description: 'Generate slides, video scripts, animations, and infographics.' },
-  { id: 'plan', zh: 'Plan', en: 'Plan', description: 'Create study plans, daily tasks, and review reports.' },
+  { id: 'understand', zh: '资源理解', en: '资源理解', description: '把上传资料转成可编辑笔记，或对多个资料做对比。' },
+  { id: 'map', zh: '知识地图', en: '知识地图', description: '创建思维导图、知识图谱和概念地图。' },
+  { id: 'practice', zh: '练习', en: '练习', description: '基于选定资料和你的要求生成练习。' },
+  { id: 'review', zh: '复习', en: '复习', description: '生成记忆卡片、快速复习单和间隔复习计划。' },
+  { id: 'lab', zh: '实验室', en: '实验室', description: '创建代码实验、起始代码和调试任务。' },
+  { id: 'visualize', zh: '可视化', en: '可视化', description: '生成幻灯片、视频脚本、动画和信息图。' },
+  { id: 'plan', zh: '计划', en: '计划', description: '创建学习计划、每日任务和复习报告。' },
 ];
+
+const studioGoalDisplayLabel = (goal?: string | null) => {
+  const labels: Record<string, string> = {
+    understand: '理解',
+    map: '地图',
+    practice: '练习',
+    review: '复习',
+    lab: '实验',
+    visualize: '可视化',
+    plan: '计划'
+  };
+  return labels[String(goal || '')] || String(goal || '');
+};
 
 const studioPromptGuideByGoal: Record<AiStudioGoalCategory, string> = {
   understand: '例如：把选中的资料整理成适合期末复习的结构化笔记，保留关键定义、公式、例题、易错点和可继续追问的问题。',
@@ -930,14 +943,14 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     id: 'resource_to_notes',
     version: '1.0.0',
     goal: 'understand',
-    title: 'Resource to BlockSuite Notes',
-    shortTitle: 'Resource Notes',
+    title: '资源转 BlockSuite 笔记',
+    shortTitle: '资源笔记',
     description: '把用户上传或选定的 sources 转成结构清晰、可继续编辑的 Markdown 学习笔记。',
     generator: 'text',
     renderer: 'markdown',
     format: 'md',
     filename: 'resource-understand-notes.md',
-    outputLabel: 'BlockSuite Markdown Notes',
+    outputLabel: 'BlockSuite Markdown 笔记',
     recommendedUse: '需要把资料沉淀成可编辑笔记时使用。',
     legacyResourceType: 'report',
     tags: ['resource-notes', 'blocksuite', 'source-grounded']
@@ -946,14 +959,14 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     id: 'pagelm_cornell_notes',
     version: '1.0.0',
     goal: 'understand',
-    title: 'PageLM-style Cornell Notes',
-    shortTitle: 'PageLM Notes',
+    title: 'PageLM 风格 Cornell 笔记',
+    shortTitle: 'PageLM 笔记',
     description: '用 Cornell-style 结构把选定 sources 整理成高密度学习笔记，便于试验 PageLM 风格。',
     generator: 'text',
     renderer: 'markdown',
     format: 'md',
     filename: 'resource-understand-pagelm-notes.md',
-    outputLabel: 'PageLM-style Cornell Notes',
+    outputLabel: 'PageLM 风格 Cornell 笔记',
     recommendedUse: '想试验 Cornell-style 笔记整理效果时使用。',
     legacyResourceType: 'report',
     tags: ['pagelm-style', 'cornell-notes', 'source-grounded']
@@ -962,14 +975,14 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     id: 'pure_markdown_notes',
     version: '1.0.0',
     goal: 'understand',
-    title: 'Pure Markdown Notes',
-    shortTitle: 'Pure Markdown',
+    title: '纯 Markdown 笔记',
+    shortTitle: '纯 Markdown',
     description: '只把用户勾选 source 全文和用户要求直接交给模型，生成 Markdown 学习笔记。',
     generator: 'text',
     renderer: 'markdown',
     format: 'md',
     filename: 'resource-understand-pure-markdown-notes.md',
-    outputLabel: 'Pure Markdown Notes',
+    outputLabel: '纯 Markdown 笔记',
     recommendedUse: '想测试“全文直接喂给模型整理笔记”的最小链路效果时使用。',
     legacyResourceType: 'report',
     tags: ['pure-markdown', 'source-fulltext', 'source-grounded']
@@ -978,8 +991,8 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     id: 'resource_compare',
     version: '1.0.0',
     goal: 'understand',
-    title: 'Resource Compare',
-    shortTitle: 'Resource Compare',
+    title: '资料对比',
+    shortTitle: '资料对比',
     description: '对比不同资源之间的主题覆盖、观点差异、结构差异、互补信息和冲突点。',
     generator: 'text',
     renderer: 'markdown',
@@ -995,7 +1008,7 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     version: '1.0.0',
     goal: 'map',
     title: '知识点思维导图',
-    shortTitle: 'Mind Map',
+    shortTitle: '思维导图',
     description: '生成层级清晰、可复习的 Mermaid mindmap 和概念关系网络。',
     generator: 'structure',
     renderer: 'mermaid',
@@ -1010,7 +1023,7 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     version: '1.0.0',
     goal: 'map',
     title: '知识图谱',
-    shortTitle: 'Knowledge Graph',
+    shortTitle: '知识图谱',
     description: '把概念、前置关系、依赖关系和易混关系整理成可视化知识网络。',
     generator: 'structure',
     renderer: 'mermaid',
@@ -1024,8 +1037,8 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     id: 'custom_practice',
     version: '1.0.0',
     goal: 'practice',
-    title: 'Custom Practice',
-    shortTitle: 'Practice',
+    title: '自定义练习',
+    shortTitle: '练习',
     description: '根据用户输入的题型、数量、难度和来源范围生成练习。',
     generator: 'assessment',
     renderer: 'quiz',
@@ -1040,14 +1053,14 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     id: 'flashcards',
     version: '1.0.0',
     goal: 'review',
-    title: 'Flashcards',
-    shortTitle: 'Flashcards',
+    title: '记忆卡片',
+    shortTitle: '记忆卡片',
     description: '生成主动回忆卡片，用于间隔复习。',
     generator: 'memory',
     renderer: 'flashcards',
     format: 'md',
     filename: 'review-flashcards.md',
-    outputLabel: 'Flashcards',
+    outputLabel: '记忆卡片',
     recommendedUse: '薄弱点需要反复回忆巩固时使用。',
     legacyResourceType: 'flashcards',
     tags: ['memory', 'spaced-repetition']
@@ -1057,7 +1070,7 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     version: '1.0.0',
     goal: 'review',
     title: '速记清单',
-    shortTitle: 'Quick Review',
+    shortTitle: '快速复习',
     description: '生成考前或课后快速回忆清单。',
     generator: 'memory',
     renderer: 'markdown',
@@ -1072,7 +1085,7 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     version: '1.0.0',
     goal: 'review',
     title: '复习计划',
-    shortTitle: 'Review Plan',
+    shortTitle: '复习计划',
     description: '根据当前资料、薄弱点和复习压力生成间隔复习计划。',
     generator: 'memory',
     renderer: 'markdown',
@@ -1087,8 +1100,8 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     id: 'code_lab',
     version: '1.0.0',
     goal: 'lab',
-    title: 'Code Lab',
-    shortTitle: 'Code Lab',
+    title: '代码实验',
+    shortTitle: '代码实验',
     description: '生成代码实操案例、步骤、Starter Code 和测试任务。',
     generator: 'code_lab',
     renderer: 'code_lab',
@@ -1119,8 +1132,8 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     id: 'slide_deck',
     version: '1.0.0',
     goal: 'visualize',
-    title: 'Slide Deck',
-    shortTitle: 'PPT / Slides',
+    title: '幻灯片',
+    shortTitle: 'PPT / 幻灯片',
     description: '生成真实 PPTX 文件，并保留可预览的 Markdown slide outline。',
     generator: 'multimodal',
     renderer: 'slides',
@@ -1135,8 +1148,8 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     id: 'light_visual_lesson',
     version: '1.0.0',
     goal: 'visualize',
-    title: 'Light Visual Lesson',
-    shortTitle: 'Teacher Slides',
+    title: '轻量可视化讲解',
+    shortTitle: '教师课件',
     description: '用选中文件和要求生成像教师 PPT 一样逐页展开的轻量讲解。',
     generator: 'multimodal',
     renderer: 'light_visual_lesson',
@@ -1279,17 +1292,12 @@ const coreStudioTemplates: AiStudioTemplate[] = [
 
 const visibleStudioTemplateIds = new Set([
   'pure_markdown_notes',
-  'resource_compare',
   'mind_map',
-  'knowledge_graph',
   'custom_practice',
   'flashcards',
   'code_lab',
-  'presenton_pptx',
   'light_visual_lesson',
-  'visual_explainer',
-  'react_chat_visual',
-  'hyperframes_video'
+  'react_chat_visual'
 ]);
 
 const visibleStudioGoalIds = new Set<AiStudioGoalCategory>([
@@ -1464,15 +1472,15 @@ const defaultModalState = (resourceType: AiStudioResourceType): StudioModalState
 });
 
 const resultTitle = (type: AiStudioResourceType) => {
-  if (type === 'slide_deck') return 'Slide Deck';
-  if (type === 'light_visual_lesson') return 'Light Visual Lesson';
-  if (type === 'visual_explainer') return 'Visual Explainer';
-  if (type === 'mind_map') return 'Mind Map';
-  if (type === 'flashcards') return 'Flashcards';
-  if (type === 'quiz') return 'Quiz';
-  if (type === 'data_table') return 'Data Table';
-  if (type === 'code_lab') return 'Code Lab';
-  return 'Report';
+  if (type === 'slide_deck') return '幻灯片';
+  if (type === 'light_visual_lesson') return '轻量可视化讲解';
+  if (type === 'visual_explainer') return '可视化讲解';
+  if (type === 'mind_map') return '思维导图';
+  if (type === 'flashcards') return '记忆卡片';
+  if (type === 'quiz') return '测验';
+  if (type === 'data_table') return '数据表';
+  if (type === 'code_lab') return '代码实验';
+  return '报告';
 };
 
 const quizQuestionTypeLabel = (type: string) => {
@@ -1588,8 +1596,8 @@ const resourceNotesDisplayTitle = (result: Pick<StudioResult, 'template' | 'arti
   result.template?.id === 'pagelm_cornell_notes' || result.artifact?.templateId === 'pagelm_cornell_notes'
     ? 'PageLM Notes'
     : result.template?.id === 'pure_markdown_notes' || result.artifact?.templateId === 'pure_markdown_notes'
-      ? 'Pure Markdown'
-    : 'Resource Notes';
+      ? '纯 Markdown'
+    : '资源笔记';
 
 const stripMarkdownTitle = (content: string) => content.replace(/^\s*#\s+.+(?:\n+|$)/, '').trim();
 
@@ -1781,7 +1789,7 @@ const resultDisplayTitle = (result: StudioResult) =>
   isResourceNotesResult(result)
     ? resourceNotesDisplayTitle(result)
     : isResourceCompareResult(result)
-      ? 'Resource Compare'
+      ? '资料对比'
       : result.artifact?.title ||
   result.template?.shortTitle ||
   result.template?.title ||
@@ -1791,9 +1799,9 @@ const resultDisplayTitle = (result: StudioResult) =>
 const resultMetaLabel = (result: StudioResult) => {
   const parts = [
     typeof result.summary?.sources === 'number'
-      ? `${result.summary.sources} sources`
+      ? `${result.summary.sources} 个来源`
       : typeof result.summary?.resources === 'number'
-        ? `${result.summary.resources} resources`
+        ? `${result.summary.resources} 个资源`
         : null,
     formatRelativeTime(result.createdAt)
   ].filter(Boolean);
@@ -2040,7 +2048,7 @@ function StudioSelectionPopover({
         <div className="flex w-full shrink-0 flex-row rounded-xl border border-gray-100 bg-white p-0.5 shadow-xl">
           <button
             type="button"
-            aria-label="Ask"
+            aria-label="提问"
             className="flex min-w-fit items-center gap-1 rounded-xl px-1.5 py-[1px] font-medium text-gray-700 transition hover:bg-gray-50"
             onMouseDown={(event) => {
               event.preventDefault();
@@ -2049,20 +2057,20 @@ function StudioSelectionPopover({
             }}
           >
             <MessageCircle className="size-3 shrink-0 text-gray-500" />
-            <span className="shrink-0">Ask</span>
+            <span className="shrink-0">提问</span>
           </button>
           <button
             type="button"
-            aria-label="Explain"
+            aria-label="解释"
             className="flex min-w-fit items-center gap-1 rounded-xl px-1.5 py-[1px] font-medium text-gray-700 transition hover:bg-gray-50"
             onMouseDown={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              void runAction('Explain this selection', (history, handlers) => onExplain(history, handlers));
+              void runAction('解释这段选区', (history, handlers) => onExplain(history, handlers));
             }}
           >
             <Lightbulb className="size-3 shrink-0 text-gray-500" />
-            <span className="shrink-0">Explain</span>
+            <span className="shrink-0">解释</span>
           </button>
         </div>
       ) : (
@@ -2089,7 +2097,7 @@ function StudioSelectionPopover({
                   onDismiss();
                 }
               }}
-              placeholder="Ask about this selection"
+              placeholder="询问这段选区"
               className="ml-5 min-w-0 flex-1 appearance-none border-0 bg-transparent text-sm font-normal text-gray-900 outline-none ring-0 placeholder:text-gray-400 disabled:text-gray-400"
             />
             <div className="ml-1 mr-1">
@@ -2104,7 +2112,7 @@ function StudioSelectionPopover({
                   event.stopPropagation();
                   submitQuestion();
                 }}
-                aria-label="Ask about selection"
+                aria-label="询问选区"
               >
                 {loading ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
               </button>
@@ -2380,7 +2388,7 @@ function StudioSourcePicker({
   onChange,
   resources,
   loadingResources,
-  emptyLabel = 'No selectable sources found.'
+  emptyLabel = '未找到可选择的资料。'
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
@@ -2450,7 +2458,7 @@ function StudioSourcePicker({
               setOpen((value) => !value);
             }}
           >
-            Select Knowledge
+            选择知识
           </button>
 
           {open ? (
@@ -2464,7 +2472,7 @@ function StudioSourcePicker({
                     className=" w-full text-sm pr-4 py-1 rounded-r-xl outline-hidden bg-transparent"
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search"
+                    placeholder="搜索"
                     autoFocus
                   />
                 </div>
@@ -2474,7 +2482,7 @@ function StudioSourcePicker({
                 {loadingResources ? (
                   <div className="flex items-center justify-center gap-2 pt-4 pb-6 text-xs text-gray-500">
                     <Loader2 className="size-3.5 animate-spin" />
-                    Loading sources...
+                    正在加载资料...
                   </div>
                 ) : items.length === 0 ? (
                   <div className="text-center text-xs text-gray-500 pt-4 pb-6">
@@ -2720,8 +2728,8 @@ function AudioRecorderView({
             <ArrowLeft className="h-4 w-4" />
             AI Studio
           </button>
-          <h2 className="text-xl font-semibold text-[#202124]">Lecture Recording</h2>
-          <div className="mt-1 text-xs text-[#777a80]">Chunked upload, async ASR, and a draft note for class sessions.</div>
+          <h2 className="text-xl font-semibold text-[#202124]">课堂录音</h2>
+          <div className="mt-1 text-xs text-[#777a80]">分块上传、异步 ASR，并为课堂会话生成笔记草稿。</div>
         </div>
         <div className="flex items-center gap-2">
           <select
@@ -2730,7 +2738,7 @@ function AudioRecorderView({
             disabled={recording || busy}
             className="rounded-full border border-[#dfe3ea] bg-white px-3 py-2 text-sm text-[#343a46]"
           >
-            <option value="auto">Auto</option>
+            <option value="auto">自动</option>
             <option value="funasr">FunASR</option>
             <option value="faster-whisper">faster-whisper</option>
           </select>
@@ -2741,7 +2749,7 @@ function AudioRecorderView({
               className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-4 py-2 text-sm font-semibold text-white hover:bg-black disabled:opacity-50"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
-              Start
+              开始
             </button>
           ) : (
             <button
@@ -2750,7 +2758,7 @@ function AudioRecorderView({
               className="inline-flex items-center gap-2 rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
-              Stop
+              停止
             </button>
           )}
         </div>
@@ -2761,8 +2769,8 @@ function AudioRecorderView({
           <section className="rounded-lg border border-[#dfe3ea] bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Recording</div>
-                <div className="mt-1 text-lg font-semibold text-[#202124]">{recordingFile?.name || 'No recording yet'}</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">录音</div>
+                <div className="mt-1 text-lg font-semibold text-[#202124]">{recordingFile?.name || '还没有录音'}</div>
               </div>
               <div className="rounded-full bg-[#f1f5f9] px-3 py-1 text-sm font-semibold text-[#334155]">{elapsedLabel}</div>
             </div>
@@ -2770,13 +2778,13 @@ function AudioRecorderView({
               <div className="h-full bg-[#202124] transition-all" style={{ width: `${Math.max(0, Math.min(100, progressPercent))}%` }} />
             </div>
             <div className="mt-2 text-sm text-[#667085]">
-              {analysis?.progress?.message || (recording ? 'Recording audio chunks.' : 'Click Start to begin.')}
+              {analysis?.progress?.message || (recording ? '正在录制音频分块。' : '点击开始录制。')}
             </div>
             {analysis?.chunks?.length ? (
               <div className="mt-4 flex flex-wrap gap-2 text-xs text-[#5f6673]">
-                <span className="rounded-full border border-[#edf0f5] px-2.5 py-1">{analysis.chunks.length} chunks uploaded</span>
-                <span className="rounded-full border border-[#edf0f5] px-2.5 py-1">status: {analysis.status}</span>
-                <span className="rounded-full border border-[#edf0f5] px-2.5 py-1">provider: {analysis.provider}</span>
+                <span className="rounded-full border border-[#edf0f5] px-2.5 py-1">已上传 {analysis.chunks.length} 个分块</span>
+                <span className="rounded-full border border-[#edf0f5] px-2.5 py-1">状态：{analysis.status}</span>
+                <span className="rounded-full border border-[#edf0f5] px-2.5 py-1">服务：{analysis.provider}</span>
               </div>
             ) : null}
             {error && <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
@@ -2789,15 +2797,15 @@ function AudioRecorderView({
           </section>
 
           <section className="rounded-lg border border-[#dfe3ea] bg-white p-4 shadow-sm">
-            <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Write back</div>
-            <label className="mt-3 block text-sm font-semibold text-[#343a46]">Target Notes</label>
+            <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">写回</div>
+            <label className="mt-3 block text-sm font-semibold text-[#343a46]">目标笔记</label>
             <select
               value={selectedNote?.id || selectedNoteId}
               onChange={(event) => setSelectedNoteId(event.target.value)}
               className="mt-2 w-full rounded-lg border border-[#dfe3ea] bg-white px-3 py-2 text-sm text-[#202124]"
             >
-              {loadingResources && <option>Loading notes...</option>}
-              {!loadingResources && notes.length === 0 && <option>No notes found</option>}
+              {loadingResources && <option>正在加载笔记...</option>}
+              {!loadingResources && notes.length === 0 && <option>未找到笔记</option>}
               {notes.map((note) => (
                 <option key={note.id} value={note.id}>{note.name}</option>
               ))}
@@ -2814,8 +2822,8 @@ function AudioRecorderView({
 
           <section className="rounded-lg border border-[#dfe3ea] bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
-              <div className="text-sm font-semibold text-[#202124]">Transcript</div>
-              <span className="text-xs text-[#7b8190]">{analysis?.transcript?.length || 0} segments</span>
+              <div className="text-sm font-semibold text-[#202124]">转写</div>
+              <span className="text-xs text-[#7b8190]">{analysis?.transcript?.length || 0} 段</span>
             </div>
             <div className="max-h-[420px] overflow-auto rounded-lg border border-[#edf0f5] bg-[#fbfcfd] p-3 text-sm leading-6 text-[#343a46]">
               {analysis?.transcript?.length ? analysis.transcript.map((segment) => (
@@ -2932,7 +2940,7 @@ function StudioGenerationForm({
   generating: boolean;
 }) {
   const visualExplainer = template.renderer === 'visual_explainer';
-  const primaryLabel = 'Generate';
+  const primaryLabel = '生成';
   const selectOptions = templateOptions?.length ? templateOptions : [template];
   const promptPlaceholder = studioPromptGuideForTemplate(template);
   const [sourceSelectionTouched, setSourceSelectionTouched] = useState(false);
@@ -2955,7 +2963,7 @@ function StudioGenerationForm({
       }}
     >
       <OpenWebUISelect
-        label="Resource Type"
+        label="资源类型"
         valueLabel={template.shortTitle || template.title}
         options={selectOptions.map((item) => ({ id: item.id, label: item.shortTitle || item.title }))}
         onSelect={(id) => {
@@ -2969,7 +2977,7 @@ function StudioGenerationForm({
 
       <div className="my-1">
         <div className="mb-2 text-xs text-gray-500">
-          Prompt
+          提示词
         </div>
         <textarea
           value={state.topic}
@@ -2983,7 +2991,7 @@ function StudioGenerationForm({
       <div className="my-2">
         <div className="flex w-full justify-between">
           <div className=" mb-2 text-xs text-gray-500">
-            Knowledge
+            知识
           </div>
         </div>
         <StudioSourcePicker
@@ -2991,7 +2999,7 @@ function StudioGenerationForm({
           onChange={handleResourceSelectionChange}
           resources={resources}
           loadingResources={loadingResources}
-          emptyLabel="No knowledge found"
+          emptyLabel="未找到知识"
         />
       </div>
 
@@ -3062,7 +3070,7 @@ function StudioGenerateDetailModal({
           <button
             onClick={onClose}
             className="self-center"
-            title="Close"
+            title="关闭"
           >
             <X className="size-5" />
           </button>
@@ -3142,7 +3150,7 @@ function StudioResultActionsMenu({
           event.stopPropagation();
           setOpen((value) => !value);
         }}
-        aria-label="Generation options"
+        aria-label="生成结果选项"
       >
         <MoreHorizontal className="size-3.5" />
       </button>
@@ -3159,7 +3167,7 @@ function StudioResultActionsMenu({
             }}
           >
             <Download className="size-3.5" />
-            Export
+            导出
           </button>
           <button
             type="button"
@@ -3171,7 +3179,7 @@ function StudioResultActionsMenu({
             }}
           >
             <X className="size-3.5" />
-            Delete
+            删除
           </button>
         </div>
       ) : null}
@@ -3213,7 +3221,7 @@ function StudioHome({
       <section className="flex flex-col gap-1 px-1">
         <div className="mb-1.5 flex items-center justify-between">
           <div className="flex items-center gap-2 px-0.5 text-xl font-medium text-[#202124]">
-            <div>Choose a module</div>
+            <div>选择模块</div>
             <div className="text-lg font-medium text-gray-500">{goalCatalog.length + 1}</div>
           </div>
         </div>
@@ -3230,7 +3238,7 @@ function StudioHome({
                   <Mic className="size-4" />
                 </span>
                 <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium text-[#202124]">Lecture Recording</span>
+                  <span className="block truncate text-sm font-medium text-[#202124]">课堂录音</span>
                 </span>
               </span>
               <span className="flex w-fit shrink-0 items-center rounded-xl p-1.5 text-sm text-gray-700 transition hover:bg-black/5">
@@ -3252,7 +3260,7 @@ function StudioHome({
                       <Icon className="size-4" />
                     </span>
                     <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium text-[#202124]">{goal.en}</span>
+                      <span className="block truncate text-sm font-medium text-[#202124]">{goal.zh || studioGoalDisplayLabel(goal.id)}</span>
                     </span>
                   </span>
                   <span className="flex w-fit shrink-0 items-center rounded-xl p-1.5 text-sm text-gray-700 transition hover:bg-black/5">
@@ -3269,7 +3277,7 @@ function StudioHome({
         <section className="mt-5 flex flex-col gap-1 px-1">
           <div className="mb-1.5 flex items-center justify-between">
             <div className="flex items-center gap-2 px-0.5 text-xl font-medium text-[#202124]">
-              <div>Recent generations</div>
+              <div>最近生成</div>
               <div className="text-lg font-medium text-gray-500">{results.length}</div>
             </div>
           </div>
@@ -3299,7 +3307,7 @@ function StudioHome({
                         <div className="flex w-full items-center justify-between gap-2">
                           <div>
                             <span className="rounded-lg bg-green-500/20 px-[5px] text-xs font-medium uppercase text-green-700">
-                              {result.goal || result.resourceType}
+                              {studioGoalDisplayLabel(result.goal || result.resourceType)}
                             </span>
                           </div>
                         </div>
@@ -3483,7 +3491,7 @@ function FlashcardViewer({
       })
       .catch((error: any) => {
         persistRequestKeyRef.current = '';
-        if (!cancelled) setPersistError(error?.response?.data?.error || error?.message || 'Failed to save flashcards');
+        if (!cancelled) setPersistError(error?.response?.data?.error || error?.message || '保存记忆卡片失败');
       })
       .finally(() => {
         if (!cancelled) setPersistingDeck(false);
@@ -3500,9 +3508,9 @@ function FlashcardViewer({
   return (
     <div className="flex min-h-[420px] flex-col items-center justify-center px-4 py-5">
       <div className="relative flex h-[min(360px,50vh)] w-[min(560px,100%)] flex-col rounded-2xl border border-[#e5e7eb] bg-white p-5 text-[#202124] shadow-[0_10px_30px_rgba(32,33,36,0.08)]">
-        <div className="text-xs text-[#777a80]">Saving {cards.length} flashcards</div>
+        <div className="text-xs text-[#777a80]">正在保存 {cards.length} 张记忆卡片</div>
         <div className="flex flex-1 items-center justify-center text-center text-xl font-semibold leading-normal">
-          {persistingDeck ? 'Preparing saved flashcards...' : 'Flashcards need to be saved before review.'}
+          {persistingDeck ? '正在准备已保存的记忆卡片...' : '复习前需要先保存记忆卡片。'}
         </div>
         {persistError ? (
           <button
@@ -3512,12 +3520,12 @@ function FlashcardViewer({
             }}
             className="mx-auto rounded-full border border-[#dfe3ea] px-5 py-2 text-sm font-medium text-[#343a46] hover:bg-[#f8fafc]"
           >
-            Retry
+            重试
           </button>
         ) : (
           <div className="mx-auto inline-flex items-center gap-2 text-sm text-[#777a80]">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Saving
+            保存中
           </div>
         )}
       </div>
@@ -3540,8 +3548,8 @@ const formatDue = (value: string) => {
   const minutes = Math.round(diffMs / 60000);
   if (minutes < 90) return `in ${minutes}m`;
   const hours = Math.round(minutes / 60);
-  if (hours < 36) return `in ${hours}h`;
-  return `in ${Math.round(hours / 24)}d`;
+  if (hours < 36) return `${hours} 小时后`;
+  return `${Math.round(hours / 24)} 天后`;
 };
 
 const formatRelativeTime = (value?: string) => {
@@ -3550,15 +3558,15 @@ const formatRelativeTime = (value?: string) => {
   if (Number.isNaN(time)) return '';
   const diffMs = Date.now() - time;
   const minutes = Math.max(0, Math.floor(diffMs / 60000));
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return `${hours} 小时前`;
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
+  if (days < 30) return `${days} 天前`;
   const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  return `${Math.floor(months / 12)}y ago`;
+  if (months < 12) return `${months} 个月前`;
+  return `${Math.floor(months / 12)} 年前`;
 };
 
 function FlashcardDeckViewer({
@@ -3612,7 +3620,7 @@ function FlashcardDeckViewer({
         setIndex(index + 1);
       }
     } catch (reviewError: any) {
-      setError(reviewError?.response?.data?.error || reviewError?.message || 'Review failed');
+      setError(reviewError?.response?.data?.error || reviewError?.message || '复习失败');
     } finally {
       setLoadingRating(null);
     }
@@ -3626,14 +3634,14 @@ function FlashcardDeckViewer({
       const response = await aiApi.explainFlashcard({ workspaceId, cardId: card.id });
       setExplanation(response.reply);
     } catch (explainError: any) {
-      setError(explainError?.response?.data?.error || explainError?.message || 'Explain failed');
+      setError(explainError?.response?.data?.error || explainError?.message || '解释失败');
     } finally {
       setExplaining(false);
     }
   };
 
   if (!card) {
-    return <div className="p-5 text-sm text-[#6f7277]">No cards in this deck.</div>;
+    return <div className="p-5 text-sm text-[#6f7277]">这组卡片为空。</div>;
   }
 
   return (
@@ -3643,7 +3651,7 @@ function FlashcardDeckViewer({
           <div className="flex min-h-[360px] flex-col rounded-2xl border border-[#e5e7eb] bg-white p-5 text-[#202124] shadow-[0_10px_30px_rgba(32,33,36,0.08)]">
             <div className="flex items-center justify-between gap-3 text-xs text-[#777a80]">
               <span>{index + 1} / {cards.length}</span>
-              <span>due {formatDue(card.dueAt)}</span>
+              <span>到期 {formatDue(card.dueAt)}</span>
             </div>
             <div className="flex flex-1 items-center justify-center text-center text-xl font-semibold leading-normal">
               {showAnswer ? backText : frontText}
@@ -3653,7 +3661,7 @@ function FlashcardDeckViewer({
                 onClick={() => setShowAnswer((value) => !value)}
                 className="rounded-full border border-[#dfe3ea] px-5 py-2 text-sm font-medium text-[#343a46] hover:bg-[#f8fafc]"
               >
-                {showAnswer ? 'See question' : 'See answer'}
+                {showAnswer ? '查看问题' : '查看答案'}
               </button>
               <button
                 onClick={explain}
@@ -3661,7 +3669,7 @@ function FlashcardDeckViewer({
                 className="inline-flex items-center gap-2 rounded-full border border-[#dfe3ea] px-4 py-2 text-sm font-medium text-[#343a46] hover:bg-[#f8fafc] disabled:opacity-60"
               >
                 {explaining && <Loader2 className="h-4 w-4 animate-spin" />}
-                Explain
+                解释
               </button>
             </div>
           </div>
@@ -3683,7 +3691,7 @@ function FlashcardDeckViewer({
               disabled={Boolean(loadingRating)}
               className={`min-w-[92px] rounded-full border px-4 py-2 text-sm font-semibold transition disabled:opacity-60 ${item.className}`}
             >
-              {loadingRating === item.rating ? 'Saving...' : item.label}
+              {loadingRating === item.rating ? '保存中...' : item.label}
               <span className="ml-1 text-xs opacity-70">{item.hint}</span>
             </button>
           ))}
@@ -3946,7 +3954,7 @@ function CourseKnowledgeSubgraphViewer({
       <div className="flex min-h-[520px] items-center justify-center bg-white text-sm text-[#5f6368]">
         <div className="inline-flex items-center gap-2">
           <Loader2 className="h-4 w-4 animate-spin" />
-          {rebuilding ? 'Building workspace knowledge graph...' : 'Loading workspace knowledge graph...'}
+          {rebuilding ? '正在构建工作区知识图谱...' : '正在加载工作区知识图谱...'}
         </div>
       </div>
     );
@@ -3963,12 +3971,12 @@ function CourseKnowledgeSubgraphViewer({
   if (!graph?.nodes.length) {
     return (
       <div className="mx-auto max-w-2xl p-6 text-sm leading-6 text-[#5f6368]">
-        No workspace knowledge graph nodes were found for the selected resources.
+        未在选定资料中找到工作区知识图谱节点。
       </div>
     );
   }
 
-  return <ConceptGraph2DViewer result={result} graph={graph} modeLabel="Knowledge Graph" />;
+  return <ConceptGraph2DViewer result={result} graph={graph} modeLabel="知识图谱" />;
 }
 
 const mindElixirDataFromMermaid = (mermaid: string): MindElixirData => {
@@ -4106,11 +4114,11 @@ function MindElixirTreeViewer({
     <div className="flex h-full min-h-[620px] flex-col bg-white">
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <button className="rounded-full bg-[#202124] px-3 py-2 text-xs font-semibold text-white">2D Mindmap</button>
+          <button className="rounded-full bg-[#202124] px-3 py-2 text-xs font-semibold text-white">2D 思维导图</button>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => mindRef.current?.scaleFit()} className="inline-flex items-center gap-2 rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">
-            <Maximize2 className="h-4 w-4" /> Fit
+            <Maximize2 className="h-4 w-4" /> 适应
           </button>
           <button onClick={exportJson} className="inline-flex items-center gap-2 rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">
             <Download className="h-4 w-4" /> JSON
@@ -4128,7 +4136,7 @@ function MindElixirTreeViewer({
 function ConceptGraph2DViewer({
   result,
   graph,
-  modeLabel = 'Knowledge Graph'
+  modeLabel = '知识图谱'
 }: {
   result: StudioResult;
   graph: ConceptGraphPayload;
@@ -4295,7 +4303,7 @@ function ConceptGraph2DViewer({
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => graphRef.current?.zoomToFit({ padding: 32, maxScale: 1.2 })} className="inline-flex items-center gap-2 rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">
-              <Maximize2 className="h-4 w-4" /> Fit
+              <Maximize2 className="h-4 w-4" /> 适应
             </button>
             <button onClick={exportJson} className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-3 py-2 text-xs font-medium text-white hover:bg-[#34373c]">
               <Download className="h-4 w-4" /> JSON
@@ -4306,26 +4314,26 @@ function ConceptGraph2DViewer({
       </div>
       <aside className="flex min-h-0 flex-col border-t border-[#eeeeeb] bg-white">
         <div className="border-b border-[#eeeeeb] px-4 py-3">
-          <div className="text-sm font-semibold text-[#202124]">Inspector</div>
-          <div className="mt-1 text-xs text-[#777a80]">{normalized.nodes.length} nodes · {normalized.links.length} links</div>
+          <div className="text-sm font-semibold text-[#202124]">检查器</div>
+          <div className="mt-1 text-xs text-[#777a80]">{normalized.nodes.length} 个节点 · {normalized.links.length} 条连接</div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {isConceptGraphNode(selected) ? (
             <div>
               <div className="text-lg font-semibold text-[#202124]">{selected.label}</div>
               <div className="mt-2 flex flex-wrap gap-2">
-                <span className="rounded-full border border-[#e5e5e1] px-2 py-1 text-xs text-[#5f6368]">{selected.group || 'concept'}</span>
-                <span className="rounded-full border border-[#e5e5e1] px-2 py-1 text-xs text-[#5f6368]">importance {Math.round((selected.importance || 0.5) * 100)}%</span>
+                <span className="rounded-full border border-[#e5e5e1] px-2 py-1 text-xs text-[#5f6368]">{selected.group || '概念'}</span>
+                <span className="rounded-full border border-[#e5e5e1] px-2 py-1 text-xs text-[#5f6368]">重要度 {Math.round((selected.importance || 0.5) * 100)}%</span>
               </div>
-              <p className="mt-4 text-sm leading-6 text-[#5f6368]">{selected.summary || 'No summary provided.'}</p>
+              <p className="mt-4 text-sm leading-6 text-[#5f6368]">{selected.summary || '暂无摘要。'}</p>
             </div>
           ) : selected ? (
             <div>
-              <div className="text-lg font-semibold text-[#202124]">{String((selected as ConceptGraphLink).label || (selected as ConceptGraphLink).type || 'Relationship')}</div>
+              <div className="text-lg font-semibold text-[#202124]">{String((selected as ConceptGraphLink).label || (selected as ConceptGraphLink).type || '关系')}</div>
               <pre className="mt-3 whitespace-pre-wrap rounded-xl bg-[#f6f7fb] p-3 text-xs leading-6 text-[#5f6368]">{JSON.stringify(selected, null, 2)}</pre>
             </div>
           ) : (
-            <div className="rounded-xl bg-[#f6f7fb] p-3 text-sm leading-6 text-[#5f6368]">Click a node or edge to inspect it.</div>
+            <div className="rounded-xl bg-[#f6f7fb] p-3 text-sm leading-6 text-[#5f6368]">点击节点或边查看详情。</div>
           )}
           <div ref={minimapRef} className="mt-5 h-36 overflow-hidden rounded-xl border border-[#eeeeeb]" />
         </div>
@@ -5944,14 +5952,14 @@ function TeachingVisualizationViewer({ result }: { result: StudioResult }) {
               onClick={() => moveAction(-1)}
               disabled={index === 0 && actionIndex === 0}
               className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#dfe3ea] text-[#343a46] hover:bg-[#f8fafc] disabled:opacity-40"
-              title="Previous"
+              title="上一步"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
             <button
               onClick={() => setPlaying((value) => !value)}
               className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-[#202124] text-white hover:bg-black"
-              title={playing ? 'Pause' : 'Play'}
+              title={playing ? '暂停' : '播放'}
             >
               {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
             </button>
@@ -5959,7 +5967,7 @@ function TeachingVisualizationViewer({ result }: { result: StudioResult }) {
               onClick={() => moveAction(1)}
               disabled={index >= trace.steps.length - 1 && actionIndex >= actionCount - 1}
               className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#dfe3ea] text-[#343a46] hover:bg-[#f8fafc] disabled:opacity-40"
-              title="Next"
+              title="下一步"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -5991,7 +5999,7 @@ function TeachingVisualizationViewer({ result }: { result: StudioResult }) {
               setPlaying(true);
             }}
             className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#dfe3ea] text-[#343a46] hover:bg-[#f8fafc]"
-            title="Replay"
+            title="重新播放"
           >
             <RefreshCw className="h-4 w-4" />
           </button>
@@ -6035,7 +6043,7 @@ function TeachingVisualizationViewer({ result }: { result: StudioResult }) {
                   onClick={() => downloadJson(`${trace.title || 'process-trace'}.ir.json`, payload)}
                   className="inline-flex items-center gap-2 rounded-full border border-[#dfe3ea] bg-white px-3 py-1.5 text-xs font-semibold text-[#343a46] hover:bg-[#f8fafc]"
                 >
-                  <Download className="h-3.5 w-3.5" /> Export
+                  <Download className="h-3.5 w-3.5" /> 导出
                 </button>
               </div>
               {showErrorPath ? (
@@ -6046,7 +6054,7 @@ function TeachingVisualizationViewer({ result }: { result: StudioResult }) {
               ) : null}
 
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Action Timeline</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">动作时间线</div>
                 <div className="mt-2 space-y-2">
                   {visibleActions.length ? visibleActions.map((action, itemIndex) => (
                     <button
@@ -6100,7 +6108,7 @@ function TeachingVisualizationViewer({ result }: { result: StudioResult }) {
               </div>
 
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Predict Next</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">预测下一步</div>
                 <textarea
                   value={prediction}
                   onChange={(event) => {
@@ -6112,7 +6120,7 @@ function TeachingVisualizationViewer({ result }: { result: StudioResult }) {
                   placeholder="预测下一步会比较、移动或生成什么..."
                 />
                 <div className="mt-2 flex items-center justify-between gap-2">
-                  <button onClick={checkPrediction} className="rounded-full bg-[#202124] px-4 py-2 text-xs font-semibold text-white">Check</button>
+                  <button onClick={checkPrediction} className="rounded-full bg-[#202124] px-4 py-2 text-xs font-semibold text-white">检查</button>
                   {predictionResult !== 'idle' ? (
                     <div className={`text-xs font-semibold ${predictionResult === 'correct' ? 'text-[#137333]' : 'text-[#a50e0e]'}`}>
                       {predictionResult === 'correct' ? '预测方向匹配' : `参考下一步：${nextStep?.title || '已到末尾'}`}
@@ -6183,7 +6191,7 @@ const studioDurationLabel = (ms?: number | null) => {
 const visualExplainerStagePlan = [
   { id: 'request', label: 'Request', description: '准备上下文和模板' },
   { id: 'markdown', label: 'Markdown', description: '生成完整文字底稿' },
-  { id: 'content_map', label: 'Content Map', description: '提取概念、步骤、关系和例子' },
+  { id: 'content_map', label: '内容地图', description: '提取概念、步骤、关系和例子' },
   { id: 'section_plan', label: 'Sections', description: '按讲解节奏切分分镜' },
   { id: 'slide_text', label: 'Slide Text', description: '生成左侧讲解文案' },
   { id: 'visual_intent', label: 'Visual Intent', description: '判断图形类型和 renderer' },
@@ -6256,7 +6264,7 @@ function StudioGenerationProgressStrip({ progress }: { progress: StudioGeneratio
               <Sparkles className="h-4 w-4 animate-pulse" />
               <span className="absolute inset-0 rounded-full border border-[#93c5fd] animate-ping" />
             </div>
-            {isVisual ? activeStage.label : 'Generating'}
+            {isVisual ? activeStage.label : '生成中'}
             <span className="inline-flex items-center gap-0.5 pl-1" aria-label="thinking">
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb]" />
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb] [animation-delay:120ms]" />
@@ -6331,9 +6339,9 @@ function VisualExplainerDiagnostics({ result, payload }: { result: StudioResult;
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[#64748b]">
-            <span>Generation Pipeline</span>
+            <span>生成流水线</span>
             <span className={`rounded-full px-2 py-0.5 normal-case tracking-normal ${fallback ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'}`}>
-              {fallback ? 'Fallback used' : 'Structured'}
+              {fallback ? '已使用 fallback' : '结构化'}
             </span>
             {result.source ? <span className="normal-case tracking-normal text-[#94a3b8]">{result.source.split(':')[0]}</span> : null}
           </div>
@@ -6352,7 +6360,7 @@ function VisualExplainerDiagnostics({ result, payload }: { result: StudioResult;
         {totalTraceMs ? (
           <div className="shrink-0 rounded-md bg-white/75 px-3 py-2 text-xs leading-5 text-[#475569]">
             <div className="font-semibold text-[#202124]">{studioDurationLabel(totalTraceMs)}</div>
-            <div>{trace.length} backend steps</div>
+            <div>{trace.length} 个后端步骤</div>
           </div>
         ) : null}
       </div>
@@ -6380,7 +6388,7 @@ function VisualExplainerDiagnostics({ result, payload }: { result: StudioResult;
       ) : null}
       {!providerErrors.length && pipelineFallbackReason.length ? (
         <div className="mt-3 rounded-md border border-amber-200 bg-white/70 p-3 text-xs leading-5 text-amber-900">
-          <div className="font-semibold">Stage reason</div>
+          <div className="font-semibold">阶段原因</div>
           <div className="mt-1 grid gap-1 md:grid-cols-2">
             {pipelineFallbackReason.map((item) => <div key={item} className="truncate" title={item}>{item}</div>)}
           </div>
@@ -6388,7 +6396,7 @@ function VisualExplainerDiagnostics({ result, payload }: { result: StudioResult;
       ) : null}
       {slowTrace.length ? (
         <div className="mt-2 text-xs leading-5 text-[#667085]">
-          Slow steps: {slowTrace.map((item) => `${item.title} ${studioDurationLabel(item.durationMs)}`).join(' · ')}
+          慢步骤：{slowTrace.map((item) => `${item.title} ${studioDurationLabel(item.durationMs)}`).join(' · ')}
         </div>
       ) : null}
     </div>
@@ -6399,7 +6407,7 @@ const visualModeLabel: Record<VisualExplainerMode, string> = {
   slide: 'Slide',
   process: 'Process',
   diagram: 'Diagram',
-  comparison: 'Compare',
+  comparison: '对比',
   whiteboard: 'Board',
   chart: 'Chart',
   summary: 'Summary'
@@ -7318,7 +7326,7 @@ function LightVisualLessonViewer({ result, onBack }: { result: StudioResult; onB
             type="button"
             onClick={() => navigateReveal('prev')}
             disabled={!isRevealReady}
-            title="Previous step"
+            title="上一步"
             className="inline-flex h-9 items-center gap-2 rounded-md border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] shadow-sm transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -7328,7 +7336,7 @@ function LightVisualLessonViewer({ result, onBack }: { result: StudioResult; onB
             type="button"
             onClick={() => setIsLessonPlaying((playing) => !playing)}
             disabled={!isRevealReady}
-            title={isLessonPlaying ? 'Pause' : 'Play'}
+            title={isLessonPlaying ? '暂停' : '播放'}
             className="inline-flex h-9 items-center gap-2 rounded-md bg-[#202124] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#34373c] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isLessonPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
@@ -7338,7 +7346,7 @@ function LightVisualLessonViewer({ result, onBack }: { result: StudioResult; onB
             type="button"
             onClick={() => navigateReveal('next')}
             disabled={!isRevealReady}
-            title="Next step"
+            title="下一步"
             className="inline-flex h-9 items-center gap-2 rounded-md border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] shadow-sm transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-50"
           >
             下一步
@@ -7347,7 +7355,7 @@ function LightVisualLessonViewer({ result, onBack }: { result: StudioResult; onB
           <button
             type="button"
             onClick={() => exportLightVisualLessonToPdf(lesson)}
-            title="Export PDF"
+            title="导出 PDF"
             className="inline-flex h-9 items-center gap-2 rounded-md border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] shadow-sm transition hover:bg-[#f8fafc]"
           >
             <Download className="h-4 w-4" />
@@ -7469,7 +7477,7 @@ function VisualExplainerViewer({ result, onBack }: { result: StudioResult; onBac
             onClick={() => goSlide(currentSlideIndex - 1)}
             disabled={currentSlideIndex === 0}
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#dfe3ea] text-[#343a46] disabled:opacity-40"
-            title="Previous slide"
+            title="上一页幻灯片"
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
@@ -7479,13 +7487,13 @@ function VisualExplainerViewer({ result, onBack }: { result: StudioResult; onBac
             className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#2563eb] px-3 text-sm font-semibold text-white"
           >
             {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-            {isPlaying ? 'Pause' : 'Play'}
+            {isPlaying ? '暂停' : '播放'}
           </button>
           <button
             type="button"
             onClick={resetCurrentSlide}
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#dfe3ea] text-[#343a46]"
-            title="Reset slide"
+            title="重置幻灯片"
           >
             <RefreshCw className="h-4 w-4" />
           </button>
@@ -7494,7 +7502,7 @@ function VisualExplainerViewer({ result, onBack }: { result: StudioResult; onBac
             onClick={() => goSlide(currentSlideIndex + 1)}
             disabled={currentSlideIndex >= slides.length - 1}
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#dfe3ea] text-[#343a46] disabled:opacity-40"
-            title="Next slide"
+            title="下一页幻灯片"
           >
             <ChevronRight className="h-4 w-4" />
           </button>
@@ -7524,9 +7532,9 @@ function VisualExplainerViewer({ result, onBack }: { result: StudioResult; onBac
         </main>
         <aside className="flex min-h-[280px] flex-col rounded-lg border border-[#e5e7eb] bg-white">
           <div className="border-b border-[#e5e7eb] px-4 py-3">
-            <div className="text-sm font-semibold text-[#202124]">Timeline</div>
+            <div className="text-sm font-semibold text-[#202124]">时间线</div>
             <div className="mt-0.5 text-xs text-[#7b8190]">
-              {steps.length ? `${currentStepIndex + 1}/${steps.length}` : 'No steps'}
+              {steps.length ? `${currentStepIndex + 1}/${steps.length}` : '暂无步骤'}
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-3">
@@ -7585,9 +7593,10 @@ function AIStudioBackLink({
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex min-w-fit p-1.5 text-sm font-medium text-gray-900 transition select-none hover:text-gray-700 dark:text-gray-200 dark:hover:text-white ${className}`}
+      className={`inline-flex min-w-fit items-center gap-1 p-1.5 text-sm font-medium text-gray-900 transition select-none hover:text-gray-700 dark:text-gray-200 dark:hover:text-white ${className}`}
     >
-      <span className="whitespace-nowrap">&lt;AI Studio</span>
+      <ArrowLeft className="h-4 w-4 shrink-0" />
+      <span className="whitespace-nowrap">AI Studio</span>
     </button>
   );
 }
@@ -7951,7 +7960,7 @@ function QuizCompletionSummary({
                 onClick={startNextPractice}
                 className="mt-5 inline-flex items-center gap-2 rounded-full bg-[#202124] px-4 py-2 text-sm font-semibold text-white hover:bg-black"
               >
-                Next practice
+                下一组练习
               </button>
             ) : null}
           </div>
@@ -7981,6 +7990,8 @@ function QuizViewer({
   const [attempts, setAttempts] = useState<Record<string, QuizAttempt>>({});
   const [assistantByQuestion, setAssistantByQuestion] = useState<Record<string, QuizAssistantState>>({});
   const [hintOpenByQuestion, setHintOpenByQuestion] = useState<Record<string, boolean>>({});
+  const [assistantPopoverByQuestion, setAssistantPopoverByQuestion] = useState<Record<string, boolean>>({});
+  const [showCompletionSummary, setShowCompletionSummary] = useState(false);
   const [judging, setJudging] = useState(false);
   const [sessionSnapshot, setSessionSnapshot] = useState<QuizSessionSnapshot | null>(null);
   const [loadingSnapshot, setLoadingSnapshot] = useState(false);
@@ -8079,6 +8090,7 @@ function QuizViewer({
   };
 
   const retryQuestion = () => {
+    setShowCompletionSummary(false);
     setAttempts((current) => ({
       ...current,
       [question.id]: {
@@ -8395,27 +8407,27 @@ function QuizViewer({
       }
       return;
     }
+    if (isLastQuestion && !attempt?.submitted && currentAnswer.trim()) {
+      await submit();
+      setShowCompletionSummary(true);
+      return;
+    }
     if (!attempt?.submitted && !currentAnswer.trim()) {
       markSkipped();
     }
     if (!isLastQuestion) {
       setIndex((current) => current + 1);
+    } else {
+      setShowCompletionSummary(true);
     }
   };
 
-  const progressSegments = questions.map((item, itemIndex) => {
-    const itemAttempt = attempts[item.id];
-    if (itemAttempt?.skipped && !itemAttempt?.submitted) return 'skipped';
-    if (itemAttempt?.submitted && itemAttempt.correct) return 'correct';
-    if (itemAttempt?.submitted && !itemAttempt.correct) return 'wrong';
-    if (itemIndex === index) return 'current';
-    return 'pending';
-  });
   const isLastQuestion = index === questions.length - 1;
   const showHint = Boolean(hintOpenByQuestion[question.id]);
+  const assistantPopoverOpen = Boolean(assistantPopoverByQuestion[question.id]);
   const progressPercent = questions.length ? ((index + 1) / questions.length) * 100 : 0;
 
-  if (finished && !isHistoricalReview) {
+  if ((finished || showCompletionSummary) && !isHistoricalReview) {
     return (
       <div>
         <QuizCompletionSummary
@@ -8435,38 +8447,83 @@ function QuizViewer({
   }
 
   return (
-    <div className="px-4 py-4 text-[13px] md:px-5">
-      <div className="flex flex-col gap-2 border-b border-[#eef0f4] pb-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-sm font-semibold text-[#1f5fd0]">
-            {index + 1}/{questions.length}
+    <div className="openwebui-shell flex min-h-[min(760px,calc(100vh-190px))] flex-col bg-white text-[#050505]">
+      <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 py-5 md:px-6">
+        <div className="border-b border-[#eef0f4] pb-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="text-base font-semibold leading-none text-blue-600">
+                {index + 1}/{questions.length}
+              </span>
+              {loadingSnapshot ? <span className="text-xs text-gray-400">加载历史记录...</span> : null}
+            </div>
+            <div className="flex items-center gap-5 text-sm text-gray-500">
+              <span className="inline-flex items-center gap-1.5">
+                <X className="h-4 w-4 text-red-500" />
+                {wrongCount} wrong
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Check className="h-4 w-4 text-emerald-600" />
+                {correctCount} correct
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-3 text-xs text-[#5d6472]">
-            <span className="inline-flex items-center gap-1">
-              <X className="h-3.5 w-3.5 text-[#c43628]" />
-              {wrongCount} wrong
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Check className="h-3.5 w-3.5 text-[#17833f]" />
-              {correctCount} correct
-            </span>
+          <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-gray-100">
+            <div
+              className="h-full rounded-full bg-blue-600 transition-all duration-300"
+              style={{ width: `${Math.max(4, Math.min(100, progressPercent))}%` }}
+            />
+          </div>
+          <div className="mt-3 flex items-center justify-between">
+            <div>
+              {index > 0 ? (
+                <button
+                  onClick={() => move(-1)}
+                  className="inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 hover:text-gray-950"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  上一题
+                </button>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              {!attempt?.submitted && !isHistoricalReview ? (
+                <button
+                  onClick={markSkipped}
+                  disabled={judging}
+                  className="inline-flex items-center rounded-full px-3 py-2 text-sm font-medium text-gray-500 transition hover:bg-gray-50 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Skip
+                </button>
+              ) : null}
+              {attempt?.submitted && !isHistoricalReview ? (
+                <button
+                  onClick={retryQuestion}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 hover:text-gray-950"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  重试
+                </button>
+              ) : null}
+              <button
+                onClick={() => void handleNext()}
+                disabled={judging || (isHistoricalReview && isLastQuestion)}
+                className="inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm font-medium text-gray-900 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {isHistoricalReview && isLastQuestion ? '已到最后一题' : isLastQuestion ? '完成' : '下一题'}
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
-        <div className="h-1.5 overflow-hidden rounded-full bg-[#e9edf5]">
-          <div
-            className="h-full rounded-full bg-[#1f5fd0] transition-all duration-300"
-            style={{ width: `${Math.max(4, Math.min(100, progressPercent))}%` }}
-          />
-        </div>
-      </div>
 
-      <div className="pt-4">
-        <h3 className="max-w-5xl text-[15px] font-semibold leading-6 text-[#202124]">
+        <div className="flex-1 pt-8">
+        <h3 className="max-w-5xl text-base font-semibold leading-7 text-[#202124]">
           {renderQuestionText(question.question)}
         </h3>
 
         {isChoiceQuestion(question.type) ? (
-          <div className="mt-4 space-y-3">
+          <div className="mt-6 space-y-3">
             {(question.options.length ? question.options : ['A. 选项 A', 'B. 选项 B', 'C. 选项 C', 'D. 选项 D']).map((option) => {
               const optionId = optionIdOf(option);
               const selected = attempt?.selectedOptionId === optionId || currentAnswer === option;
@@ -8477,47 +8534,50 @@ function QuizViewer({
               return (
                 <div
                   key={option}
-                  className={`relative rounded-lg border transition ${
+                  className={`group relative overflow-hidden rounded-[1.65rem] transition-colors duration-200 ${
                     isCorrectOption
-                      ? 'border-[#14b8a6] bg-[#f8fffd]'
+                      ? 'bg-emerald-50 text-emerald-900'
                       : isWrongSelected
-                        ? 'border-[#f0d8d6] bg-[#fcf5f4]'
+                        ? 'bg-red-50 text-red-900'
                         : selected
-                          ? 'border-[#b8c4ff] bg-[#f3f5ff]'
-                          : 'border-[#d5dbe5] bg-white hover:border-[#b8c4d6]'
+                          ? 'border border-[#dfe3ea] bg-white'
+                          : 'border border-[#dfe3ea] bg-white hover:bg-[#fbfbfa]'
                   }`}
                 >
                   <button
                     onClick={() => void submitChoice(option)}
                     disabled={attempt?.submitted || judging}
-                    className="flex min-h-[52px] w-full items-center justify-center px-10 py-3 text-center text-[13px] font-medium leading-5 text-[#202124]"
+                    className="flex min-h-[52px] w-full items-center gap-3 px-5 py-3 text-left text-sm font-semibold leading-6 disabled:cursor-default"
                   >
-                    <span className="max-w-full break-words">{renderQuestionText(optionText)}</span>
+                    <span className="shrink-0 text-sm font-semibold text-current opacity-70">
+                      {optionId || '?'}
+                    </span>
+                    <span className="min-w-0 flex-1 break-words text-[#202124]">{renderQuestionText(optionText)}</span>
                   </button>
                   {isCorrectOption ? (
-                    <span className="absolute right-3 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full bg-[#14b8a6] text-white">
-                      <Check className="h-3.5 w-3.5" />
+                    <span className="absolute right-5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full bg-emerald-600 text-white">
+                      <Check className="h-4 w-4" />
                     </span>
                   ) : null}
                   {attempt?.submitted && (isCorrectOption || isWrongSelected) ? (
-                    <div className="border-t border-black/5 px-4 py-3 text-sm leading-6 text-[#34373c]">
+                    <div className="px-7 pb-4 text-sm leading-6">
                       {isWrongSelected && (
-                        <div className="flex items-start gap-2">
-                          <X className="mt-1 h-4 w-4 shrink-0 text-[#c43628]" />
+                        <div className="flex items-start gap-2.5">
+                          <X className="mt-1 h-3.5 w-3.5 shrink-0 text-red-500" />
                           <div className="text-red-800">
-                            <div className="text-sm font-medium text-[#c43628]">Not quite</div>
-                            <div className="mt-1 text-sm leading-6 text-[#202124]">
+                            <div className="font-semibold text-red-600">Not quite</div>
+                            <div className="mt-2 text-[#202124]">
                               {optionBriefFeedback(optionFeedback || attempt?.feedback || question.explanation, 20, '看下方解析')}
                             </div>
                           </div>
                         </div>
                       )}
                       {isCorrectOption && (
-                        <div className="flex items-start gap-2">
-                          <Check className="mt-1 h-4 w-4 shrink-0 text-[#14a38f]" />
+                        <div className="flex items-start gap-2.5">
+                          <Check className="mt-1 h-3.5 w-3.5 shrink-0 text-emerald-600" />
                           <div className="text-green-900">
-                            <div className="text-sm font-medium text-[#0f8f7e]">That's right!</div>
-                            <div className="mt-1 text-sm leading-6 text-[#202124]">
+                            <div className="font-semibold text-emerald-700">That's right!</div>
+                            <div className="mt-2 text-[#202124]">
                               {optionBriefFeedback(optionFeedback || question.explanation || attempt?.feedback, 15, '看下方解析')}
                             </div>
                           </div>
@@ -8530,12 +8590,12 @@ function QuizViewer({
               })}
           </div>
         ) : question.type === 'fill_blank' ? (
-          <div className="mt-4 space-y-3">
+          <div className="mt-6 space-y-3">
             <input
               value={currentAnswer}
               onChange={(event) => updateAnswer(event.target.value)}
               disabled={attempt?.submitted}
-              className="min-h-[52px] w-full rounded-lg border border-[#d5dbe5] bg-white px-4 text-center text-[13px] font-medium leading-5 text-[#202124] outline-none transition placeholder:font-normal placeholder:text-[#8b95a7] focus:border-[#b8c4ff] disabled:opacity-70"
+              className="min-h-[58px] w-full rounded-2xl border border-gray-200 bg-white px-5 text-[15px] font-medium leading-6 text-[#202124] outline-hidden transition placeholder:font-normal placeholder:text-gray-400 focus:border-gray-300 focus:shadow-sm disabled:opacity-70"
               placeholder="在此填写你的答案"
             />
             {!attempt?.submitted ? (
@@ -8543,20 +8603,20 @@ function QuizViewer({
                 type="button"
                 onClick={() => void submit()}
                 disabled={judging || !currentAnswer.trim()}
-                className="inline-flex items-center justify-center rounded-lg border border-[#d5dbe5] bg-white px-3 py-2 text-[13px] font-semibold text-[#1f5fd0] transition hover:border-[#b8c4d6] hover:bg-[#f8fbff] disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex items-center justify-center rounded-full bg-black px-4 py-2 text-sm font-medium text-white transition hover:bg-gray-900 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 {judging ? '验证中...' : '验证答案'}
               </button>
             ) : null}
           </div>
         ) : (
-          <div className="mt-4 space-y-3">
+          <div className="mt-6 space-y-3">
             <textarea
               value={currentAnswer}
               onChange={(event) => updateAnswer(event.target.value)}
               disabled={attempt?.submitted}
               rows={3}
-              className="w-full resize-none rounded-lg border border-[#d5dbe5] bg-white px-4 py-3 text-[13px] leading-6 text-[#202124] outline-none transition placeholder:text-[#8b95a7] focus:border-[#b8c4ff] disabled:opacity-70"
+              className="w-full resize-none rounded-2xl border border-gray-200 bg-white px-5 py-4 text-[15px] leading-7 text-[#202124] outline-hidden transition placeholder:text-gray-400 focus:border-gray-300 focus:shadow-sm disabled:opacity-70"
               placeholder="在此填写你的答案"
             />
             {!attempt?.submitted ? (
@@ -8564,7 +8624,7 @@ function QuizViewer({
                 type="button"
                 onClick={() => void submit()}
                 disabled={judging || !currentAnswer.trim()}
-                className="inline-flex items-center justify-center rounded-lg border border-[#d5dbe5] bg-white px-3 py-2 text-[13px] font-semibold text-[#1f5fd0] transition hover:border-[#b8c4d6] hover:bg-[#f8fbff] disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex items-center justify-center rounded-full bg-black px-4 py-2 text-sm font-medium text-white transition hover:bg-gray-900 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 {judging ? '验证中...' : '验证答案'}
               </button>
@@ -8574,31 +8634,31 @@ function QuizViewer({
 
         {attempt?.submitted && !attempt?.skipped ? (
           <div
-            className={`mt-4 rounded-lg border px-4 py-3 text-[#34373c] ${
+            className={`mt-6 rounded-[1.65rem] px-5 py-4 text-sm leading-6 ${
               attempt.correct
-                ? 'border-[#b9e8c5] bg-[#f8fffd]'
-                : 'border-[#f0d8d6] bg-[#fcf5f4]'
+                ? 'bg-emerald-50 text-emerald-900'
+                : 'bg-red-50 text-red-900'
             }`}
           >
-            <div className="flex items-start gap-3">
+            <div className="flex items-start gap-2.5">
               {attempt.correct ? (
-                <Check className="mt-1 h-4 w-4 shrink-0 text-[#14a38f]" />
+                <Check className="mt-1 h-3.5 w-3.5 shrink-0 text-emerald-600" />
               ) : (
-                <X className="mt-1 h-4 w-4 shrink-0 text-[#c43628]" />
+                <X className="mt-1 h-3.5 w-3.5 shrink-0 text-red-500" />
               )}
               <div>
-                <div className={`text-sm font-medium ${attempt.correct ? 'text-[#0f8f7e]' : 'text-[#c43628]'}`}>
+                <div className={`font-semibold ${attempt.correct ? 'text-emerald-700' : 'text-red-600'}`}>
                   {attempt.correct ? "That's right!" : 'Not quite'}
                 </div>
-                <div className="mt-1 text-sm leading-6 text-[#202124]">{attempt.feedback}</div>
+                <div className="mt-2 text-[#202124]">{attempt.feedback}</div>
               </div>
             </div>
-            {attempt.matchedPoints?.length ? (
+            {attempt.correct && attempt.matchedPoints?.length ? (
               <div className="mt-3 text-sm leading-6">
                 <span className="font-semibold">命中要点：</span>{attempt.matchedPoints.join('、')}
               </div>
             ) : null}
-            {attempt.missingPoints?.length ? (
+            {!attempt.correct && attempt.missingPoints?.length ? (
               <div className="mt-3 text-sm leading-6">
                 <span className="font-semibold">还可补充：</span>{attempt.missingPoints.join('、')}
               </div>
@@ -8606,110 +8666,120 @@ function QuizViewer({
           </div>
         ) : null}
 
-        <div className="mt-4 flex flex-wrap items-center gap-3 text-[13px] font-semibold text-[#5d6472]">
+        <div className="mt-6 flex flex-wrap items-center gap-3 text-sm font-semibold text-gray-500">
           <button
             type="button"
             onClick={toggleHint}
-            className="text-[#5d6472] transition hover:text-[#1f5fd0]"
+            className="rounded-full px-3 py-1.5 transition hover:bg-gray-50 hover:text-gray-900"
           >
             {showHint ? '收起提示' : '查看提示'}
           </button>
-        </div>
-
-        {showHint ? (
-          <div className="mt-2 rounded-lg border border-[#dfe3ea] bg-[#fbfcfd] px-3 py-2 text-[13px] leading-6 text-[#4f5665]">
-            {question.hint || '先圈出题干中的关键条件，再判断它们对应到哪一步运算或概念。'}
-          </div>
-        ) : null}
-
-        <div className="mt-5 rounded-lg border border-[#d5dbe5] bg-white p-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
-          <div className="space-y-2">
-            {assistant.messages.slice(-4).map((message, messageIndex) => (
-              <div
-                key={`${message.role}-${messageIndex}-${message.content.slice(0, 12)}`}
-                className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[88%] rounded-lg px-3 py-2 text-[13px] leading-6 ${
-                    message.role === 'assistant'
-                      ? 'border border-[#eef1f4] bg-[#fafbfc] text-[#202124]'
-                      : 'border border-[#d8e4ff] bg-[#eef5ff] text-[#174ea6]'
-                  }`}
-                >
-                  {message.content}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-3 ml-auto max-w-lg rounded-lg border border-[#d5dbe5] bg-white shadow-sm focus-within:border-[#c7d2fe] focus-within:ring-2 focus-within:ring-[#dbe7ff]">
-            <textarea
-              value={assistant.input}
-              onChange={(event) =>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
                 setAssistantByQuestion((current) => ({
                   ...current,
                   [question.id]: {
                     ...(current[question.id] || { messages: [], loading: false }),
-                    input: event.target.value
+                    input: current[question.id]?.input || '请解释这道题的解题思路'
                   }
-                }))
-              }
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  void sendAssistantMessage();
-                }
+                }));
+                setAssistantPopoverByQuestion((current) => ({ ...current, [question.id]: !current[question.id] }));
               }}
-              placeholder="询问这题有关问题"
-              rows={1}
-              className="min-h-[34px] w-full resize-none border-0 bg-transparent px-3 py-1.5 text-[13px] leading-5 text-[#202124] outline-none placeholder:text-[#8b95a7]"
-            />
-            <div className="flex items-center justify-end px-2.5 pb-2">
-              <button
-                onClick={() => void sendAssistantMessage()}
-                disabled={assistant.loading || !assistant.input.trim()}
-                className="inline-flex items-center gap-1.5 px-1 py-0.5 text-[13px] font-semibold text-[#1f5fd0] transition hover:text-[#174ea6] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Send className="h-4 w-4" />
-                {assistant.loading ? '思考中...' : '询问此题'}
-              </button>
-            </div>
+              className="inline-flex items-center gap-2 rounded-full border border-gray-100 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
+            >
+              <Lightbulb className="size-4 text-gray-500" />
+              解释
+            </button>
+            {assistantPopoverOpen ? (
+              <div className="absolute bottom-full right-0 z-30 mb-2 w-[28rem] max-w-[calc(100vw-3rem)] space-y-1 text-xs text-gray-700">
+                <div className="flex w-full rounded-full border border-gray-100 bg-white py-1 shadow-xl">
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    value={assistant.input}
+                    disabled={assistant.loading}
+                    onChange={(event) =>
+                      setAssistantByQuestion((current) => ({
+                        ...current,
+                        [question.id]: {
+                          ...(current[question.id] || { messages: [], loading: false }),
+                          input: event.target.value
+                        }
+                      }))
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        void sendAssistantMessage();
+                      }
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        setAssistantPopoverByQuestion((current) => ({ ...current, [question.id]: false }));
+                      }
+                    }}
+                    placeholder="询问这题有关问题"
+                    className="ml-5 min-w-0 flex-1 appearance-none border-0 bg-transparent text-sm font-normal text-gray-900 outline-none ring-0 placeholder:text-gray-400 focus:border-0 focus:outline-none focus:ring-0 disabled:text-gray-400"
+                  />
+                  <div className="ml-1 mr-1">
+                    <button
+                      type="button"
+                      className={`m-0.5 rounded-full p-1.5 transition ${
+                        assistant.input.trim() && !assistant.loading ? 'bg-black text-white hover:bg-gray-900' : 'bg-gray-200 text-white'
+                      }`}
+                      disabled={!assistant.input.trim() || assistant.loading}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void sendAssistantMessage();
+                      }}
+                      aria-label="解释此题"
+                    >
+                      {assistant.loading ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+                    </button>
+                  </div>
+                </div>
+                {assistant.messages.length || assistant.loading ? (
+                  <div className="w-full rounded-2xl border border-gray-100 bg-white p-2 text-xs font-normal text-gray-700 shadow-xl">
+                    <div className="mb-1 line-clamp-1 px-1 text-xs font-medium leading-5 text-gray-500">AI Studio · 当前题目</div>
+                    <div className="max-h-[18rem] overflow-y-auto overscroll-contain pr-1 text-sm leading-6 [&>div>div]:gap-1 [&_li]:text-sm [&_li]:leading-6 [&_ol]:space-y-1 [&_p]:text-sm [&_p]:font-normal [&_p]:leading-6 [&_ul]:space-y-1">
+                      {assistant.messages.map((message, messageIndex) =>
+                        message.role === 'user' ? (
+                          <div key={`${message.role}-${messageIndex}-${message.content.slice(0, 12)}`} className="mb-1 ml-8 rounded-xl bg-gray-50 px-2 py-1.5 text-sm font-normal leading-6 text-gray-700">
+                            {message.content}
+                          </div>
+                        ) : message.content ? (
+                          <div key={`${message.role}-${messageIndex}-${message.content.slice(0, 12)}`} className="mr-5 rounded-xl bg-white px-2 py-1.5 text-sm font-normal leading-6 text-gray-700">
+                            <MarkdownPreview
+                              content={message.content}
+                              variant="message"
+                              emptyMessage=""
+                              isStreaming={assistant.loading && messageIndex === assistant.messages.length - 1}
+                            />
+                          </div>
+                        ) : null
+                      )}
+                      {assistant.loading && assistant.messages[assistant.messages.length - 1]?.role === 'assistant' && !assistant.messages[assistant.messages.length - 1]?.content.trim() ? (
+                        <div className="flex items-center gap-2 px-2 py-2 text-sm text-gray-500">
+                          <Loader2 className="size-4 animate-spin" />
+                          Thinking...
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
 
-        <div className="sticky bottom-0 z-20 -mx-4 mt-5 flex items-center justify-between border-t border-[#dfe3ea] bg-[#fbfbfa]/95 px-4 py-2.5 backdrop-blur md:-mx-5 md:px-5">
-          <div className="flex items-center gap-3">
-            {index > 0 ? (
-              <button
-                onClick={() => move(-1)}
-                className="inline-flex items-center gap-2 py-2 text-[13px] font-semibold text-[#1f5fd0] transition hover:text-[#174ea6]"
-              >
-                <ChevronLeft className="h-4 w-4" />
-                Previous
-              </button>
-            ) : (
-              <span />
-            )}
+        {showHint ? (
+          <div className="mt-2 rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm leading-6 text-gray-700">
+            {question.hint || '先圈出题干中的关键条件，再判断它们对应到哪一步运算或概念。'}
           </div>
-          <div className="flex items-center gap-4">
-            {attempt?.submitted && !isHistoricalReview ? (
-              <button
-                onClick={retryQuestion}
-                className="inline-flex items-center justify-center gap-1.5 py-2 text-[13px] font-semibold text-[#5d6472] transition hover:text-[#202124]"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Retry
-              </button>
-            ) : null}
-            <button
-              onClick={() => void handleNext()}
-              disabled={judging || (isHistoricalReview && isLastQuestion)}
-              className="inline-flex items-center gap-2 py-2 text-[13px] font-semibold text-[#1f5fd0] transition hover:text-[#174ea6] disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {isHistoricalReview && isLastQuestion ? '已到最后一题' : isLastQuestion ? 'Finish' : 'Next'}
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
+        ) : null}
+
         </div>
       </div>
     </div>
@@ -8852,7 +8922,7 @@ function GeneratedFileViewer({
         if (!cancelled) setHtmlContent(payload.content || '');
       })
       .catch((error) => {
-        if (!cancelled) setHtmlError(error?.response?.data?.error || error?.message || 'Failed to load generated HTML.');
+        if (!cancelled) setHtmlError(error?.response?.data?.error || error?.message || '加载生成的 HTML 失败。');
       })
       .finally(() => {
         if (!cancelled) setHtmlLoading(false);
@@ -8881,14 +8951,14 @@ function GeneratedFileViewer({
             onClick={() => postToFrame('play')}
             className="rounded-full bg-[#202124] px-3 py-1.5 text-xs font-semibold text-white"
           >
-            Play
+            播放
           </button>
           <button
             type="button"
             onClick={() => postToFrame('pause')}
             className="rounded-full bg-[#eef0f4] px-3 py-1.5 text-xs font-semibold text-[#202124]"
           >
-            Pause
+            暂停
           </button>
           <button
             type="button"
@@ -8902,13 +8972,13 @@ function GeneratedFileViewer({
             }}
             className="rounded-full bg-[#eef0f4] px-3 py-1.5 text-xs font-semibold text-[#202124]"
           >
-            Replay
+            重新播放
           </button>
         </div>
         {htmlLoading ? (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-[#777a80]">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Loading generated HTML...
+            正在加载生成的 HTML...
           </div>
         ) : htmlError ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-red-600">
@@ -8944,7 +9014,7 @@ function GeneratedFileViewer({
             href={fileUrl}
             className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-4 py-2 text-sm font-semibold text-white"
           >
-            <Download className="h-4 w-4" /> Download PPTX
+            <Download className="h-4 w-4" /> 下载 PPTX
           </a>
         </div>
         <SlideViewer result={{ ...result, content: result.delivery?.previewContent || result.content, name: result.delivery?.filename || result.name }} />
@@ -8961,7 +9031,7 @@ function GeneratedFileViewer({
             href={fileUrl}
             className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-4 py-2 text-sm font-semibold text-white"
           >
-            <Download className="h-4 w-4" /> Download source
+            <Download className="h-4 w-4" /> 下载源码
           </a>
         </div>
         <MarkdownPreview content={result.delivery?.previewContent || result.content} variant="document" />
@@ -9039,13 +9109,13 @@ function RenderJobPanel({
     <section className="rounded-lg border border-[#dfe3ea] bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Render Job</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">渲染任务</div>
           <div className="mt-1 text-sm font-semibold text-[#202124]">{job?.framework || job?.kind || 'renderer'}</div>
         </div>
         <button
           onClick={() => void refresh()}
           className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#e5e7eb] text-[#667085] hover:bg-[#f8fafc]"
-          title="Refresh render job"
+          title="刷新渲染任务"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
@@ -9063,7 +9133,7 @@ function RenderJobPanel({
           {job.error && <div className="mt-3 rounded-lg bg-red-50 p-3 text-xs leading-5 text-red-700">{job.error}</div>}
           {outputUrl && (
             <a href={outputUrl} className="mt-3 inline-flex items-center gap-2 rounded-full bg-[#202124] px-3 py-1.5 text-xs font-semibold text-white">
-              <Download className="h-3.5 w-3.5" /> Download rendered output
+              <Download className="h-3.5 w-3.5" /> 下载渲染结果
             </a>
           )}
           {job.status === 'failed' && (
@@ -9072,7 +9142,7 @@ function RenderJobPanel({
               disabled={loading}
               className="mt-3 ml-2 inline-flex items-center gap-2 rounded-full border border-[#dfe3ea] px-3 py-1.5 text-xs font-semibold text-[#343a46] hover:bg-[#f8fafc] disabled:opacity-50"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Retry render
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> 重试渲染
             </button>
           )}
           {job.logs?.length ? (
@@ -9085,7 +9155,7 @@ function RenderJobPanel({
         </>
       ) : (
         <div className="mt-3 rounded-lg border border-dashed border-[#dfe3ea] p-3 text-xs leading-5 text-[#667085]">
-          No render job found yet.
+          暂未找到渲染任务。
         </div>
       )}
     </section>
@@ -9214,7 +9284,7 @@ const codeLabMarkdownForProblem = (lab: CodeLabModel) =>
 
 const codeLabMarkdownForSolution = (lab: CodeLabModel) =>
   [
-    `# ${lab.title} 题解`,
+    '## 题解',
     '',
     lab.solution.approachMarkdown || '暂无题解。',
     '',
@@ -9222,6 +9292,9 @@ const codeLabMarkdownForSolution = (lab: CodeLabModel) =>
     '',
     lab.solution.referenceCode ? ['## 参考代码', '```' + lab.editor.language, lab.solution.referenceCode, '```'].join('\n') : ''
   ].filter(Boolean).join('\n');
+
+const codeLabMarkdownForLab = (lab: CodeLabModel) =>
+  [codeLabMarkdownForProblem(lab), '', codeLabMarkdownForSolution(lab)].filter(Boolean).join('\n');
 
 const buildCodeLabModel = (result: StudioResult) => {
   const structured = isObjectRecord(result.structured) ? result.structured : null;
@@ -9280,14 +9353,12 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
   const lab = useMemo(() => buildCodeLabModel(result), [result.id, result.content, result.structured]);
   const [language, setLanguage] = useState(lab.editor.language);
   const [code, setCode] = useState(lab.editor.starterCode);
-  const [leftTab, setLeftTab] = useState<'problem' | 'solution'>('problem');
   const [bottomTab, setBottomTab] = useState<'tests' | 'result'>('tests');
   const [selectedCaseId, setSelectedCaseId] = useState(lab.tests.cases[0]?.id || '');
   const [runResult, setRunResult] = useState<AiCodeLabTestRunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const problemMarkdown = useMemo(() => codeLabMarkdownForProblem(lab), [lab]);
-  const solutionMarkdown = useMemo(() => codeLabMarkdownForSolution(lab), [lab]);
+  const labMarkdown = useMemo(() => codeLabMarkdownForLab(lab), [lab]);
   const selectedCase = lab.tests.cases.find((test) => test.id === selectedCaseId) || lab.tests.cases[0];
   const selectedResult = runResult?.results.find((item) => item.id === selectedCase?.id) || runResult?.results[0];
 
@@ -9316,7 +9387,7 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
         }))
       }));
     } catch (error: any) {
-      setRunError(error?.response?.data?.error || error?.message || 'Code Lab tests failed');
+      setRunError(error?.response?.data?.error || error?.message || '代码实验测试失败');
       setRunResult(null);
     } finally {
       setRunning(false);
@@ -9328,39 +9399,20 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
       ? 'bg-emerald-50 text-emerald-700'
       : runResult
         ? 'bg-amber-50 text-amber-700'
-        : 'bg-[#eef0f4] text-[#667085]';
+        : 'bg-[#f3f4f6] text-[#667085]';
 
   return (
-    <div className="flex h-[calc(100vh-190px)] min-h-[720px] flex-col overflow-hidden bg-white lg:grid lg:grid-cols-[minmax(340px,42%)_minmax(0,1fr)]">
-      <aside className="flex min-h-0 flex-col border-r border-[#e5e7eb] bg-white">
-        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#e5e7eb] px-4">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
-            <Code className="h-4 w-4" /> Code Lab
-          </div>
-          <div className="inline-flex rounded-md border border-[#dfe3ea] bg-[#f8fafc] p-0.5">
-            {(['problem', 'solution'] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setLeftTab(tab)}
-                className={`h-8 rounded px-3 text-sm font-semibold transition ${leftTab === tab ? 'bg-white text-[#202124] shadow-sm' : 'text-[#667085] hover:text-[#202124]'}`}
-              >
-                {tab === 'problem' ? '题目' : '题解'}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto">
-          <MarkdownPreview content={leftTab === 'problem' ? problemMarkdown : solutionMarkdown} variant="message" />
-        </div>
-      </aside>
+    <div className="flex flex-col gap-8 bg-white px-6 py-5">
+      <section className="max-w-none bg-white">
+        <MarkdownPreview content={labMarkdown} variant="message" />
+      </section>
 
-      <main className="flex min-h-0 min-w-0 flex-col bg-white">
-        <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-[#e5e7eb] bg-[#fbfcfd] px-4">
+      <section className="flex min-w-0 flex-col overflow-hidden rounded-none border border-[#d1d5db] bg-white">
+        <div className="flex h-14 shrink-0 items-center justify-between gap-3 bg-white px-4">
           <select
             value={language}
             onChange={(event) => setLanguage(event.target.value)}
-            className="h-9 rounded-md border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#202124] outline-none"
+            className="h-9 rounded-none border border-[#d1d5db] bg-white px-3 text-sm font-semibold text-[#202124] outline-none"
           >
             {['javascript', 'typescript', 'python', 'java', 'cpp', 'c', 'go', 'rust', 'sql'].map((item) => (
               <option key={item} value={item}>{item}</option>
@@ -9370,12 +9422,14 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
             type="button"
             onClick={() => void run()}
             disabled={running || lab.tests.cases.length === 0}
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-[#202124] px-4 text-sm font-semibold text-white transition hover:bg-[#3c4043] disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="运行代码"
+            title="运行"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-none bg-white text-[#202124] transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Run
+            {running ? <Loader2 className="h-5 w-5 animate-spin" /> : <Play className="h-5 w-5" />}
           </button>
         </div>
-        <div className="min-h-[360px] flex-[3]">
+        <div className="h-[560px] min-h-[420px]">
           <Editor
             height="100%"
             language={monacoLanguageFor(language)}
@@ -9393,26 +9447,28 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
             }}
           />
         </div>
-        <section className="flex min-h-[260px] flex-[2] flex-col border-t border-[#e5e7eb] bg-white">
-          <div className="flex h-11 shrink-0 items-center justify-between border-b border-[#e5e7eb] px-4">
-            <div className="flex items-center gap-1">
+      </section>
+
+      <section className="flex flex-col gap-4 bg-white">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-1 rounded-md bg-[#f3f4f6] p-1">
               {(['tests', 'result'] as const).map((tab) => (
                 <button
                   key={tab}
                   type="button"
                   onClick={() => setBottomTab(tab)}
-                  className={`h-8 rounded px-3 text-sm font-semibold transition ${bottomTab === tab ? 'bg-[#eef0f4] text-[#202124]' : 'text-[#667085] hover:text-[#202124]'}`}
+                  className={`h-8 rounded px-3 text-sm font-semibold transition ${bottomTab === tab ? 'bg-white text-[#202124] shadow-sm' : 'text-[#667085] hover:text-[#202124]'}`}
                 >
-                  {tab === 'tests' ? 'Testcase' : 'Result'}
+                  {tab === 'tests' ? '测试用例' : '结果'}
                 </button>
               ))}
             </div>
             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${resultStatusClass}`}>
-              {runResult ? `${runResult.passedCount}/${runResult.totalCount} ${runResult.status}` : `${lab.tests.cases.length} cases`}
+              {runResult ? `${runResult.passedCount}/${runResult.totalCount} ${runResult.status}` : `${lab.tests.cases.length} 个用例`}
             </span>
           </div>
-          <div className="grid min-h-0 flex-1 grid-cols-[minmax(160px,28%)_minmax(0,1fr)]">
-            <div className="min-h-0 overflow-auto border-r border-[#e5e7eb] bg-[#fbfcfd] p-2">
+          <div className="grid gap-6 md:grid-cols-[minmax(160px,240px)_minmax(0,1fr)]">
+            <div className="flex flex-col gap-1">
               {lab.tests.cases.map((test, index) => {
                 const resultForCase = runResult?.results.find((item) => item.id === test.id);
                 return (
@@ -9420,9 +9476,9 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
                     key={test.id}
                     type="button"
                     onClick={() => setSelectedCaseId(test.id)}
-                    className={`mb-1 flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition ${selectedCase?.id === test.id ? 'bg-white text-[#202124] shadow-sm ring-1 ring-[#dfe3ea]' : 'text-[#667085] hover:bg-white hover:text-[#202124]'}`}
+                    className={`flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition ${selectedCase?.id === test.id ? 'bg-[#f3f4f6] text-[#202124]' : 'text-[#667085] hover:bg-[#f8fafc] hover:text-[#202124]'}`}
                   >
-                    <span className="truncate">{test.name || `Case ${index + 1}`}</span>
+                    <span className="truncate">{test.name || `用例 ${index + 1}`}</span>
                     {resultForCase ? (
                       resultForCase.passed
                         ? <Check className="h-4 w-4 shrink-0 text-emerald-600" />
@@ -9432,22 +9488,22 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
                 );
               })}
             </div>
-            <div className="min-h-0 overflow-auto p-4">
+            <div className="min-w-0">
               {bottomTab === 'tests' ? (
                 selectedCase ? (
                   <div className="space-y-4">
                     <div>
-                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Input</div>
-                      <pre className="min-h-[72px] whitespace-pre-wrap rounded-md border border-[#e5e7eb] bg-[#fbfcfd] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedCase.stdin}</pre>
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">输入</div>
+                      <pre className="min-h-[72px] whitespace-pre-wrap rounded-md bg-[#f8fafc] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedCase.stdin}</pre>
                     </div>
                     <div>
-                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Expected Output</div>
-                      <pre className="min-h-[72px] whitespace-pre-wrap rounded-md border border-[#e5e7eb] bg-[#fbfcfd] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedCase.expectedStdout}</pre>
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">期望输出</div>
+                      <pre className="min-h-[72px] whitespace-pre-wrap rounded-md bg-[#f8fafc] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedCase.expectedStdout}</pre>
                     </div>
                     {selectedCase.explanation && <p className="text-sm leading-6 text-[#667085]">{selectedCase.explanation}</p>}
                   </div>
                 ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-[#667085]">No test cases.</div>
+                  <div className="flex min-h-40 items-center justify-center text-sm text-[#667085]">暂无测试用例。</div>
                 )
               ) : (
                 <div className="space-y-4">
@@ -9455,23 +9511,23 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
                     <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-800">{runError}</div>
                   )}
                   {!runError && !runResult && (
-                    <div className="flex h-40 items-center justify-center text-sm text-[#667085]">Run code to see testcase results.</div>
+                    <div className="flex h-40 items-center justify-center text-sm text-[#667085]">运行代码后查看测试结果。</div>
                   )}
                   {selectedResult && (
                     <>
                       <div className="flex flex-wrap items-center gap-2 text-sm">
                         <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${selectedResult.passed ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                          {selectedResult.passed ? 'Accepted' : selectedResult.status.description}
+                          {selectedResult.passed ? '通过' : selectedResult.status.description}
                         </span>
-                        <span className="text-xs text-[#7b8190]">time {selectedResult.time || '-'}s · memory {selectedResult.memory ?? '-'} KB</span>
+                        <span className="text-xs text-[#7b8190]">耗时 {selectedResult.time || '-'}s · 内存 {selectedResult.memory ?? '-'} KB</span>
                       </div>
                       <div>
                         <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Your Output</div>
-                        <pre className="min-h-[72px] whitespace-pre-wrap rounded-md border border-[#e5e7eb] bg-[#fbfcfd] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedResult.stdout || selectedResult.stderr || selectedResult.compileOutput || selectedResult.message || '(empty)'}</pre>
+                        <pre className="min-h-[72px] whitespace-pre-wrap rounded-md bg-[#f8fafc] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedResult.stdout || selectedResult.stderr || selectedResult.compileOutput || selectedResult.message || '(empty)'}</pre>
                       </div>
                       <div>
                         <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Expected Output</div>
-                        <pre className="min-h-[72px] whitespace-pre-wrap rounded-md border border-[#e5e7eb] bg-[#fbfcfd] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedResult.expectedStdout || '(empty)'}</pre>
+                        <pre className="min-h-[72px] whitespace-pre-wrap rounded-md bg-[#f8fafc] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedResult.expectedStdout || '(empty)'}</pre>
                       </div>
                     </>
                   )}
@@ -9479,8 +9535,7 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
               )}
             </div>
           </div>
-        </section>
-      </main>
+      </section>
     </div>
   );
 }
@@ -9555,7 +9610,7 @@ function ResultView({
       });
       setResourceNote(created);
     } catch (createError: any) {
-      setResourceNoteError(createError?.response?.data?.error || createError?.message || 'Failed to convert note');
+      setResourceNoteError(createError?.response?.data?.error || createError?.message || '转换笔记失败');
     } finally {
       setOpeningNote(false);
     }
@@ -9580,7 +9635,7 @@ function ResultView({
               className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[#dfe3ea] px-4 py-2 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {openingNote && <Loader2 className="h-4 w-4 animate-spin" />}
-              {resourceNote ? 'Open Note' : 'Convert to BlockSuite Note'}
+              {resourceNote ? '打开笔记' : '转换为 BlockSuite 笔记'}
             </button>
           )}
         </div>
@@ -10193,7 +10248,7 @@ export default function AIStudioPanel({
               activeStudioResultId: activeResultId === result.id ? null : activeResultId
             });
           } catch (deleteError: any) {
-            setError(deleteError?.response?.data?.error || deleteError?.message || 'Failed to delete result');
+            setError(deleteError?.response?.data?.error || deleteError?.message || '删除结果失败');
           }
         }}
       />

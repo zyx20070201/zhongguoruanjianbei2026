@@ -61,25 +61,25 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
               onClick={() => { onCreateFile?.(node.id, node.data.path); onClose(); }}
             >
-              <Plus size={14} /> New File
+              <Plus size={14} /> 新建文件
             </button>
             <button 
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
               onClick={() => { onCreateNote?.(node.id, node.data.path); onClose(); }}
             >
-              <FileText size={14} /> New Note
+              <FileText size={14} /> 新建笔记
             </button>
             <button 
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
               onClick={() => { onCreateFolder?.(node.id, node.data.path); onClose(); }}
             >
-              <FolderPlus size={14} /> New Folder
+              <FolderPlus size={14} /> 新建文件夹
             </button>
             <button 
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
               onClick={() => { onUpload?.(node.id, node.data.path); onClose(); }}
             >
-              <Upload size={14} /> Upload
+              <Upload size={14} /> 上传
             </button>
             <div className="my-1 h-px bg-[var(--wb-border)]" />
           </>
@@ -88,26 +88,26 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
           onClick={() => { onRename(node.id); onClose(); }}
         >
-          <Edit2 size={14} /> Rename
+          <Edit2 size={14} /> 重命名
         </button>
         <button 
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
           onClick={() => { onCopy(node.id, node.data.parentId || null); onClose(); }}
         >
-          <Copy size={14} /> Duplicate
+          <Copy size={14} /> 创建副本
         </button>
         <button 
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
           onClick={() => { onMove(node.id); onClose(); }}
         >
-          <Move size={14} /> Move to...
+          <Move size={14} /> 移动到...
         </button>
         {!isFolder && (
           <button 
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5"
             onClick={() => { onDownload(node.id); onClose(); }}
           >
-            <Download size={14} /> Download
+            <Download size={14} /> 下载
           </button>
         )}
         <div className="my-1 h-px bg-[var(--wb-border)]" />
@@ -115,7 +115,7 @@ export const FileContextMenu: React.FC<FileContextMenuProps> = ({
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-red-300 hover:bg-red-500/10"
           onClick={() => { onDelete(node.id); onClose(); }}
         >
-          <Trash2 size={14} /> Delete
+          <Trash2 size={14} /> 删除
         </button>
       </div>
     </>

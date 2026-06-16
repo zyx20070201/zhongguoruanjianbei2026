@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Download, Pause, Play } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Download, Pause, Play } from 'lucide-react';
 import { ComponentType, Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { convertToExcalidrawElements } from '@excalidraw/excalidraw';
 import * as echarts from 'echarts';
@@ -129,6 +129,9 @@ const splitLightLessonDescription = (description: string, timelineLength: number
   return blocks.length ? blocks : [text];
 };
 
+const normalizeLightLessonText = (value: unknown) =>
+  String(value || '').replace(/\\n/g, '\n').trim();
+
 export const normalizeLightVisualLessonPayload = (value: unknown, fallbackTitle: string): LightVisualLessonPayload | null => {
   const payload = isObjectRecord(value) ? value : null;
   const rawSlides = Array.isArray(payload?.slides) ? payload.slides : [];
@@ -148,10 +151,10 @@ export const normalizeLightVisualLessonPayload = (value: unknown, fallbackTitle:
     }
   }
   const slides = rawSlides.map((slide: any, index): LightVisualLessonSlide => {
-    const description = String(slide?.description || '').trim();
+    const description = normalizeLightLessonText(slide?.description);
     const timeline = Array.isArray(slide?.timeline)
       ? slide.timeline.map((step: any): LightVisualLessonTimelineStep | null => {
-          const content = String(step?.content || '').trim();
+          const content = normalizeLightLessonText(step?.content);
           if (!content) return null;
           return {
             kind: step?.kind === 'visual' ? 'visual' : 'text',
@@ -162,7 +165,7 @@ export const normalizeLightVisualLessonPayload = (value: unknown, fallbackTitle:
       : [];
     const visuals = Array.isArray(slide?.visuals)
       ? slide.visuals.map((visual: any): LightVisualLessonVisualBlock | null => {
-          const content = String(visual?.content || '').trim();
+          const content = normalizeLightLessonText(visual?.content);
           if (!content) return null;
           const type = ['diagram', 'chart', 'table', 'formula', 'code', 'image_hint', 'sketch'].includes(String(visual?.type))
             ? visual.type
@@ -615,9 +618,10 @@ export function LightVisualLessonViewer({
             <button
               type="button"
               onClick={onBack}
-              className="inline-flex min-w-fit shrink-0 p-1.5 text-sm font-medium text-gray-900 transition select-none hover:text-gray-700"
+              className="inline-flex min-w-fit shrink-0 items-center gap-1 p-1.5 text-sm font-medium text-gray-900 transition select-none hover:text-gray-700"
             >
-              <span className="whitespace-nowrap">&lt;AI Studio</span>
+              <ArrowLeft className="h-4 w-4 shrink-0" />
+              <span className="whitespace-nowrap">AI Studio</span>
             </button>
           ) : null}
           <div className="min-w-0">

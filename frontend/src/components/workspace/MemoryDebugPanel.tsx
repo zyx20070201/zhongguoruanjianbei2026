@@ -73,7 +73,7 @@ export default function MemoryDebugPanel({ workspaceId, workbenchId }: MemoryDeb
         <div>
           <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-[#f1f1ef] px-3 py-1 text-xs font-medium text-[#55585d]">
             <Brain className="h-3.5 w-3.5" />
-            Memory debug
+            记忆调试
           </div>
           <h3 className="text-2xl font-semibold tracking-normal text-[#202124]">AI 为什么会想起这些</h3>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[#666a70]">

@@ -115,6 +115,7 @@ type ChatAttachmentContextBundle = {
 type WorkspaceTerminalChatResult = {
   reply: string;
   sessionId?: string;
+  sessionTitle?: string;
   status: 'completed';
   evidence: ReturnType<typeof toTerminalEvidence>;
   suggestedActions: never[];
@@ -1265,7 +1266,6 @@ class WorkspaceTerminalChatService {
       workbenchId: input.workbenchId || null,
       userId,
       sessionId: input.sessionId || null,
-      title: clip(latestUserMessage(messages), 80),
       source: 'terminal_chat',
       messages,
       assistantReply: result.reply
@@ -1275,6 +1275,7 @@ class WorkspaceTerminalChatService {
     return {
       reply: result.reply,
       sessionId: savedTurn?.sessionId || input.sessionId || undefined,
+      sessionTitle: savedTurn?.title,
       status: result.status,
       evidence: toTerminalEvidence(result.evidence),
       suggestedActions: [],

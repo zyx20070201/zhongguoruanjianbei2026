@@ -71,16 +71,15 @@ const fileIsImage = (file: Pick<TerminalChatFile, 'mimeType' | 'extension' | 'na
 };
 
 const modeLabel = (mode: TerminalComposerMode) => {
-  if (mode === 'agentic') return 'Agentic';
-  if (mode === 'new_agentic') return 'Agentic V2';
-  return 'Chat';
+  if (mode === 'agentic' || mode === 'new_agentic') return 'Agent V2';
+  return '对话';
 };
 
 export default function TerminalComposer({
   value,
   onValueChange,
   onSubmit,
-  placeholder = 'Send a Message',
+  placeholder = '发送消息',
   mode,
   onModeChange,
   selectedSources,
@@ -102,6 +101,7 @@ export default function TerminalComposer({
   const sourceMenuRef = useRef<HTMLDivElement | null>(null);
   const uploadMenuRef = useRef<HTMLDivElement | null>(null);
   const chatFileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const readyChatFiles = useMemo(
     () => chatFiles.filter((file) => file.status !== 'uploading' && file.status !== 'error'),
     [chatFiles]
@@ -129,6 +129,13 @@ export default function TerminalComposer({
     window.addEventListener('pointerdown', onPointerDown);
     return () => window.removeEventListener('pointerdown', onPointerDown);
   }, []);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = '0px';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 384)}px`;
+  }, [value, chatFiles.length]);
 
   const uploadFiles = async (files: FileList | File[]) => {
     if (!files.length || !onUploadChatFiles || uploadingChatFiles) return;
@@ -167,7 +174,11 @@ export default function TerminalComposer({
         submit();
       }}
     >
-      <div className="flex flex-1 flex-col rounded-3xl border border-gray-100/30 bg-white/95 px-1 shadow-lg backdrop-blur-sm transition hover:border-gray-200 focus-within:border-gray-100">
+      <div
+        id="message-input-container"
+        className="flex-1 flex flex-col relative w-full shadow-lg rounded-3xl border border-gray-100/30 hover:border-gray-200 focus-within:border-gray-100 transition px-1 bg-white/5 backdrop-blur-sm"
+        dir="auto"
+      >
         <input
           ref={chatFileInputRef}
           type="file"
@@ -196,14 +207,14 @@ export default function TerminalComposer({
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium text-gray-800">{file.name}</div>
-                  <div className="truncate text-[10px] text-gray-400">{formatBytes(file.size) || file.mimeType || 'Attachment'}</div>
+                  <div className="truncate text-[10px] text-gray-400">{formatBytes(file.size) || file.mimeType || '附件'}</div>
                 </div>
                 {onRemoveChatFile ? (
                   <button
                     type="button"
                     onClick={() => onRemoveChatFile(file.id)}
                     className="flex size-5 shrink-0 items-center justify-center rounded-full text-gray-400 opacity-80 transition hover:bg-gray-200 hover:text-gray-700 group-hover/attachment:opacity-100"
-                    title="Remove attachment"
+                    title="移除附件"
                   >
                     <X className="size-3" />
                   </button>
@@ -215,6 +226,8 @@ export default function TerminalComposer({
 
         <div className="px-2.5">
           <textarea
+            ref={textareaRef}
+            id="chat-input"
             value={value}
             onChange={(event) => onValueChange(event.target.value)}
             onKeyDown={(event) => {
@@ -223,7 +236,7 @@ export default function TerminalComposer({
                 submit();
               }
             }}
-            className="scrollbar-hidden min-h-[52px] max-h-96 w-full resize-none bg-transparent px-1 pb-1 pt-3 text-[15px] leading-6 text-gray-900 outline-none placeholder:text-gray-500"
+            className="scrollbar-hidden rtl:text-right ltr:text-left bg-transparent outline-hidden w-full pb-1 px-1 resize-none h-fit min-h-[52px] max-h-96 overflow-auto pt-2.5 text-[15px] leading-6 text-gray-900 placeholder:text-gray-500"
             placeholder={placeholder}
             rows={1}
             autoFocus={autoFocus}
@@ -237,16 +250,15 @@ export default function TerminalComposer({
                 type="button"
                 onClick={() => setModeMenuOpen((current) => !current)}
                 className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-700 outline-none transition hover:bg-gray-100"
-                title={`Mode: ${modeLabel(mode)}`}
+                title={`模式：${modeLabel(mode)}`}
               >
                 <Wand2 className="size-4.5" strokeWidth={1.75} />
               </button>
               {modeMenuOpen ? (
                 <div className="absolute bottom-10 left-0 z-50 w-44 rounded-2xl border border-gray-100 bg-white p-1 text-sm text-gray-900 shadow-lg">
                   {([
-                    { value: 'chat' as const, label: 'Chat' },
-                    { value: 'agentic' as const, label: 'Agentic' },
-                    { value: 'new_agentic' as const, label: 'Agentic V2' }
+                    { value: 'chat' as const, label: '对话' },
+                    { value: 'new_agentic' as const, label: 'Agent V2' }
                   ]).map((item) => (
                     <button
                       key={item.value}
@@ -270,15 +282,15 @@ export default function TerminalComposer({
                 type="button"
                 onClick={() => setSourceMenuOpen((current) => !current)}
                 className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-700 outline-none transition hover:bg-gray-100"
-                title={activeSources.length ? `${activeSources.length} locked sources` : 'Workspace scope'}
+                title={activeSources.length ? `已锁定 ${activeSources.length} 个资料` : '整个 workspace'}
               >
                 <BookOpen className="size-4.5" strokeWidth={1.75} />
               </button>
               {sourceMenuOpen ? (
                 <div className="absolute bottom-10 left-0 z-50 w-80 max-w-[calc(100vw-2rem)] rounded-2xl border border-gray-100 bg-white p-2 text-sm text-gray-900 shadow-lg">
                   <div className="flex items-center justify-between gap-3 px-2 pb-2 text-[11px] font-medium uppercase tracking-wide text-gray-400">
-                    <span>Lock sources for this chat</span>
-                    <span>{activeSources.length ? `${activeSources.length} selected` : 'Workspace scope'}</span>
+                    <span>为本次对话锁定资料</span>
+                    <span>{activeSources.length ? `已选择 ${activeSources.length} 个` : '整个 workspace'}</span>
                   </div>
                   <div className="max-h-72 overflow-y-auto">
                     {sourceFiles.length > 0 ? (
@@ -299,14 +311,14 @@ export default function TerminalComposer({
                               <div className="truncate text-xs text-gray-500">{source.path}</div>
                               <div className="mt-1 flex min-w-0 items-center gap-1.5">
                                 <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${sourceStatusToneClass(source.indexStatusTone)}`}>
-                                  {source.indexStatusLabel || 'Unknown'}
+                                  {source.indexStatusLabel || '未知'}
                                 </span>
                                 <span className="truncate text-[10px] text-gray-400">
-                                  {source.indexStatusDetail || 'Index status unavailable'}
+                                  {source.indexStatusDetail || '索引状态不可用'}
                                 </span>
                               </div>
                               {isActive && Number(source.chunkCount || 0) === 0 ? (
-                                <div className="mt-1 text-[10px] text-red-500">No chunks yet; focused retrieval may not find evidence.</div>
+                                <div className="mt-1 text-[10px] text-red-500">暂时没有分块；聚焦检索可能找不到依据。</div>
                               ) : null}
                             </button>
                             <div className="flex shrink-0 items-center gap-2">
@@ -319,7 +331,7 @@ export default function TerminalComposer({
                                   }}
                                   className="rounded-full border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-600 transition hover:bg-gray-50"
                                 >
-                                  {sourceMode === 'focused' ? 'Focused' : 'Full'}
+                                  {sourceMode === 'focused' ? '聚焦' : '完整'}
                                 </button>
                               ) : null}
                               {isActive ? <Check className="size-4 shrink-0 text-black" /> : null}
@@ -328,7 +340,7 @@ export default function TerminalComposer({
                         );
                       })
                     ) : (
-                      <div className="px-3 py-3 text-sm text-gray-500">No workspace sources available.</div>
+                      <div className="px-3 py-3 text-sm text-gray-500">暂无可用的 workspace 资料。</div>
                     )}
                   </div>
                   <div className="mt-2 flex justify-between gap-2 border-t border-gray-100 px-2 pt-2">
@@ -337,14 +349,14 @@ export default function TerminalComposer({
                       onClick={() => onSelectedSourcesChange?.([])}
                       className="rounded-full px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-100"
                     >
-                      Clear
+                      清除
                     </button>
                     <button
                       type="button"
                       onClick={() => setSourceMenuOpen(false)}
                       className="rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white"
                     >
-                      Done
+                      完成
                     </button>
                   </div>
                 </div>
@@ -364,7 +376,7 @@ export default function TerminalComposer({
                   else onUploadMaterials?.();
                 }}
                 className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-700 outline-none transition hover:bg-gray-100 disabled:opacity-40"
-                title="Upload auxiliary resources"
+                title="上传辅助资料"
               >
                 {uploadingChatFiles ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4.5" />}
               </button>
@@ -377,7 +389,7 @@ export default function TerminalComposer({
                       className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left transition hover:bg-gray-50"
                     >
                       <Paperclip className="size-4 text-gray-500" />
-                      <span>Attach to chat</span>
+                      <span>附加到对话</span>
                     </button>
                   ) : null}
                   {onUploadMaterials ? (
@@ -390,7 +402,7 @@ export default function TerminalComposer({
                       className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left transition hover:bg-gray-50"
                     >
                       <Upload className="size-4 text-gray-500" />
-                      <span>Add to Knowledge</span>
+                      <span>添加到知识</span>
                     </button>
                   ) : null}
                 </div>
@@ -404,7 +416,7 @@ export default function TerminalComposer({
                 type="button"
                 disabled
                 className="self-center rounded-full bg-white p-1.5 text-gray-800 transition hover:bg-gray-100"
-                title="Stop"
+                title="停止"
               >
                 <Square className="size-5 fill-current" />
               </button>
@@ -417,7 +429,7 @@ export default function TerminalComposer({
                     ? 'bg-black text-white hover:bg-gray-900'
                     : 'cursor-not-allowed bg-gray-200 text-white'
                 }`}
-                title="Send message"
+                title="发送消息"
               >
                 <ArrowUp className="size-5" strokeWidth={2.5} />
               </button>

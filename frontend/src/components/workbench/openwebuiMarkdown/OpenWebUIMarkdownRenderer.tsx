@@ -759,10 +759,10 @@ function TableBlock({
         </table>
       </div>
       <div className="invisible absolute right-1.5 top-1 z-20 flex gap-0.5 group-hover:visible">
-        <button type="button" className="rounded-lg bg-transparent p-1 transition hover:bg-black/5" onClick={() => void copyTable()} title="Copy">
+        <button type="button" className="rounded-lg bg-transparent p-1 transition hover:bg-black/5" onClick={() => void copyTable()} title="复制">
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         </button>
-        <button type="button" className="rounded-lg bg-transparent p-1 transition hover:bg-black/5" onClick={exportCsv} title="Export to CSV">
+        <button type="button" className="rounded-lg bg-transparent p-1 transition hover:bg-black/5" onClick={exportCsv} title="导出为 CSV">
           <Download className="size-3.5" />
         </button>
       </div>
@@ -909,7 +909,7 @@ function MarkdownTokens({
               type="button"
               className="invisible rounded-lg bg-transparent p-1 transition hover:bg-black/5 group-hover:visible"
               onClick={() => void navigator.clipboard?.writeText(token.text || '')}
-              title="Copy"
+              title="复制"
             >
               <Copy className="size-3.5" strokeWidth={1.5} />
             </button>

@@ -33,26 +33,26 @@ const modeItems: Array<{
 }> = [
   {
     id: 'discover',
-    label: 'Search web',
-    description: 'Find online sources and import selected results.',
+    label: '搜索网页',
+    description: '查找在线资料，并导入选中的结果。',
     icon: Search
   },
   {
     id: 'files',
-    label: 'Upload files',
-    description: 'Select multiple files before adding them.',
+    label: '上传文件',
+    description: '可以一次选择多个文件后再添加。',
     icon: FileUp
   },
   {
     id: 'website',
     label: 'URL',
-    description: 'Add a webpage, article or video link.',
+    description: '添加网页、文章或视频链接。',
     icon: Link2
   },
   {
     id: 'text',
-    label: 'Copied text',
-    description: 'Paste text as workspace knowledge.',
+    label: '粘贴文本',
+    description: '把粘贴的文本保存为 workspace 知识。',
     icon: TextCursorInput
   }
 ];
@@ -137,7 +137,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
       await onUploadFiles(files);
       handleRequestClose();
     } catch (error: any) {
-      setSubmitError(error?.response?.data?.error || error?.message || 'Failed to upload files');
+      setSubmitError(error?.response?.data?.error || error?.message || '上传文件失败');
     } finally {
       setIsSubmitting(false);
     }
@@ -174,12 +174,12 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
         Object.fromEntries(results.slice(0, 5).map((source) => [source.id, true]))
       );
       if (results.length === 0) {
-        setDiscoveryError('No sources found. Try a more specific topic or keywords.');
+        setDiscoveryError('未找到资料。请尝试更具体的主题或关键词。');
       }
     } catch (error: any) {
       setDiscoveredSources([]);
       setSelectedSourceIds({});
-      setDiscoveryError(error?.response?.data?.error || error?.message || 'Source discovery failed');
+      setDiscoveryError(error?.response?.data?.error || error?.message || '资料搜索失败');
     } finally {
       setIsDiscovering(false);
     }
@@ -196,7 +196,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
       await onImportDiscoveredSources(selectedSources);
       handleRequestClose();
     } catch (error: any) {
-      setSubmitError(error?.response?.data?.error || error?.message || 'Failed to import selected sources');
+      setSubmitError(error?.response?.data?.error || error?.message || '导入选中资料失败');
     } finally {
       setIsSubmitting(false);
     }
@@ -215,7 +215,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
       });
       handleRequestClose();
     } catch (error: any) {
-      setSubmitError(error?.response?.data?.error || error?.message || 'Failed to add website');
+      setSubmitError(error?.response?.data?.error || error?.message || '添加网站失败');
     } finally {
       setIsSubmitting(false);
     }
@@ -234,7 +234,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
       });
       handleRequestClose();
     } catch (error: any) {
-      setSubmitError(error?.response?.data?.error || error?.message || 'Failed to add text source');
+      setSubmitError(error?.response?.data?.error || error?.message || '添加文本资料失败');
     } finally {
       setIsSubmitting(false);
     }
@@ -246,8 +246,8 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
     <div className="fixed inset-0 z-[90] flex h-screen max-h-[100dvh] items-center justify-center overflow-y-auto overscroll-contain bg-black/30 p-3">
       <div className="m-auto mx-2 max-h-[100dvh] min-h-fit w-[42rem] max-w-full overflow-hidden rounded-[2rem] border border-white bg-white/95 shadow-3xl backdrop-blur-sm">
         <div className="flex justify-between px-5 pb-1 pt-4 text-gray-900">
-          <div className="self-center text-lg font-medium">Add Knowledge</div>
-          <button type="button" onClick={handleRequestClose} className="self-center" title="Close">
+          <div className="self-center text-lg font-medium">添加知识</div>
+          <button type="button" onClick={handleRequestClose} className="self-center" title="关闭">
             <X className="size-5" />
           </button>
         </div>
@@ -256,7 +256,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
           <div className="flex flex-col w-full">
             <div className="my-2">
               <div className="mb-2 flex items-center justify-between gap-3 text-xs text-gray-500">
-                <span>Knowledge</span>
+                <span>知识</span>
                 {targetLabel ? <span className="min-w-0 truncate rounded-lg bg-gray-50 px-2 py-1 text-gray-600">{targetLabel}</span> : null}
               </div>
               <div className="flex flex-wrap flex-row text-sm gap-1">
@@ -293,7 +293,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
               {mode === 'discover' && (
                 <div className="space-y-4">
                 <div>
-                  <label className="mb-2 block text-xs text-gray-500">Search topic</label>
+                  <label className="mb-2 block text-xs text-gray-500">搜索主题</label>
                   <div className={`flex items-center gap-2 py-2 px-4 ${fieldShellClass}`}>
                     <Search className="h-4 w-4 shrink-0 text-gray-500" />
                     <input
@@ -303,7 +303,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
                         if (event.key === 'Enter') void handleDiscover();
                       }}
                       className="min-w-0 flex-1 bg-transparent text-sm outline-none"
-                      placeholder="e.g. transformer attention visual explanation, database indexing lecture notes"
+                      placeholder="例如：Transformer 注意力可视化讲解、数据库索引课程笔记"
                     />
                     <button
                       type="button"
@@ -312,7 +312,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
                       className="flex shrink-0 items-center gap-2 rounded-lg bg-gray-50 px-3 py-1.5 text-xs font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       {isDiscovering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
-                      Search
+                      搜索
                     </button>
                   </div>
                 </div>
@@ -327,7 +327,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
                   <div className="space-y-3">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm">
-                        {selectedSources.length} selected from {discoveredSources.length} results
+                        已从 {discoveredSources.length} 条结果中选择 {selectedSources.length} 条
                       </p>
                       <button
                         type="button"
@@ -336,7 +336,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
                         className="flex items-center gap-2 rounded-lg bg-gray-50 px-4 py-2 text-sm font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                        Import selected
+                        导入选中项
                       </button>
                     </div>
 
@@ -426,14 +426,14 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
                       className={`${modeButtonClass} flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60`}
                     >
                       {isSubmitting ? <Loader2 className="size-4 animate-spin" /> : <FileUp className="size-4" />}
-                      Upload Files
+                      上传文件
                     </button>
                   </div>
-                  <div className="mt-2 text-xs text-gray-500">Drag files here or use Upload Files. They will be added after you save.</div>
+                  <div className="mt-2 text-xs text-gray-500">将文件拖到这里，或点击上传文件。保存后它们会被添加到 workspace。</div>
                 </div>
                 {queuedFiles.length > 0 && (
                   <div className="space-y-2">
-                    <div className="text-xs text-gray-500">{queuedFiles.length} file{queuedFiles.length === 1 ? '' : 's'} selected</div>
+                    <div className="text-xs text-gray-500">已选择 {queuedFiles.length} 个文件</div>
                     <div className="max-h-[120px] space-y-1.5 overflow-y-auto pr-1">
                       {queuedFiles.map((file) => (
                         <div
@@ -453,7 +453,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
                               )
                             }
                             className="inline-flex size-7 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900"
-                            title="Remove"
+                            title="移除"
                           >
                             <X className="h-3.5 w-3.5" />
                           </button>
@@ -470,7 +470,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
                     className="flex items-center gap-2 rounded-lg bg-gray-50 px-4 py-2 text-sm font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                    Add files
+                    添加文件
                   </button>
                 </div>
                 </div>
@@ -479,24 +479,24 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
               {mode === 'website' && (
                 <div className="space-y-4">
                 <div>
-                  <label className="mb-2 block text-xs text-gray-500">Website or video URL</label>
+                  <label className="mb-2 block text-xs text-gray-500">网站或视频 URL</label>
                   <div className={`flex items-center gap-2 py-2 px-4 ${fieldShellClass}`}>
                     <Link2 className="h-4 w-4 shrink-0 text-gray-500" />
                     <input
                       value={websiteUrl}
                       onChange={(event) => setWebsiteUrl(event.target.value)}
                       className="min-w-0 flex-1 bg-transparent text-sm outline-none"
-                      placeholder="https://example.com/article or YouTube link"
+                      placeholder="https://example.com/article 或 YouTube 链接"
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="mb-2 block text-xs text-gray-500">Title</label>
+                  <label className="mb-2 block text-xs text-gray-500">标题</label>
                   <input
                     value={websiteTitle}
                     onChange={(event) => setWebsiteTitle(event.target.value)}
                     className={`w-full py-2 px-4 text-sm outline-none ${textFieldClass}`}
-                    placeholder="Optional, generated from the URL if empty"
+                    placeholder="可选；留空时会根据 URL 自动生成"
                   />
                 </div>
                 <button
@@ -506,7 +506,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
                   className="flex items-center gap-2 rounded-lg bg-gray-50 px-4 py-2 text-sm font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                  Add website
+                  添加网站
                 </button>
                 </div>
               )}
@@ -514,7 +514,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
               {mode === 'text' && (
                 <div className="space-y-4">
                 <div>
-                  <label className="mb-2 block text-xs text-gray-500">Title</label>
+                  <label className="mb-2 block text-xs text-gray-500">标题</label>
                   <input
                     value={textTitle}
                     onChange={(event) => setTextTitle(event.target.value)}
@@ -523,12 +523,12 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="mb-2 block text-xs text-gray-500">Text</label>
+                  <label className="mb-2 block text-xs text-gray-500">文本</label>
                   <textarea
                     value={textContent}
                     onChange={(event) => setTextContent(event.target.value)}
                     className={`min-h-[180px] w-full resize-y py-2 px-4 text-sm outline-none ${textFieldClass}`}
-                    placeholder="Paste source text here..."
+                    placeholder="在这里粘贴资料文本..."
                   />
                 </div>
                 <button
@@ -538,7 +538,7 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
                   className="flex items-center gap-2 rounded-lg bg-gray-50 px-4 py-2 text-sm font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                  Add text
+                  添加文本
                 </button>
                 </div>
               )}

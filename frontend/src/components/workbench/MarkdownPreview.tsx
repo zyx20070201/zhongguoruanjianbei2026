@@ -160,15 +160,15 @@ function CodeBlock({
           className="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-[#6f7277] hover:text-[#25272b]"
         >
           {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-          <span className="truncate">Code</span>
-          <span className="text-[#a0a3a7]">{lineCount} lines</span>
+          <span className="truncate">代码</span>
+          <span className="text-[#a0a3a7]">{lineCount} 行</span>
         </button>
         <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
           <button
             type="button"
             onClick={() => setEditing((current) => !current)}
             className="rounded-md p-1.5 text-[#6f7277] hover:bg-black/5 hover:text-[#25272b]"
-            title={editing ? 'Preview code' : 'Edit code'}
+            title={editing ? '预览代码' : '编辑代码'}
           >
             <Edit3 className="h-3.5 w-3.5" />
           </button>
@@ -176,7 +176,7 @@ function CodeBlock({
             type="button"
             onClick={() => void copyCode()}
             className="rounded-md p-1.5 text-[#6f7277] hover:bg-black/5 hover:text-[#25272b]"
-            title="Copy code"
+            title="复制代码"
           >
             {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
           </button>

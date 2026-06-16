@@ -22,7 +22,7 @@ export default function WorkbenchTopBar({
         <button
           onClick={() => navigate(`/workspaces/${workspaceId}`)}
           className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#777a80] transition-all duration-200 hover:bg-[#ececea] hover:text-[#202124] active:scale-95"
-          title="Back to workspace"
+          title="返回 workspace"
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
@@ -38,14 +38,14 @@ export default function WorkbenchTopBar({
         <button
           onClick={onOpenSettings}
           className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#e5e5e1] bg-white text-[#777a80] shadow-sm transition-all duration-200 hover:border-[#d7d7d2] hover:bg-[#f6f6f4] hover:text-[#202124] active:scale-95"
-          title="Workbench settings"
+          title="Workbench 设置"
         >
           <Settings2 className="h-4 w-4" />
         </button>
         <button
           onClick={onRename}
           className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#e5e5e1] bg-white text-[#777a80] shadow-sm transition-all duration-200 hover:border-[#d7d7d2] hover:bg-[#f6f6f4] hover:text-[#202124] active:scale-95"
-          title="Rename workbench"
+          title="重命名 workbench"
         >
           <PencilLine className="h-4 w-4" />
         </button>

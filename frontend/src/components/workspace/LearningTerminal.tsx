@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Brain,
   CheckCircle2,
@@ -130,24 +131,24 @@ const humanizeMachineName = (value?: string) => {
 
 const toolActionLabel = (tool?: string, running = false) => {
   const name = String(tool || '').trim();
-  const prefix = running ? 'Searching' : 'Searched';
-  if (!name) return running ? 'Working' : 'Finished step';
-  if (name === 'workspace.fs.list' || name === 'workspace.files.list') return running ? 'Listing workspace files' : 'Listed workspace files';
-  if (name === 'workspace.file.search' || name === 'workspace.files.search') return `${prefix} workspace resources`;
-  if (name === 'workspace.file.read' || name === 'workspace.files.read') return running ? 'Reading workspace files' : 'Read workspace files';
-  if (name === 'knowledge.search') return running ? 'Searching knowledge base' : 'Searched knowledge base';
-  if (name === 'attachment.list') return running ? 'Checking attachments' : 'Checked attachments';
-  if (name === 'attachment.read') return running ? 'Reading attachments' : 'Read attachments';
-  if (name === 'studio.generate_artifact') return running ? 'Generating Studio resource' : 'Generated Studio resource';
-  if (name === 'attachment.image.inspect') return running ? 'Inspecting images' : 'Inspected images';
-  if (name === 'web.search') return running ? 'Searching the web' : 'Searched the web';
-  if (name === 'web.fetch') return running ? 'Fetching web content' : 'Fetched web content';
-  if (name === 'file.write') return running ? 'Preparing a file' : 'Prepared a file';
-  if (name === 'file.write_many') return running ? 'Preparing files' : 'Prepared files';
-  if (name === 'file.replace') return running ? 'Updating a file' : 'Updated a file';
-  if (name === 'markdown_note.create') return running ? 'Preparing a Markdown file' : 'Prepared a Markdown file';
-  if (name === 'workbench.create') return running ? 'Preparing a workbench' : 'Prepared a workbench';
-  return running ? `Using ${humanizeMachineName(name)}` : `Used ${humanizeMachineName(name)}`;
+  const prefix = running ? '正在搜索' : '已搜索';
+  if (!name) return running ? '正在处理' : '步骤完成';
+  if (name === 'workspace.fs.list' || name === 'workspace.files.list') return running ? '正在列出 workspace 文件' : '已列出 workspace 文件';
+  if (name === 'workspace.file.search' || name === 'workspace.files.search') return `${prefix} workspace 资料`;
+  if (name === 'workspace.file.read' || name === 'workspace.files.read') return running ? '正在读取 workspace 文件' : '已读取 workspace 文件';
+  if (name === 'knowledge.search') return running ? '正在搜索知识库' : '已搜索知识库';
+  if (name === 'attachment.list') return running ? '正在检查附件' : '已检查附件';
+  if (name === 'attachment.read') return running ? '正在读取附件' : '已读取附件';
+  if (name === 'studio.generate_artifact') return running ? '正在生成 Studio 资源' : '已生成 Studio 资源';
+  if (name === 'attachment.image.inspect') return running ? '正在检查图片' : '已检查图片';
+  if (name === 'web.search') return running ? '正在搜索网页' : '已搜索网页';
+  if (name === 'web.fetch') return running ? '正在抓取网页内容' : '已抓取网页内容';
+  if (name === 'file.write') return running ? '正在准备文件' : '已准备文件';
+  if (name === 'file.write_many') return running ? '正在准备多个文件' : '已准备多个文件';
+  if (name === 'file.replace') return running ? '正在更新文件' : '已更新文件';
+  if (name === 'markdown_note.create') return running ? '正在准备 Markdown 文件' : '已准备 Markdown 文件';
+  if (name === 'workbench.create') return running ? '正在准备 workbench' : '已准备 workbench';
+  return running ? `正在使用 ${humanizeMachineName(name)}` : `已使用 ${humanizeMachineName(name)}`;
 };
 
 const asRecord = (value: unknown): Record<string, any> | null =>
@@ -324,37 +325,37 @@ const knownToolFromText = (value?: string) =>
 const statusActionLabel = (status: TerminalStatus) => {
   const action = String(status.action || '');
   const running = status.done === false;
-  if (action === 'prepare_context_control') return running ? 'Preparing workspace context' : 'Prepared workspace context';
-  if (action === 'model_decision') return running ? 'Choosing the next step' : 'Chose the next step';
+  if (action === 'prepare_context_control') return running ? '正在准备 workspace 上下文' : '已准备 workspace 上下文';
+  if (action === 'model_decision') return running ? '正在选择下一步' : '已选择下一步';
   if (action === 'tool_call') return toolActionLabel(status.description, running);
-  if (action === 'knowledge_search') return `Searching knowledge for "${status.query || ''}"`;
-  if (action === 'queries_generated') return 'Planned search queries';
+  if (action === 'knowledge_search') return `正在搜索知识：“${status.query || ''}”`;
+  if (action === 'queries_generated') return '已生成搜索查询';
   if (action === 'sources_retrieved') {
-    if (status.count === 0) return 'Found no matching sources';
-    if (status.count === 1) return 'Retrieved 1 source';
-    return `Retrieved ${status.count || 0} sources`;
+    if (status.count === 0) return '未找到匹配资料';
+    if (status.count === 1) return '已检索到 1 条资料';
+    return `已检索到 ${status.count || 0} 条资料`;
   }
-  if (action === 'thinking') return 'Thinking';
-  return humanizeMachineName(status.description || action) || 'Working';
+  if (action === 'thinking') return '思考中';
+  return humanizeMachineName(status.description || action) || '处理中';
 };
 
 const agentEventLabel = (event: AgentUiEvent) => {
   if (event.kind === 'activity') {
     const raw = event.detail || event.title;
-    if (/tools available;\s*mode=/i.test(raw || '')) return 'Prepared workspace context';
-    if (/fallback: request ordinary workspace search/i.test(raw || '')) return 'Searching workspace resources';
-    if (/fallback: search indexed knowledge/i.test(raw || '')) return 'Searching knowledge base';
-    if (/fallback: read explicit chat attachments/i.test(raw || '')) return 'Reading attachments';
+    if (/tools available;\s*mode=/i.test(raw || '')) return '已准备 workspace 上下文';
+    if (/fallback: request ordinary workspace search/i.test(raw || '')) return '正在搜索 workspace 资料';
+    if (/fallback: search indexed knowledge/i.test(raw || '')) return '正在搜索知识库';
+    if (/fallback: read explicit chat attachments/i.test(raw || '')) return '正在读取附件';
     const selectedMatch = raw?.match(/^Selected\s+(.+)$/i);
     if (selectedMatch) return toolActionLabel(selectedMatch[1], true);
     const toolName = knownToolFromText(raw);
     if (toolName) return toolActionLabel(toolName, event.status === 'running');
-    if (/^tool_call$/i.test(raw || '') || /^tool call$/i.test(raw || '')) return 'Using a tool';
-    if (/^final$/i.test(raw || '')) return 'Drafting final answer';
-    if (/^ask_user$/i.test(raw || '')) return 'Preparing a question';
-    return humanizeMachineName(raw) || raw || 'Working';
+    if (/^tool_call$/i.test(raw || '') || /^tool call$/i.test(raw || '')) return '正在使用工具';
+    if (/^final$/i.test(raw || '')) return '正在起草最终回答';
+    if (/^ask_user$/i.test(raw || '')) return '正在准备提问';
+    return humanizeMachineName(raw) || raw || '处理中';
   }
-  if (event.kind === 'artifact') return `Generated ${humanizeMachineName(event.artifactType)}: ${event.title}`;
+  if (event.kind === 'artifact') return `已生成 ${humanizeMachineName(event.artifactType)}：${event.title}`;
   if (event.kind === 'ask') return event.prompt;
   return '';
 };
@@ -403,6 +404,12 @@ const evidenceByCitationId = (sources: TerminalEvidence[]) => {
 };
 
 const safeArray = <T,>(value: unknown): T[] => Array.isArray(value) ? value as T[] : [];
+const terminalTone = {
+  greenBg: 'rgb(216,221,205)',
+  greenText: 'rgb(96,121,43)',
+  redBg: 'rgb(223,187,185)',
+  redText: 'rgb(157,39,30)'
+};
 
 const planFromProposal = (action: NonNullable<LearningTerminalMessage['proposedActions']>[number]) => {
   const payload = action.payload || {};
@@ -437,13 +444,13 @@ function ProposalPlanPreview({ plan }: { plan: Record<string, any> }) {
   const steps = planPreviewSteps(plan);
   const plannerMode = String((plan.knowledgeGraphSnapshot as any)?.planningEnhancements ? 'MCL enhanced' : 'MCL');
   return (
-    <div className="mt-3 rounded-xl border border-amber-100 bg-white/80 p-3">
+    <div className="mt-3 rounded-xl border border-gray-200 bg-gray-100 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase text-amber-800">Plan preview</p>
+          <p className="text-[11px] font-semibold uppercase text-gray-700">计划预览</p>
           <p className="mt-1 line-clamp-2 text-sm font-semibold text-gray-900">{planTitle(plan)}</p>
         </div>
-        <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+        <span className="shrink-0 rounded-full bg-gray-200 px-2 py-0.5 text-[11px] font-medium text-gray-700">
           {plannerMode}
         </span>
       </div>
@@ -461,16 +468,16 @@ function ProposalPlanPreview({ plan }: { plan: Record<string, any> }) {
                 </div>
                 {step.detail ? <p className="line-clamp-2 text-gray-500">{step.detail}</p> : null}
                 {step.evidence.length ? (
-                  <p className="line-clamp-1 text-[11px] text-gray-400">Evidence: {step.evidence.slice(0, 3).join(', ')}</p>
+                  <p className="line-clamp-1 text-[11px] text-gray-400">依据：{step.evidence.slice(0, 3).join(', ')}</p>
                 ) : null}
               </div>
             </li>
           ))}
         </ol>
       ) : (
-        <p className="mt-2 text-xs text-gray-500">No structured steps were returned with this proposal.</p>
+        <p className="mt-2 text-xs text-gray-500">这个提案没有返回结构化步骤。</p>
       )}
-      {steps.length > 6 ? <p className="mt-2 text-[11px] text-gray-400">+ {steps.length - 6} more steps in Planning after saving.</p> : null}
+      {steps.length > 6 ? <p className="mt-2 text-[11px] text-gray-400">保存后在规划中还有 {steps.length - 6} 个步骤。</p> : null}
     </div>
   );
 }
@@ -493,7 +500,7 @@ function SourceDetailModal({
         ...supportSnippets.map((snippet) => snippet.text || '').filter(Boolean)
       ].filter(Boolean);
 
-  return (
+  const content = (
     <div
       role="dialog"
       aria-modal="true"
@@ -513,7 +520,7 @@ function SourceDetailModal({
             type="button"
             onClick={onClose}
             className="self-center text-gray-900"
-            aria-label="Close citation modal"
+            aria-label="关闭引用弹窗"
           >
             <X className="h-5 w-5" />
           </button>
@@ -525,7 +532,7 @@ function SourceDetailModal({
                 <div key={`${source.id}:document:${documentIndex}`} className="flex w-full flex-col gap-2">
                   <div>
                     <div className="mb-1 flex w-fit items-center gap-2 text-sm font-medium text-gray-900">
-                      Content
+                      内容
                     </div>
                     <div className="markdown-prose-sm min-w-full max-w-full text-sm">
                       <OpenWebUIMarkdownPreview
@@ -537,13 +544,15 @@ function SourceDetailModal({
                 </div>
               ))
             ) : (
-              <div className="text-sm text-gray-500">No preview available.</div>
+              <div className="text-sm text-gray-500">暂无预览。</div>
             )}
           </div>
         </div>
       </div>
     </div>
   );
+
+  return typeof document === 'undefined' ? content : createPortal(content, document.body);
 }
 
 function SourcesCapsule({
@@ -562,11 +571,11 @@ function SourcesCapsule({
         <button
           type="button"
           className="flex h-8 items-center gap-1 rounded-full border border-gray-50 px-3.5 text-xs font-medium text-gray-600 transition hover:bg-gray-100"
-          aria-label={sources.length === 1 ? 'Toggle 1 source' : `Toggle ${sources.length} sources`}
+          aria-label={sources.length === 1 ? '切换 1 条来源' : `切换 ${sources.length} 条来源`}
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
-          <div>{sources.length === 1 ? '1 Source' : `${sources.length} Sources`}</div>
+          <div>{sources.length === 1 ? '1 条来源' : `${sources.length} 条来源`}</div>
         </button>
       </div>
       {open ? (
@@ -709,7 +718,10 @@ function StudioArtifactCard({
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <p className="min-w-0 truncate text-sm font-semibold">{title}</p>
             {typeof card.reviewScore === 'number' ? (
-              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+              <span
+                className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                style={{ backgroundColor: terminalTone.greenBg, color: terminalTone.greenText }}
+              >
                 Score {Math.round(card.reviewScore * 100)}
               </span>
             ) : null}
@@ -780,7 +792,7 @@ function FollowUps({
 
   return (
     <div className="mt-4">
-      <div className="text-sm font-medium">Follow up</div>
+      <div className="text-sm font-medium">继续追问</div>
       <div className="mt-1.5 flex flex-col gap-1 text-left">
         {followUps.map((followUp, index) => (
           <div key={`${followUp}:${index}`}>
@@ -839,7 +851,7 @@ function StatusHistory({ statusHistory = [] }: { statusHistory?: TerminalStatus[
       <button
         type="button"
         className="w-full"
-        aria-label="Toggle status history"
+        aria-label="切换状态历史"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
@@ -957,9 +969,17 @@ function InlineAgentUpdates({ events = [], isStreaming }: { events?: AgentUiEven
   }
 
   if (isStreaming && latestActivity) {
+    const activityDotStyle = latestActivity.status === 'error'
+      ? { backgroundColor: terminalTone.redText }
+      : latestActivity.status === 'done'
+        ? { backgroundColor: terminalTone.greenText }
+        : undefined;
     return (
       <div className="mb-3 flex items-center gap-2 text-xs text-gray-400">
-        <span className={`size-1.5 rounded-full ${latestActivity.status === 'error' ? 'bg-red-400' : latestActivity.status === 'done' ? 'bg-emerald-400' : 'animate-pulse bg-blue-400'}`} />
+        <span
+          className={`size-1.5 rounded-full ${latestActivity.status === 'error' || latestActivity.status === 'done' ? '' : 'animate-pulse bg-blue-400'}`}
+          style={activityDotStyle}
+        />
         <span className="truncate">{latestActivity.detail || latestActivity.title}</span>
       </div>
     );
@@ -975,7 +995,7 @@ function InlineAgentUpdates({ events = [], isStreaming }: { events?: AgentUiEven
           </div>
         ))}
         {asks.slice(-1).map((event) => (
-          <div key={event.id} className="inline-flex max-w-full rounded-full border border-amber-100 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800">
+          <div key={event.id} className="inline-flex max-w-full rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700">
             {event.prompt}
           </div>
         ))}
@@ -1254,7 +1274,7 @@ export default function LearningTerminal({
     try {
       await onUploadChatFiles(selected);
     } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || '上传 Chat 附件失败');
+        setError(err?.response?.data?.error || err?.message || '上传聊天附件失败');
     } finally {
       setUploadingChatFiles(false);
     }
@@ -1277,7 +1297,7 @@ export default function LearningTerminal({
     onMessagesChange(nextMessages);
     setInput('');
     setError(null);
-    setAgentProgress(isChatMode ? 'Retrieving workspace sources...' : mode === 'new_agentic' ? 'Starting Workspace Agent V2 loop...' : 'Starting Workspace Agent graph...');
+    setAgentProgress(isChatMode ? '正在检索 workspace 资料...' : mode === 'new_agentic' ? '正在启动 Agent V2 循环...' : '正在启动 Agent V2...');
     setStreamingMessageIndex(null);
     setLoading(true);
 
@@ -1358,7 +1378,7 @@ export default function LearningTerminal({
                     sayEvent
                   ].slice(-120);
             }
-            setAgentProgress('Working through the next step');
+            setAgentProgress('正在处理下一步');
             upsertStreamingAssistant(streamedReply);
           }
           if (event === 'ui_event' && data?.uiEvent) {
@@ -1383,8 +1403,8 @@ export default function LearningTerminal({
               agentEvents = [...agentEvents, uiEvent].slice(-120);
             }
             if (uiEvent.kind === 'activity') setAgentProgress(uiEvent.detail || uiEvent.title);
-            if (uiEvent.kind === 'say') setAgentProgress('Working through the next step');
-            if (uiEvent.kind === 'artifact') setAgentProgress(`Generated ${uiEvent.artifactType}: ${uiEvent.title}`);
+            if (uiEvent.kind === 'say') setAgentProgress('正在处理下一步');
+            if (uiEvent.kind === 'artifact') setAgentProgress(`已生成 ${uiEvent.artifactType}：${uiEvent.title}`);
             upsertStreamingAssistant(streamedReply);
           }
           const status = event === 'status' ? data?.status || data?.data : null;
@@ -1419,7 +1439,7 @@ export default function LearningTerminal({
           }
         }
       });
-      if (!response) throw new Error('AI Terminal stream ended without a final result');
+      if (!response) throw new Error('AI Chat 流在没有最终结果时结束了');
       rememberCheckpointThreadId(response.checkpointThreadId);
       setGoalDraft(response.goalDraft ?? null);
       setStreamingMessageIndex(null);
@@ -1428,6 +1448,7 @@ export default function LearningTerminal({
         {
           role: 'assistant',
           content: response.reply || streamedReply,
+          sessionTitle: response.sessionTitle,
           mode,
           agentEvents: response.agentEvents || agentEvents,
           statusHistory,
@@ -1443,7 +1464,7 @@ export default function LearningTerminal({
     } catch (chatError: any) {
       if (streamedReply.trim()) {
         setStreamingMessageIndex(null);
-        setError(chatError?.message || 'AI Terminal stream ended before metadata was finalized');
+        setError(chatError?.message || 'AI Chat 流在元数据完成前结束了');
         onMessagesChange([
           ...nextMessages,
           {
@@ -1476,6 +1497,7 @@ export default function LearningTerminal({
           {
             role: 'assistant',
             content: response.reply,
+            sessionTitle: response.sessionTitle,
             mode,
             agentEvents: agentEvents.length ? agentEvents : response.agentEvents,
             statusHistory,
@@ -1489,7 +1511,7 @@ export default function LearningTerminal({
           }
         ]);
       } catch (fallbackError: any) {
-        setError(fallbackError?.response?.data?.error || fallbackError?.message || chatError?.message || 'AI Terminal request failed');
+      setError(fallbackError?.response?.data?.error || fallbackError?.message || chatError?.message || 'AI Chat 请求失败');
       }
     } finally {
       setLoading(false);
@@ -1593,7 +1615,7 @@ export default function LearningTerminal({
       await onRefresh();
       onWorkbenchCreated(result.workbench.id);
     } catch (createError: any) {
-      setError(createError?.response?.data?.error || createError?.message || 'Failed to create workbench');
+      setError(createError?.response?.data?.error || createError?.message || '创建 workbench 失败');
     } finally {
       setCreating(false);
     }
@@ -1627,29 +1649,29 @@ export default function LearningTerminal({
         </div>
       ) : null}
       {message.proposedActions?.length ? (
-        <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50/60 p-3 text-gray-800">
-          <p className="text-xs font-semibold text-amber-900">Proposed actions</p>
+        <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-100 p-3 text-gray-800">
+          <p className="text-xs font-semibold text-gray-800">建议操作</p>
           <div className="mt-2 space-y-2">
             {message.proposedActions.slice(0, 4).map((action) => {
               const plan = planFromProposal(action);
               return (
-                <div key={action.id} className="rounded-xl bg-white/70 p-2">
+                <div key={action.id} className="rounded-xl bg-white p-2">
                   <div className="flex items-center justify-between gap-3">
                     <span className="min-w-0 truncate text-sm font-medium text-gray-900">{action.title}</span>
-                    <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                    <span className="shrink-0 rounded-full bg-gray-200 px-2 py-0.5 text-[11px] font-medium text-gray-700">
                       {action.risk}
                     </span>
                   </div>
                   <p className="mt-1 text-xs leading-5 text-gray-600">{action.description}</p>
                   {plan ? <ProposalPlanPreview plan={plan} /> : null}
                   {action.changeSet?.items?.length ? (
-                    <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50/70 p-2">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Preview</p>
+                    <div className="mt-2 rounded-lg border border-gray-200 bg-gray-100 p-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-700">预览</p>
                       <div className="mt-1 space-y-1">
                         {action.changeSet.items.slice(0, 4).map((item) => (
-                          <div key={item.id} className="text-xs leading-5 text-amber-950">
+                          <div key={item.id} className="text-xs leading-5 text-gray-700">
                             <span className="font-medium">{item.operation}</span>
-                            <span className="text-amber-700"> · </span>
+                            <span className="text-gray-500"> · </span>
                             <span>{item.title}</span>
                           </div>
                         ))}
@@ -1677,7 +1699,7 @@ export default function LearningTerminal({
                         disabled={Boolean(approvingActionId)}
                         className="inline-flex h-7 items-center rounded-full bg-black px-3 text-xs font-medium text-white transition hover:bg-gray-900 disabled:opacity-50"
                       >
-                        {approvingActionId === action.id ? 'Running' : 'Approve'}
+                        {approvingActionId === action.id ? '执行中' : '批准'}
                       </button>
                       <button
                         type="button"
@@ -1685,7 +1707,7 @@ export default function LearningTerminal({
                         disabled={Boolean(approvingActionId)}
                         className="inline-flex h-7 items-center rounded-full px-3 text-xs font-medium text-gray-600 transition hover:bg-gray-100 disabled:opacity-50"
                       >
-                        Reject
+                        拒绝
                       </button>
                     </div>
                   ) : null}
@@ -1696,15 +1718,22 @@ export default function LearningTerminal({
         </div>
       ) : null}
       {message.executedActions?.length ? (
-        <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs text-emerald-900">
-          <p className="font-semibold">Executed actions</p>
+        <div
+          className="mt-4 rounded-2xl border p-3 text-xs"
+          style={{
+            backgroundColor: message.executedActions.some((action) => !action.success) ? terminalTone.redBg : terminalTone.greenBg,
+            borderColor: message.executedActions.some((action) => !action.success) ? terminalTone.redBg : terminalTone.greenBg,
+            color: message.executedActions.some((action) => !action.success) ? terminalTone.redText : terminalTone.greenText
+          }}
+        >
+          <p className="font-semibold">已执行操作</p>
           <div className="mt-2 space-y-1">
             {message.executedActions.map((action) => (
               <div key={action.id} className="leading-5">
-                <div>{action.success ? 'Done' : 'Failed'} · {action.summary}</div>
+                <div>{action.success ? '完成' : '失败'} · {action.summary}</div>
                 {action.result?.planId ? (
-                  <div className="mt-1 text-emerald-700">
-                    Saved as workspace-level plan · {String(action.result.planId)}
+                  <div className="mt-1 font-medium">
+                    已保存为 workspace 级计划 · {String(action.result.planId)}
                   </div>
                 ) : null}
                 {action.success && action.result?.studioCard ? (
@@ -1718,10 +1747,10 @@ export default function LearningTerminal({
       {message.agentTrace?.length && !message.agentEvents?.length ? (
         <details className="mt-4 rounded-2xl border border-gray-100 bg-gray-50 p-3 text-xs text-gray-600">
           <summary className="cursor-pointer select-none font-semibold text-gray-800">
-            Agent trace
+            Agent 轨迹
           </summary>
           <div className="mt-3">
-            <p className="mb-1 font-medium text-gray-500">Trace</p>
+            <p className="mb-1 font-medium text-gray-500">轨迹</p>
             <div className="space-y-1">
               {message.agentTrace.slice(-8).map((item) => (
                 <div key={item.id} className="leading-5">
@@ -1766,7 +1795,7 @@ export default function LearningTerminal({
           className={`scrollbar-hidden min-h-0 flex-1 space-y-2 overflow-y-auto ${isDashboard ? 'px-0' : 'px-4 pt-7 md:px-6'}`}
         >
           {hasMoreMessages ? (
-            <div className="mx-auto flex w-full max-w-3xl justify-center pb-3">
+            <div className="mx-auto flex w-full max-w-5xl justify-center pb-3">
               <button
                 type="button"
                 onClick={() => void loadEarlierMessages()}
@@ -1774,7 +1803,7 @@ export default function LearningTerminal({
                 className="inline-flex h-8 items-center gap-2 rounded-full border border-gray-100 bg-white px-3 text-xs font-medium text-gray-500 shadow-sm transition hover:bg-gray-50 hover:text-gray-800 disabled:opacity-60"
               >
                 {loadingEarlierMessages ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                Load earlier messages
+                加载更早消息
               </button>
             </div>
           ) : null}
@@ -1790,7 +1819,7 @@ export default function LearningTerminal({
             return (
             <div
               key={`${message.role}-${index}`}
-              className={`workspace-message group mx-auto flex w-full max-w-3xl px-0 py-2 text-sm ${
+              className={`workspace-message group mx-auto flex w-full max-w-5xl px-0 py-2 text-sm ${
                 message.role === 'user' ? 'justify-end' : 'justify-start'
               }`}
               style={{ animationDelay: `${Math.min(index * 45, 240)}ms` }}
@@ -1805,12 +1834,12 @@ export default function LearningTerminal({
                 {message.role === 'assistant' ? (
                   <>
                     <div className="mt-1 hidden size-8 shrink-0 items-center justify-center rounded-full border border-gray-100 bg-white text-[11px] font-semibold text-gray-900 shadow-sm @lg:flex md:flex">
-                      AI
+                      SL
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="self-center font-semibold line-clamp-1 flex gap-1 items-center text-sm leading-6 text-black">
                         <span className="line-clamp-1">
-                          {message.mode === 'new_agentic' ? 'Workspace Agent V2' : message.mode === 'agentic' ? 'Workspace Agent' : 'AI Terminal'}
+                          {message.mode === 'new_agentic' || message.mode === 'agentic' ? 'Agent V2' : 'AI Chat'}
                         </span>
                       </div>
                       {streamingMessageIndex === index ? (
@@ -1820,7 +1849,7 @@ export default function LearningTerminal({
                             <span className="size-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-80ms]" />
                             <span className="size-1.5 animate-bounce rounded-full bg-gray-400" />
                           </div>
-                          <span>Working {formatWorkingTime(workingSeconds)}</span>
+                          <span>已处理 {formatWorkingTime(workingSeconds)}</span>
                           {agentProgress ? <span className="min-w-0 truncate text-gray-400">· {agentProgress}</span> : null}
                         </div>
                       ) : null}
@@ -1897,7 +1926,7 @@ export default function LearningTerminal({
           })}
 
           {goalDraft && (
-            <div className="workspace-card-in mx-auto mt-4 w-full max-w-3xl rounded-3xl border border-gray-100 bg-white p-4 shadow-sm">
+            <div className="workspace-card-in mx-auto mt-4 w-full max-w-5xl rounded-3xl border border-gray-100 bg-white p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2">
                   <Target className="h-4 w-4 text-gray-700" />
@@ -1919,7 +1948,7 @@ export default function LearningTerminal({
                   <div className="space-y-1.5">
                     {goalDraft.skills.map((skill) => (
                       <div key={skill} className="flex items-center gap-2 text-sm text-gray-700">
-                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                        <CheckCircle2 className="h-4 w-4" style={{ color: terminalTone.greenText }} />
                         <span>{skill}</span>
                       </div>
                     ))}
@@ -1949,28 +1978,28 @@ export default function LearningTerminal({
               ? 'shrink-0 mt-5'
               : 'min-h-0 flex-1 overflow-y-auto py-8'
         } ${isDashboard ? 'pb-0' : 'pb-3'}`}>
-          <div className={`mx-auto w-full ${messages.length === 0 ? 'max-w-3xl px-4 md:px-6' : 'max-w-6xl px-2.5'}`}>
+          <div className={`mx-auto w-full ${messages.length === 0 ? 'max-w-5xl px-4 md:px-6' : 'max-w-6xl px-2.5'}`}>
             {messages.length === 0 ? (
               <div className="workspace-hero mx-auto mb-7 w-full text-center">
                 <div className="mb-5 text-3xl font-medium leading-tight text-gray-700">
-                  How can I help you today?
+                  今天想让我帮你做什么？
                 </div>
                 <p className="mx-auto max-w-2xl text-sm leading-6 text-gray-500">
                   {isDashboard
                     ? `${overviewText} 你可以直接让 AI 汇总进度、整理材料或创建新的学习现场。`
-                    : `${overviewText} Ask AI Terminal about ${workspaceName}.`}
+                    : `${overviewText} 你可以向 AI Chat 询问 ${workspaceName}。`}
                 </p>
               </div>
             ) : null}
 
-            {error && <p className="mx-auto mb-2 max-w-3xl px-3 text-sm text-red-600">{error}</p>}
+            {error && <p className="mx-auto mb-2 max-w-5xl px-3 text-sm" style={{ color: terminalTone.redText }}>{error}</p>}
 
-            <div className="mx-auto w-full max-w-3xl">
+            <div className="mx-auto w-full max-w-5xl">
             <TerminalComposer
               value={input}
               onValueChange={setInput}
               onSubmit={() => void sendMessage()}
-              placeholder="Send a Message"
+              placeholder="发送消息"
               mode={mode}
               onModeChange={onModeChange}
               selectedSources={selectedSources.map((source) => ({

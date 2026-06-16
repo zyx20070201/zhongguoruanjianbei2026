@@ -25,8 +25,8 @@ export default function WorkbenchSettingsDialog({
               <Settings2 className="h-5 w-5" />
             </div>
             <div>
-              <div className="text-sm font-semibold text-[var(--wb-text)]">Workbench Settings</div>
-              <div className="text-xs text-[var(--wb-text-dim)]">Appearance</div>
+              <div className="text-sm font-semibold text-[var(--wb-text)]">Workbench 设置</div>
+              <div className="text-xs text-[var(--wb-text-dim)]">外观</div>
             </div>
           </div>
 
@@ -45,7 +45,7 @@ export default function WorkbenchSettingsDialog({
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between border-b border-[var(--wb-border)] px-6 py-5">
             <div>
-              <h2 className="text-xl font-semibold text-[var(--wb-text)]">Settings</h2>
+              <h2 className="text-xl font-semibold text-[var(--wb-text)]">设置</h2>
               <p className="mt-1 text-sm text-[var(--wb-text-muted)]">
                 Adjust the current page appearance.
               </p>
@@ -53,7 +53,7 @@ export default function WorkbenchSettingsDialog({
             <button
               onClick={onClose}
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[var(--wb-text-dim)] transition-colors hover:bg-white/5 hover:text-[var(--wb-text)]"
-              title="Close settings"
+              title="关闭设置"
             >
               <X className="h-4 w-4" />
             </button>
@@ -66,9 +66,9 @@ export default function WorkbenchSettingsDialog({
                   <MonitorCog className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-semibold text-[var(--wb-text)]">Appearance</h3>
+                  <h3 className="text-base font-semibold text-[var(--wb-text)]">外观</h3>
                   <p className="text-sm text-[var(--wb-text-muted)]">
-                    Move the current light and dark appearance controls into one place.
+                    将当前浅色和深色外观控制集中到这里。
                   </p>
                 </div>
               </div>
@@ -85,8 +85,8 @@ export default function WorkbenchSettingsDialog({
                   <div className="flex items-center gap-3">
                     <SunMedium className="h-5 w-5 text-[var(--wb-text)]" />
                     <div>
-                      <div className="text-sm font-semibold text-[var(--wb-text)]">Light</div>
-                      <div className="text-xs text-[var(--wb-text-dim)]">Bright workspace UI</div>
+                      <div className="text-sm font-semibold text-[var(--wb-text)]">浅色</div>
+                      <div className="text-xs text-[var(--wb-text-dim)]">明亮的 workspace 界面</div>
                     </div>
                   </div>
                 </button>
@@ -101,8 +101,8 @@ export default function WorkbenchSettingsDialog({
                   <div className="flex items-center gap-3">
                     <Moon className="h-5 w-5 text-[var(--wb-text)]" />
                     <div>
-                      <div className="text-sm font-semibold text-[var(--wb-text)]">Dark</div>
-                      <div className="text-xs text-[var(--wb-text-dim)]">Dimmer workbench UI</div>
+                      <div className="text-sm font-semibold text-[var(--wb-text)]">深色</div>
+                      <div className="text-xs text-[var(--wb-text-dim)]">更暗的 workbench 界面</div>
                     </div>
                   </div>
                 </button>

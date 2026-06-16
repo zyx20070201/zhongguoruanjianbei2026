@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import prisma from '../config/db';
+import { aiModelProviderService } from './aiModelProviderService';
 import { backgroundJobService } from './backgroundJobService';
 import { embeddingService } from './embeddingService';
 
@@ -92,6 +93,104 @@ const summarizeTurnText = (messages: ChatMessage[]) => {
   return clip([latestUser ? `User: ${latestUser}` : '', latestAssistant ? `Assistant: ${latestAssistant}` : ''].filter(Boolean).join('\n'), 900);
 };
 
+const firstUserMessage = (messages: ChatMessage[]) =>
+  messages.find((message) => message.role === 'user' && String(message.content || '').trim())?.content.trim() || '';
+
+const fallbackTitleFromFirstUser = (messages: ChatMessage[]) => {
+  const text = firstUserMessage(messages);
+  return clip(text || 'New chat', 42);
+};
+
+const normalizeEmoji = (value: unknown) => {
+  const emoji = String(value || '').trim().match(/\p{Extended_Pictographic}/u)?.[0];
+  return emoji || '💬';
+};
+
+const normalizeTitleText = (value: unknown, fallback: string) => {
+  const title = String(value || '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/["“”]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clip(title || fallback, 32);
+};
+
+const titleWithoutEmoji = (value: string) =>
+  String(value || '')
+    .replace(/^\s*\p{Extended_Pictographic}(?:\uFE0F|\u200D|\p{Extended_Pictographic})*\s*/u, '')
+    .trim();
+
+const shouldRefreshGeneratedTitle = (existingTitle: string, messages: ChatMessage[], metadata: Record<string, unknown>) => {
+  if (metadata.titleGeneratedBy === 'llm_first_user_v1') return false;
+  if (metadata.titleGeneratedBy === 'fallback_first_user_v1') return false;
+  if (metadata.terminalPersisted === true) return true;
+  const fallback = fallbackTitleFromFirstUser(messages);
+  const normalizedExisting = titleWithoutEmoji(existingTitle);
+  return !existingTitle || existingTitle === 'New chat' || existingTitle === '新对话' || normalizedExisting === fallback;
+};
+
+const extractJsonObjectText = (value: string) => {
+  const start = value.indexOf('{');
+  const end = value.lastIndexOf('}');
+  return start >= 0 && end > start ? value.slice(start, end + 1) : value;
+};
+
+const buildLlmTitle = async (messages: ChatMessage[]) => {
+  const initialUserIntent = firstUserMessage(messages);
+  const fallback = fallbackTitleFromFirstUser(messages);
+  if (!initialUserIntent) {
+    return {
+      title: fallback,
+      metadata: {
+        titleGeneratedBy: 'fallback_first_user_v1',
+        titleGeneratedAt: new Date().toISOString()
+      }
+    };
+  }
+
+  try {
+    const result = await aiModelProviderService.chat(
+      [{
+        role: 'user',
+        content: [
+          '请根据一段 AI Terminal 会话的第一条用户请求，生成会话列表标题。',
+          '只概括第一条请求的主题，不要被后续回复影响。',
+          '输出 JSON：{"emoji":"一个相关 emoji","title":"2-8 个中文词或不超过 6 个英文词"}。',
+          '标题不要包含 emoji、引号、句号或解释。',
+          '',
+          `第一条用户请求：${clip(initialUserIntent, 900)}`
+        ].join('\n')
+      }],
+      {
+        useCase: 'chat',
+        timeoutMs: Number(process.env.AI_TERMINAL_TITLE_TIMEOUT_MS || 12000),
+        maxTokens: 80,
+        systemPrompt: '你是一个会话标题生成器，只输出 JSON 对象。'
+      }
+    );
+    const parsed = JSON.parse(extractJsonObjectText(result.reply));
+    const emoji = normalizeEmoji(parsed?.emoji);
+    const title = normalizeTitleText(parsed?.title, fallback);
+    return {
+      title: `${emoji} ${title}`,
+      metadata: {
+        titleGeneratedBy: 'llm_first_user_v1',
+        titleGeneratedAt: new Date().toISOString(),
+        titleModel: result.model,
+        titleProvider: result.provider
+      }
+    };
+  } catch {
+    return {
+      title: `💬 ${fallback}`,
+      metadata: {
+        titleGeneratedBy: 'fallback_first_user_v1',
+        titleGeneratedAt: new Date().toISOString()
+      }
+    };
+  }
+};
+
 type RetrievalCandidate = RetrievedConversationMemory & {
   rawContent: string;
   metadata: Record<string, unknown>;
@@ -179,7 +278,21 @@ export class ConversationHistoryService {
     messages: ChatMessage[];
   }) {
     const sessionId = input.sessionId || crypto.randomUUID();
-    const title = clip(input.title || input.messages.find((message) => message.role === 'user')?.content || 'New chat', 80);
+    const existingSession = await prisma.conversationSession.findUnique({
+      where: { id: sessionId },
+      select: { title: true, metadataJson: true }
+    }).catch(() => null);
+    const existingMetadata = parseJson<Record<string, unknown>>(existingSession?.metadataJson, {});
+    const generatedTitle = input.title
+      ? { title: clip(input.title, 80), metadata: {} }
+      : shouldRefreshGeneratedTitle(existingSession?.title || '', input.messages, existingMetadata)
+        ? await buildLlmTitle(input.messages)
+        : { title: existingSession?.title || fallbackTitleFromFirstUser(input.messages), metadata: {} };
+    const title = clip(generatedTitle.title, 80);
+    const sessionMetadata = {
+      ...existingMetadata,
+      ...generatedTitle.metadata
+    };
     await prisma.conversationSession.upsert({
       where: { id: sessionId },
       create: {
@@ -189,12 +302,13 @@ export class ConversationHistoryService {
         userId: input.userId,
         title,
         source: input.source || 'terminal',
-        metadataJson: '{}'
+        metadataJson: stringify(sessionMetadata)
       },
       update: {
         title,
         workbenchId: input.workbenchId || null,
         source: input.source || 'terminal',
+        metadataJson: stringify(sessionMetadata),
         updatedAt: new Date()
       }
     });
@@ -237,7 +351,7 @@ export class ConversationHistoryService {
       createdIds.push(saved.id);
       this.enqueueEmbedding(saved.id);
     }
-    return { sessionId, createdIds };
+    return { sessionId, createdIds, title };
   }
 
   registerBackgroundJobs() {
@@ -336,14 +450,20 @@ export class ConversationHistoryService {
     sessionMetadata?: Record<string, unknown>;
   }) {
     const sessionId = input.sessionId || crypto.randomUUID();
-    const title = clip(input.title || input.messages.find((message) => message.role === 'user')?.content || 'New chat', 80);
     const existingSession = await prisma.conversationSession.findUnique({
       where: { id: sessionId },
-      select: { metadataJson: true }
+      select: { title: true, metadataJson: true }
     }).catch(() => null);
     const existingMetadata = parseJson<Record<string, unknown>>(existingSession?.metadataJson, {});
+    const generatedTitle = input.title
+      ? { title: clip(input.title, 80), metadata: {} }
+      : shouldRefreshGeneratedTitle(existingSession?.title || '', input.messages, existingMetadata)
+        ? await buildLlmTitle(input.messages)
+        : { title: existingSession?.title || fallbackTitleFromFirstUser(input.messages), metadata: {} };
+    const title = clip(generatedTitle.title, 80);
     const sessionMetadata = {
       ...existingMetadata,
+      ...generatedTitle.metadata,
       ...(input.sessionMetadata || {}),
       terminalPersisted: true,
       updatedFrom: 'terminal_chat_persistence'
@@ -415,7 +535,7 @@ export class ConversationHistoryService {
       this.enqueueEmbedding(saved.id);
     }
 
-    return { sessionId, savedIds };
+    return { sessionId, savedIds, title };
   }
 
   async retrieve(input: {

@@ -86,9 +86,6 @@ const chatFiles = (value: unknown) =>
         .slice(0, 24)
     : [];
 
-const latestTerminalUserText = (messages: any[]) =>
-  [...(messages || [])].reverse().find((message) => message?.role === 'user' && String(message?.content || '').trim())?.content || '';
-
 const terminalModeForApproval = async (input: {
   workspaceId: string;
   sessionId?: string | null;
@@ -152,7 +149,6 @@ const persistTerminalConversation = async (input: {
     workbenchId: input.workbenchId || null,
     userId: workspace.userId,
     sessionId,
-    title: String(latestTerminalUserText(input.messages)).slice(0, 80),
     source: input.mode === 'chat' ? 'terminal_chat' : input.mode === 'new_agentic' ? 'terminal_v2' : 'terminal',
     messages: replaceOrAppendAssistant(input.messages, assistant),
     sessionMetadata: {
@@ -205,7 +201,7 @@ router.post('/terminal/chat', async (req: Request, res: Response) => {
             chatFiles: normalizedChatFiles
           })
         : await workspaceAgentRuntime.run({ ...commonInput, chatFiles: normalizedChatFiles });
-    await persistTerminalConversation({
+    const persisted = await persistTerminalConversation({
       workspaceId,
       workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
       sessionId: typeof sessionId === 'string' ? sessionId : null,
@@ -216,6 +212,10 @@ router.post('/terminal/chat', async (req: Request, res: Response) => {
       selectedSources: normalizedSelectedSources,
       chatFiles: normalizedChatFiles
     });
+    if (persisted?.sessionId) {
+      result.sessionId = persisted.sessionId;
+      (result as typeof result & { sessionTitle?: string }).sessionTitle = persisted.title;
+    }
     const latestUserMessage = [...messages].reverse().find((message: any) => message?.role === 'user' && message?.content)?.content || '';
     await learningEventCollectionService.collect({
       workspaceId,
@@ -285,7 +285,7 @@ router.post('/terminal/chat/stream', async (req: Request, res: Response) => {
         if (item.type === 'final') finalResult = item.result;
       }
       if (!finalResult) throw new Error('Workspace chat stream ended before final result');
-      await persistTerminalConversation({
+      const persisted = await persistTerminalConversation({
         workspaceId,
         workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
         sessionId: typeof sessionId === 'string' ? sessionId : null,
@@ -296,6 +296,10 @@ router.post('/terminal/chat/stream', async (req: Request, res: Response) => {
         selectedSources: normalizedSelectedSources,
         chatFiles: normalizedChatFiles
       });
+      if (persisted?.sessionId) {
+        finalResult.sessionId = persisted.sessionId;
+        finalResult.sessionTitle = persisted.title;
+      }
       send('final', { type: 'final', node: 'WorkspaceChat', result: finalResult });
     } else if (mode === 'new_agentic') {
       for await (const item of workspaceAgentV2Runtime.streamRun({
@@ -309,7 +313,7 @@ router.post('/terminal/chat/stream', async (req: Request, res: Response) => {
         chatFiles: normalizedChatFiles
       })) {
         if ((item.type === 'final' || item.type === 'approval_required') && item.result) {
-          await persistTerminalConversation({
+          const persisted = await persistTerminalConversation({
             workspaceId,
             workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
             sessionId: typeof sessionId === 'string' ? sessionId : null,
@@ -320,6 +324,10 @@ router.post('/terminal/chat/stream', async (req: Request, res: Response) => {
             selectedSources: normalizedSelectedSources,
             chatFiles: normalizedChatFiles
           });
+          if (persisted?.sessionId) {
+            item.result.sessionId = persisted.sessionId;
+            (item.result as typeof item.result & { sessionTitle?: string }).sessionTitle = persisted.title;
+          }
         }
         send(item.type, item);
       }
@@ -333,7 +341,7 @@ router.post('/terminal/chat/stream', async (req: Request, res: Response) => {
         chatFiles: normalizedChatFiles
       })) {
         if ((item.type === 'final' || item.type === 'approval_required') && item.result) {
-          await persistTerminalConversation({
+          const persisted = await persistTerminalConversation({
             workspaceId,
             workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
             sessionId: typeof sessionId === 'string' ? sessionId : null,
@@ -344,6 +352,10 @@ router.post('/terminal/chat/stream', async (req: Request, res: Response) => {
             selectedSources: normalizedSelectedSources,
             chatFiles: normalizedChatFiles
           });
+          if (persisted?.sessionId) {
+            item.result.sessionId = persisted.sessionId;
+            (item.result as typeof item.result & { sessionTitle?: string }).sessionTitle = persisted.title;
+          }
         }
         send(item.type, item);
       }

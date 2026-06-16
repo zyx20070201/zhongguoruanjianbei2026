@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
 import {
-  ExternalLink,
   FileCode2,
   FileText,
   FolderOpen,
@@ -63,13 +62,11 @@ const getBoundResource = (panel: PanelState, resources: ResourceReference[]) =>
 function PanelBody({
   panel,
   resource,
-  onUpdateViewState,
-  onBindResource
+  onUpdateViewState
 }: {
   panel: PanelState;
   resource: ResourceReference | null;
   onUpdateViewState: (panelId: string, patch: Record<string, any>) => void;
-  onBindResource: (panelId: string) => void;
 }) {
   if (panel.minimized) {
     return <div className="flex-1 bg-[var(--wb-editor)]" />;
@@ -91,17 +88,11 @@ function PanelBody({
       <div className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--wb-editor)] px-6 text-center">
         <div className="rounded-2xl border border-[var(--wb-border)] bg-[var(--wb-panel)] p-4 text-[var(--wb-text-muted)] shadow-sm">{getPanelIcon(panel.type)}</div>
         <div>
-          <h3 className="text-sm font-semibold text-[var(--wb-text)]">No resource bound yet</h3>
+          <h3 className="text-sm font-semibold text-[var(--wb-text)]">暂无打开的工作区文件</h3>
           <p className="mt-1 text-sm text-[var(--wb-text-muted)]">
-            This panel stores a reference to a workspace file. The file content stays in the shared file system.
+            从工作区文件树中打开文件后即可在此面板中使用。
           </p>
         </div>
-        <button
-          onClick={() => onBindResource(panel.id)}
-          className="rounded-xl border border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-2 text-sm font-medium text-[var(--wb-text)] transition-colors hover:border-[var(--wb-accent)] hover:bg-[var(--wb-sidebar-alt)]"
-        >
-          Bind Resource
-        </button>
       </div>
     );
   }
@@ -112,17 +103,10 @@ function PanelBody({
         <div className="rounded-2xl border border-[var(--wb-border)] bg-[var(--wb-panel)] p-4 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--wb-text-dim)]">Resource Reference</div>
+              <div className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--wb-text-dim)]">文件引用</div>
               <div className="mt-3 text-lg font-semibold text-[var(--wb-text)]">{resource.name}</div>
               <div className="mt-2 text-sm text-[var(--wb-text-muted)]">{resource.path}</div>
             </div>
-            <button
-              onClick={() => onBindResource(panel.id)}
-              className="inline-flex items-center gap-1 rounded-xl border border-[var(--wb-border)] px-3 py-2 text-xs font-medium text-[var(--wb-text)] transition-colors hover:border-[var(--wb-accent)] hover:bg-[var(--wb-sidebar-alt)]"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Change
-            </button>
           </div>
           <div className="mt-4 inline-flex rounded-full bg-[var(--wb-sidebar-alt)] px-3 py-1 text-xs font-medium text-[#d7e7ff]">
             {resource.type}
@@ -136,19 +120,12 @@ function PanelBody({
     return (
       <div className="h-full bg-[var(--wb-editor)] px-4 py-3 font-mono text-sm text-[#d7e7ff]">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <div className="text-xs uppercase tracking-[0.2em] text-[var(--wb-text-dim)]">Code Placeholder</div>
-          <button
-            onClick={() => onBindResource(panel.id)}
-            className="inline-flex items-center gap-1 rounded-xl border border-[var(--wb-border)] px-3 py-1.5 text-xs font-medium text-[var(--wb-text)] transition-colors hover:border-[var(--wb-accent)] hover:bg-[var(--wb-sidebar-alt)]"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            Change
-          </button>
+          <div className="text-xs uppercase tracking-[0.2em] text-[var(--wb-text-dim)]">代码占位</div>
         </div>
         <div className="rounded-xl border border-[var(--wb-border)] bg-black/20 p-4">
-          <div>{`// Bound resource: ${resource.name}`}</div>
-          <div className="mt-2 text-[var(--wb-text-muted)]">{`// Path: ${resource.path}`}</div>
-          <div className="mt-4 text-[var(--wb-text-dim)]">{`// This panel is a shell for the future code experience.`}</div>
+          <div>{`// 工作区文件：${resource.name}`}</div>
+          <div className="mt-2 text-[var(--wb-text-muted)]">{`// 路径：${resource.path}`}</div>
+          <div className="mt-4 text-[var(--wb-text-dim)]">{`// 这个面板会承载后续的代码体验。`}</div>
         </div>
       </div>
     );
@@ -158,20 +135,13 @@ function PanelBody({
     <div className="flex h-full flex-col justify-between bg-[var(--wb-editor)] p-4 text-[var(--wb-text)]">
       <div>
         <div className="flex items-center justify-between gap-3">
-          <div className="text-xs uppercase tracking-[0.2em] text-[var(--wb-text-dim)]">Video Placeholder</div>
-          <button
-            onClick={() => onBindResource(panel.id)}
-            className="inline-flex items-center gap-1 rounded-xl border border-[var(--wb-border)] px-3 py-1.5 text-xs font-medium text-[var(--wb-text)] transition-colors hover:border-[var(--wb-accent)] hover:bg-[var(--wb-sidebar-alt)]"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            Change
-          </button>
+          <div className="text-xs uppercase tracking-[0.2em] text-[var(--wb-text-dim)]">视频占位</div>
         </div>
         <div className="mt-3 text-lg font-semibold">{resource.name}</div>
         <div className="mt-2 text-sm text-[var(--wb-text-muted)]">{resource.path}</div>
       </div>
       <div className="rounded-2xl border border-[var(--wb-border)] bg-[var(--wb-panel)] px-4 py-8 text-center text-sm text-[var(--wb-text-muted)]">
-        Video playback is intentionally not implemented yet. This panel persists the bound resource and workbench layout.
+        视频播放暂未实现。此面板会保留工作区文件和 workbench 布局。
       </div>
     </div>
   );
@@ -185,7 +155,7 @@ export default function PanelCanvas({
   onClose,
   onMovePanel,
   onUpdateViewState,
-  onBindResource
+  onBindResource: _onBindResource
 }: PanelCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const actionRef = useRef<ActionState | null>(null);
@@ -292,7 +262,7 @@ export default function PanelCanvas({
                     onMovePanel(panel.id, { minimized: !panel.minimized });
                   }}
                   className="rounded-lg p-1.5 text-[var(--wb-text-dim)] transition-colors hover:bg-white/5 hover:text-[var(--wb-text)]"
-                  title={panel.minimized ? 'Expand panel' : 'Minimize panel'}
+                  title={panel.minimized ? '展开面板' : '最小化面板'}
                 >
                   {panel.minimized ? <Square className="h-4 w-4" /> : <Minimize2 className="h-4 w-4" />}
                 </button>
@@ -302,7 +272,7 @@ export default function PanelCanvas({
                     onClose(panel.id);
                   }}
                   className="rounded-lg p-1.5 text-[var(--wb-text-dim)] transition-colors hover:bg-red-500/10 hover:text-red-300"
-                  title="Close panel"
+                  title="关闭面板"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -314,7 +284,6 @@ export default function PanelCanvas({
                 panel={panel}
                 resource={resource}
                 onUpdateViewState={onUpdateViewState}
-                onBindResource={onBindResource}
               />
             </div>
 

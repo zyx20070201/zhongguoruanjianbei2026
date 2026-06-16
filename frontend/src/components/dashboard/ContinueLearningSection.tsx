@@ -10,10 +10,10 @@ export default function ContinueLearningSection({ items, onOpenWorkspace }: Cont
   if (!items || items.length === 0) {
     return (
       <div className="mb-10">
-        <h2 className="text-xl font-bold text-gray-800 mb-4">Continue Learning</h2>
+        <h2 className="text-xl font-bold text-gray-800 mb-4">继续学习</h2>
         <div className="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center">
-          <p className="text-gray-500 mb-2">No recent activity yet</p>
-          <p className="text-sm text-gray-400">Open a workspace or create your first one to get started.</p>
+          <p className="text-gray-500 mb-2">暂无最近活动</p>
+          <p className="text-sm text-gray-400">打开一个课程空间，或先创建你的第一个课程空间。</p>
         </div>
       </div>
     );
@@ -21,7 +21,7 @@ export default function ContinueLearningSection({ items, onOpenWorkspace }: Cont
 
   return (
     <div className="mb-10">
-      <h2 className="text-xl font-bold text-gray-800 mb-4">Continue Learning</h2>
+      <h2 className="text-xl font-bold text-gray-800 mb-4">继续学习</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {items.map((item) => (
           <div 
@@ -47,7 +47,7 @@ export default function ContinueLearningSection({ items, onOpenWorkspace }: Cont
             </p>
             
             <div className="flex items-center text-sm font-medium text-blue-600">
-              Resume 
+              继续
               <svg className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
             </div>
           </div>

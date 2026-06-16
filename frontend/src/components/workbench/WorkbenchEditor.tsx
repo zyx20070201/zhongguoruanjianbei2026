@@ -198,7 +198,7 @@ function PaneTab({
           onCloseEditor(editor.id);
         }}
         className="ml-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md opacity-0 transition duration-150 hover:bg-gray-100 hover:text-gray-900 group-hover:opacity-100"
-        title="Close tab"
+            title="关闭标签页"
       >
         <X className="h-3.5 w-3.5" />
       </button>
@@ -258,7 +258,7 @@ function PaneTitleBar({
             onAddEditor(paneId, event.currentTarget.getBoundingClientRect());
           }}
           className="inline-flex min-w-fit shrink-0 items-center justify-center p-1.5 text-gray-300 transition hover:text-gray-700 dark:text-gray-600 dark:hover:text-white"
-          title="Open another resource in this pane"
+          title="新增空标签页"
         >
           <Plus className="h-4 w-4" />
         </button>
@@ -272,7 +272,7 @@ function PaneTitleBar({
             event.stopPropagation();
             onClosePane(paneId);
           }}
-          title="Close panel"
+          title="关闭面板"
         >
           <X className="h-4 w-4" />
         </button>
@@ -742,9 +742,9 @@ export default function WorkbenchEditor({
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#e5e5e1] bg-[#f6f6f4] text-[#777a80]">
             <Columns2 className="h-6 w-6" />
           </div>
-          <h2 className="text-xl font-semibold text-[#25272b]">No tabs open</h2>
+          <h2 className="text-xl font-semibold text-[#25272b]">暂无打开的标签页</h2>
           <p className="mt-3 text-sm leading-6 text-[#777a80]">
-            Open a resource from Sources, Files, or Generated to start working.
+            从工作区文件树中选择一个文件开始工作。
           </p>
           <div className="mt-5 flex items-center justify-center">
             <button
@@ -752,7 +752,7 @@ export default function WorkbenchEditor({
               className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-4 py-2 text-sm font-medium text-white transition-all duration-200 hover:bg-[#34373c] active:scale-95"
             >
               <Plus className="h-4 w-4" />
-              Add first tab
+              新增第一个标签页
             </button>
           </div>
         </div>

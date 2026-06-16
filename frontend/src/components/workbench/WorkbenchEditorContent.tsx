@@ -195,7 +195,7 @@ interface WorkbenchEditorContentProps {
     options?: { baseContentHash?: string | null; revisionSummary?: string; actionType?: string; actor?: string }
   ) => void | Promise<boolean | void>;
   onUpdateViewState?: (editorId: string, patch: Record<string, any>) => void;
-  onBindResource: (editorId: string, anchorRect?: DOMRect | null) => void;
+  onBindResource?: (editorId: string, anchorRect?: DOMRect | null) => void;
   onAddSelectionAskToAssistant?: (messages: AiChatMessage[], detail: WorkbenchContextSelectionActionDetail) => void;
   aiContext?: AiChatContext & { activeFileContent?: string | null };
   resources?: ResourceReference[];
@@ -6663,10 +6663,10 @@ export function AiEditorView({
                         </div>
                       )}
                       <div className="mt-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                        <button onClick={() => void copyMessage(cleanMessageContent, index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Copy">
+                        <button onClick={() => void copyMessage(cleanMessageContent, index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="复制">
                           {copiedMessageIndex === index ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                         </button>
-                        <button onClick={() => void regenerateFrom(index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Regenerate">
+                        <button onClick={() => void regenerateFrom(index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="重新生成">
                           <RefreshCcw className="h-4 w-4" />
                         </button>
                       </div>
@@ -6686,8 +6686,8 @@ export function AiEditorView({
                               className="block min-h-[76px] w-full resize-y rounded-2xl border border-[#e5e7eb] bg-white p-3 text-sm text-[#111827] outline-none focus:border-[#111827]"
                             />
                             <div className="mt-2 flex justify-end gap-2">
-                              <button onClick={() => setEditingMessageIndex(null)} className="rounded-full px-3 py-1.5 text-xs font-medium text-[#6b7280] hover:bg-[#ededee]">Cancel</button>
-                              <button onClick={() => void saveEditMessage(index)} className="rounded-full bg-[#111827] px-3 py-1.5 text-xs font-medium text-white">Save</button>
+                              <button onClick={() => setEditingMessageIndex(null)} className="rounded-full px-3 py-1.5 text-xs font-medium text-[#6b7280] hover:bg-[#ededee]">取消</button>
+                              <button onClick={() => void saveEditMessage(index)} className="rounded-full bg-[#111827] px-3 py-1.5 text-xs font-medium text-white">保存</button>
                             </div>
                           </div>
                         ) : (
@@ -6697,13 +6697,13 @@ export function AiEditorView({
                         )}
                       </div>
                       <div className="mt-2 flex items-center gap-1 pr-2 opacity-0 transition-opacity group-hover:opacity-100">
-                        <button onClick={() => startEditMessage(index, message.content)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Edit">
+                        <button onClick={() => startEditMessage(index, message.content)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="编辑">
                           <Edit3 className="h-4 w-4" />
                         </button>
-                        <button onClick={() => void copyMessage(displayContent, index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="Copy">
+                        <button onClick={() => void copyMessage(displayContent, index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#f4f4f5] hover:text-[#111827]" title="复制">
                           {copiedMessageIndex === index ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                         </button>
-                        <button onClick={() => deleteMessage(index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#fef2f2] hover:text-[#b91c1c]" title="Delete">
+                        <button onClick={() => deleteMessage(index)} className="rounded-lg p-1.5 text-[#6b7280] hover:bg-[#fef2f2] hover:text-[#b91c1c]" title="删除">
                           <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
@@ -6925,13 +6925,13 @@ export function AiEditorView({
                           className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
                         >
                           <OWClipIcon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
-                          <div className="line-clamp-1">Upload Files</div>
+                          <div className="line-clamp-1">上传文件</div>
                         </button>
                         {([
-                          ['webpage', 'Attach Webpage', OWGlobeAltIcon],
-                          ['knowledge', 'Attach Knowledge', OWDatabaseIcon],
-                          ['notes', 'Attach Notes', OWPencilSquareIcon],
-                          ['chats', 'Reference Chats', OWClockRotateRightIcon]
+                          ['webpage', '附加网页', OWGlobeAltIcon],
+                          ['knowledge', '附加知识', OWDatabaseIcon],
+                          ['notes', '附加笔记', OWPencilSquareIcon],
+                          ['chats', '引用对话', OWClockRotateRightIcon]
                         ] as Array<[ComposerAttachMenu, string, typeof OWDatabaseIcon]>).map(([key, label, Icon]) => (
                           <button
                             key={key}
@@ -6957,12 +6957,12 @@ export function AiEditorView({
                           <ChevronLeft className="h-4 w-4 shrink-0 text-gray-500" strokeWidth={1.5} />
                           <div className="line-clamp-1">
                             {attachmentSubmenu === 'webpage'
-                              ? 'Attach Webpage'
+                              ? '附加网页'
                               : attachmentSubmenu === 'knowledge'
-                                ? 'Attach Knowledge'
+                                ? '附加知识'
                                 : attachmentSubmenu === 'notes'
-                                  ? 'Attach Notes'
-                                  : 'Reference Chats'}
+                                  ? '附加笔记'
+                                  : '引用对话'}
                           </div>
                         </button>
                         {attachmentSubmenu === 'webpage' && (
@@ -6983,7 +6983,7 @@ export function AiEditorView({
                               onKeyDown={(event) => {
                                 if (event.key === 'Enter') void attachWebpageContext();
                               }}
-                              placeholder="Title"
+                              placeholder="标题"
                               className="h-8 w-full rounded-xl border border-gray-100 bg-transparent px-3 text-sm outline-hidden focus:border-gray-200 dark:border-gray-800"
                             />
                             <button
@@ -6993,7 +6993,7 @@ export function AiEditorView({
                               className="flex w-full cursor-pointer select-none items-center justify-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-400 dark:hover:bg-gray-800/50"
                             >
                               {attachBusyKey === 'webpage' && <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />}
-                              <span>{attachBusyKey === 'webpage' ? 'Attaching...' : 'Attach'}</span>
+                              <span>{attachBusyKey === 'webpage' ? '附加中...' : '附加'}</span>
                             </button>
                           </div>
                         )}
@@ -7002,10 +7002,10 @@ export function AiEditorView({
                             {workspaceKnowledgeLoading ? (
                               <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500">
                                 <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />
-                                <span>Loading...</span>
+                                <span>加载中...</span>
                               </div>
                             ) : knowledgeAttachResources.length === 0 ? (
-                              <div className="px-3 py-2 text-sm text-gray-500">No knowledge found.</div>
+                              <div className="px-3 py-2 text-sm text-gray-500">未找到知识。</div>
                             ) : (
                               knowledgeAttachResources.map((resource) => (
                                 <button
@@ -7028,7 +7028,7 @@ export function AiEditorView({
                         {attachmentSubmenu === 'notes' && (
                           <div className="pb-1">
                             {noteAttachResources.length === 0 ? (
-                              <div className="px-3 py-2 text-sm text-gray-500">No notes found.</div>
+                              <div className="px-3 py-2 text-sm text-gray-500">未找到笔记。</div>
                             ) : (
                               noteAttachResources.map((resource) => (
                                 <button
@@ -7053,10 +7053,10 @@ export function AiEditorView({
                             {referenceChatsLoading ? (
                               <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500">
                                 <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />
-                                <span>Loading...</span>
+                                <span>加载中...</span>
                               </div>
                             ) : !referencedChatSessions?.length ? (
-                              <div className="px-3 py-2 text-sm text-gray-500">No chats found.</div>
+                              <div className="px-3 py-2 text-sm text-gray-500">未找到对话。</div>
                             ) : (
                               referencedChatSessions.map((session) => (
                                 <button
@@ -7086,7 +7086,7 @@ export function AiEditorView({
                     type="button"
                     onClick={() => openComposerMenu('context')}
                     className="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
-                    title="Select context"
+                    title="选择上下文"
                   >
                     <OWComponentIcon strokeWidth={1.5} />
                   </button>
@@ -7100,7 +7100,7 @@ export function AiEditorView({
                       >
                         <OWComponentIcon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
                         <div className="flex w-full items-center justify-between">
-                          <div className="line-clamp-1">Select context</div>
+                          <div className="line-clamp-1">选择上下文</div>
                           <ChevronRight className="h-4 w-4 text-gray-500" strokeWidth={1.5} />
                         </div>
                       </button>
@@ -7115,7 +7115,7 @@ export function AiEditorView({
                         className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50"
                       >
                         <OWWrenchIcon className="h-4 w-4 shrink-0" strokeWidth={1.5} />
-                        <div className="line-clamp-1">Tools</div>
+                        <div className="line-clamp-1">工具</div>
                       </button>
                       {contextSubmenuOpen && (
                         <div className="absolute bottom-0 left-full z-[10001] ml-2 w-70 rounded-2xl border border-gray-100 bg-white px-1 py-1 text-black shadow-lg max-h-72 overflow-y-auto overflow-x-hidden scrollbar-thin transition dark:border-gray-800 dark:bg-gray-850 dark:text-white">
@@ -7243,7 +7243,7 @@ export default function WorkbenchEditorContent({
         onSaveContent={onSaveContent}
         onApplyAiNoteEdit={onApplyAiNoteEdit}
         onUpdateViewState={onUpdateViewState}
-        onBindResource={onBindResource}
+        onBindResource={onBindResource ?? (() => undefined)}
       />
     );
   }
@@ -7284,18 +7284,11 @@ export default function WorkbenchEditorContent({
           {getEditorIcon(editor.type)}
         </div>
         <div>
-          <h3 className="text-sm font-semibold text-[#25272b]">No resource bound yet</h3>
+          <h3 className="text-sm font-semibold text-[#25272b]">打开工作区文件</h3>
           <p className="mt-2 max-w-md text-sm text-[#777a80]">
-            This editor references a workspace file. The file content remains in the shared file
-            system.
+            从工作区文件树中选择一个文件，在当前窗格中打开。
           </p>
         </div>
-        <button
-          onClick={(event) => onBindResource(editor.id, event.currentTarget.getBoundingClientRect())}
-          className="rounded-full border border-[#e5e5e1] bg-white px-4 py-2 text-sm font-medium text-[#34373c] transition-all duration-200 hover:bg-[#f6f6f4] active:scale-95"
-        >
-          Bind Resource
-        </button>
       </div>
     );
   }

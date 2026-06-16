@@ -262,7 +262,7 @@ function SourceFilterPanel({
             onClick={() => setOpen((value) => !value)}
             className="px-3.5 py-1.5 text-sm font-medium hover:bg-black/5 outline outline-1 outline-gray-100 rounded-3xl"
           >
-            Select Knowledge
+            选择知识
           </button>
           {open ? (
             <div
@@ -278,7 +278,7 @@ function SourceFilterPanel({
                     autoFocus
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search"
+                    placeholder="搜索"
                     className="w-full rounded-r-xl bg-transparent py-1 pr-4 text-sm outline-none"
                   />
                 </div>
@@ -289,7 +289,7 @@ function SourceFilterPanel({
                   onClick={onClearSources}
                   className="mb-1 w-full rounded-xl px-2.5 py-1 text-left text-sm text-gray-500 hover:bg-gray-50"
                 >
-                  Clear selection
+                  清除选择
                 </button>
               ) : null}
               <div className="max-h-56 overflow-y-scroll gap-0.5 flex flex-col">
@@ -316,7 +316,7 @@ function SourceFilterPanel({
                   );
                 }) : (
                   <div className="text-center text-xs text-gray-500 pt-4 pb-6">
-                    No knowledge found
+                    未找到知识
                   </div>
                 )}
               </div>
@@ -329,7 +329,7 @@ function SourceFilterPanel({
           disabled
           className="px-3.5 py-1.5 text-sm font-medium text-gray-400 outline outline-1 outline-gray-100 rounded-3xl bg-white/95 shadow-sm"
         >
-          Select Knowledge
+          选择知识
         </button>
       )}
     </div>
@@ -360,7 +360,7 @@ function NodeChatPanel({
           <div key={`${message.role}-${index}`} className={`rounded-xl px-3 py-2 text-xs leading-5 ${message.role === 'user' ? 'ml-6 bg-gray-50 text-gray-800' : 'mr-6 bg-[#f4f4f2] text-gray-700'}`}>
             {message.content}
           </div>
-        )) : <p className="px-1 text-xs text-gray-400">Ask about the node, and AI will explain it here.</p>}
+        )) : <p className="px-1 text-xs text-gray-400">询问这个节点，AI 会在这里解释。</p>}
         {chatReply && !chatMessages.some((message) => message.role === 'assistant' && message.content === chatReply) ? (
           <div className="rounded-xl bg-[#f4f4f2] px-3 py-2 text-xs leading-5 text-gray-700">{chatReply}</div>
         ) : null}
@@ -372,7 +372,7 @@ function NodeChatPanel({
           onKeyDown={(event) => {
             if (event.key === 'Enter') onSuggestTags();
           }}
-          placeholder="Ask AI about this node"
+          placeholder="向 AI 询问这个节点"
           className="h-9 min-w-0 flex-1 rounded-xl bg-gray-50 px-3 text-sm outline-none placeholder:text-gray-400"
         />
         <button
@@ -382,7 +382,7 @@ function NodeChatPanel({
           className="inline-flex h-9 items-center gap-1 rounded-full px-3 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
         >
           {tagSuggestionRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-          Send
+          发送
         </button>
       </div>
       {chatError ? <p className="px-1 text-xs text-[#b42318]">{chatError}</p> : null}
@@ -409,7 +409,7 @@ function TagsPanel({
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-medium text-gray-700">Tags</p>
+        <p className="text-sm font-medium text-gray-700">标签</p>
         {tagSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" /> : null}
       </div>
       <div className="flex flex-wrap gap-2">
@@ -417,11 +417,11 @@ function TagsPanel({
           <span key={tag.id} className="inline-flex max-w-full items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
             <Tag className="h-3 w-3 shrink-0 text-gray-500" />
             <span className="truncate">{tag.label}</span>
-            <button type="button" onClick={() => onRemoveTag(tag.id)} className="rounded-full p-0.5 text-gray-500 hover:bg-gray-200 hover:text-gray-800" title="Remove tag">
+            <button type="button" onClick={() => onRemoveTag(tag.id)} className="rounded-full p-0.5 text-gray-500 hover:bg-gray-200 hover:text-gray-800" title="移除标签">
               <X className="h-3 w-3" />
             </button>
           </span>
-        )) : <p className="text-xs text-gray-400">No applied tags yet.</p>}
+        )) : <p className="text-xs text-gray-400">还没有已应用标签。</p>}
       </div>
       <div className="flex gap-2">
         <input
@@ -430,7 +430,7 @@ function TagsPanel({
           onKeyDown={(event) => {
             if (event.key === 'Enter') onAddTag(tagDraft, { source: 'user', state: 'applied' });
           }}
-          placeholder="Add tag"
+          placeholder="添加标签"
           className="h-9 min-w-0 flex-1 rounded-xl bg-gray-50 px-3 text-sm outline-none placeholder:text-gray-400"
         />
         <button
@@ -440,7 +440,7 @@ function TagsPanel({
           className="inline-flex h-9 items-center gap-1 rounded-full bg-black px-3 text-sm font-medium text-white hover:bg-gray-950 disabled:opacity-50"
         >
           <Check className="h-3.5 w-3.5" />
-          Add
+          添加
         </button>
       </div>
       <NodeChatPanel
@@ -454,7 +454,7 @@ function TagsPanel({
       />
       {candidateTags.length ? (
         <div className="space-y-2">
-          <p className="text-xs font-medium text-gray-500">Suggested</p>
+          <p className="text-xs font-medium text-gray-500">建议</p>
           {candidateTags.map((tag) => (
             <div key={tag.id} className="rounded-xl bg-gray-50 px-3 py-2">
               <div className="flex items-start justify-between gap-2">
@@ -467,7 +467,7 @@ function TagsPanel({
                   onClick={() => onAddTag(tag.label, { source: tag.sources?.[0] || 'ai_suggested', state: 'applied', rationale: tag.rationale })}
                   className="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200"
                 >
-                  Apply
+                  应用
                 </button>
               </div>
             </div>
@@ -493,21 +493,21 @@ function PracticePanel({
         className="inline-flex h-9 w-full items-center justify-center rounded-full bg-gray-100 px-3 text-sm font-medium text-gray-700 transition hover:bg-gray-200"
       >
         {practiceLoading && expandedPracticeConceptId === activeConcept.id
-          ? 'Loading practice...'
+          ? '正在加载练习...'
           : expandedPracticeConceptId === activeConcept.id
-            ? 'Hide practice layer'
-            : 'Show practice layer'}
+            ? '隐藏练习层'
+            : '显示练习层'}
       </button>
       {expandedPracticeConceptId === activeConcept.id ? (
         <div className="space-y-2">
-          <p className="text-sm font-medium text-gray-700">Practice</p>
+          <p className="text-sm font-medium text-gray-700">练习</p>
           {practiceExercises.length ? practiceExercises.slice(0, 8).map((exercise) => (
             <div key={exercise.id} className="rounded-xl bg-gray-50 px-3 py-2">
               <p className="line-clamp-2 text-sm font-medium text-gray-700">{exercise.title}</p>
               <p className="mt-1 line-clamp-3 text-xs leading-5 text-gray-500">{exercise.prompt}</p>
               {exercise.sourceRef ? <p className="mt-2 truncate text-xs text-gray-400">{exercise.sourceRef.name}</p> : null}
             </div>
-          )) : <p className="rounded-xl bg-gray-50 px-3 py-3 text-sm text-gray-400">No bound practice yet.</p>}
+          )) : <p className="rounded-xl bg-gray-50 px-3 py-3 text-sm text-gray-400">还没有绑定练习。</p>}
         </div>
       ) : null}
     </section>
@@ -517,7 +517,7 @@ function PracticePanel({
 function SourceCardsPanel({ activeConcept }: { activeConcept: ConceptNode }) {
   return (
     <section className="space-y-2">
-      <p className="text-sm font-medium text-gray-700">Sources</p>
+      <p className="text-sm font-medium text-gray-700">来源</p>
       {(activeConcept.sources || []).slice(0, 5).map((source) => (
         <div key={source.id} className="rounded-xl bg-gray-50 px-3 py-2">
           <p className="truncate text-sm font-medium text-gray-700">{source.name}</p>
@@ -527,7 +527,7 @@ function SourceCardsPanel({ activeConcept }: { activeConcept: ConceptNode }) {
           ) : null}
         </div>
       ))}
-      {!activeConcept.sources?.length ? <p className="rounded-xl bg-gray-50 px-3 py-3 text-sm text-gray-400">No source provenance recorded.</p> : null}
+      {!activeConcept.sources?.length ? <p className="rounded-xl bg-gray-50 px-3 py-3 text-sm text-gray-400">暂无来源记录。</p> : null}
     </section>
   );
 }
@@ -590,28 +590,28 @@ function NodeActionPopover({
       {mode === 'menu' ? (
         <div className="flex flex-row shrink-0 p-0.5 bg-white text-medium rounded-xl shadow-xl border border-gray-100">
           <button
-            aria-label="Explain"
+            aria-label="解释"
             className="px-1.5 py-[1px] hover:bg-gray-50 rounded-xl flex items-center gap-1 min-w-fit transition"
             onClick={() => setMode('explain')}
           >
             <Lightbulb className="size-3 shrink-0" />
-            <div className="shrink-0">Explain</div>
+            <div className="shrink-0">解释</div>
           </button>
           <button
-            aria-label="Tags"
+            aria-label="标签"
             className="px-1.5 py-[1px] hover:bg-gray-50 rounded-xl flex items-center gap-1 min-w-fit transition"
             onClick={() => setMode('tags')}
           >
             <Tag className="size-3 shrink-0" />
-            <div className="shrink-0">Tags</div>
+            <div className="shrink-0">标签</div>
           </button>
           <button
-            aria-label="Sources"
+            aria-label="来源"
             className="px-1.5 py-[1px] hover:bg-gray-50 rounded-xl flex items-center gap-1 min-w-fit transition"
             onClick={() => setMode('sources')}
           >
             <FileText className="size-3 shrink-0" />
-            <div className="shrink-0">Sources</div>
+            <div className="shrink-0">来源</div>
           </button>
         </div>
       ) : null}
@@ -628,8 +628,8 @@ function NodeActionPopover({
               autoCapitalize="none"
               spellCheck={false}
               className="ml-5 w-full flex-1 appearance-none border-0 bg-transparent text-sm font-normal text-gray-900 outline-none ring-0 placeholder:text-gray-400 focus:border-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0"
-              placeholder="Ask a question"
-              aria-label="Ask a question"
+              placeholder="提一个问题"
+              aria-label="提一个问题"
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
               onKeyDown={(event) => {
@@ -639,7 +639,7 @@ function NodeActionPopover({
             />
             <div className="ml-1 mr-1">
               <button
-                aria-label="Submit question"
+                aria-label="提交问题"
                 className={`${chatInput.trim() !== '' ? 'bg-black text-white hover:bg-gray-900 ' : 'text-white bg-gray-200 disabled'} transition rounded-full p-1.5 m-0.5 self-center`}
                 onClick={onExplainConcept}
                 disabled={tagSuggestionRunning}
@@ -682,7 +682,7 @@ function NodeActionPopover({
       {mode === 'tags' ? (
         <div className="w-80 rounded-2xl border border-gray-100 bg-white p-2 text-xs shadow-xl">
           <div className="mb-2 flex items-center justify-between px-1">
-            <div className="font-medium text-gray-500">Tags</div>
+            <div className="font-medium text-gray-500">标签</div>
             {tagSaving ? <Loader2 className="size-3.5 animate-spin text-gray-400" /> : null}
           </div>
           <div className="mb-2 flex flex-wrap gap-1.5">
@@ -694,7 +694,7 @@ function NodeActionPopover({
                   <X className="size-3" />
                 </button>
               </span>
-            )) : <div className="px-1 text-gray-500">No applied tags yet.</div>}
+            )) : <div className="px-1 text-gray-500">还没有已应用标签。</div>}
           </div>
           <div className="mb-2 flex gap-1.5">
             <input
@@ -703,7 +703,7 @@ function NodeActionPopover({
               onKeyDown={(event) => {
                 if (event.key === 'Enter') onAddTag(tagDraft, { source: 'user', state: 'applied' });
               }}
-              placeholder="Add tag"
+              placeholder="添加标签"
               className="min-w-0 flex-1 rounded-xl bg-gray-50 px-3 py-1.5 text-sm outline-none"
             />
             <button
@@ -712,12 +712,12 @@ function NodeActionPopover({
               disabled={!tagDraft.trim() || tagSaving}
               className="rounded-full bg-black px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40"
             >
-              Add
+              添加
             </button>
           </div>
           {candidateTags.length ? (
             <div className="space-y-1">
-              <div className="px-1 text-gray-500">Suggested</div>
+              <div className="px-1 text-gray-500">建议</div>
               {candidateTags.slice(0, 4).map((tag) => (
                 <div key={tag.id} className="flex items-center justify-between gap-2 rounded-xl px-2 py-1.5 hover:bg-gray-50">
                   <div className="min-w-0">
@@ -729,7 +729,7 @@ function NodeActionPopover({
                     onClick={() => onAddTag(tag.label, { source: tag.sources?.[0] || 'ai_suggested', state: 'applied', rationale: tag.rationale })}
                     className="shrink-0 rounded-full px-2 py-1 text-xs font-medium hover:bg-gray-100"
                   >
-                    Apply
+                    应用
                   </button>
                 </div>
               ))}
@@ -740,7 +740,7 @@ function NodeActionPopover({
 
       {mode === 'sources' ? (
         <div className="w-80 max-h-72 overflow-y-auto rounded-2xl border border-gray-100 bg-white p-1.5 text-xs shadow-xl">
-          <div className="px-2 py-1 text-gray-500">Sources</div>
+          <div className="px-2 py-1 text-gray-500">来源</div>
           {(activeConcept.sources || []).length ? (activeConcept.sources || []).slice(0, 8).map((source) => (
             <div key={source.id} className="rounded-xl px-2.5 py-1.5 text-left hover:bg-gray-50">
               <div className="flex items-center gap-1 text-black">
@@ -751,7 +751,7 @@ function NodeActionPopover({
               {source.snippets?.[0]?.quote ? <div className="mt-1 line-clamp-2 pl-5 text-xs text-gray-500">{source.snippets[0].quote}</div> : null}
             </div>
           )) : (
-            <div className="px-2 pt-4 pb-6 text-center text-xs text-gray-500">No source provenance recorded.</div>
+            <div className="px-2 pt-4 pb-6 text-center text-xs text-gray-500">暂无来源记录。</div>
           )}
         </div>
       ) : null}
@@ -778,8 +778,8 @@ function GraphInspectorSidebar(props: GraphInspectorSidebarProps) {
       ) : null}
 
       <div className="shrink-0 border-b border-gray-100 px-4 py-3">
-        <p className="text-xs font-medium uppercase tracking-[0.14em] text-gray-400">Inspector</p>
-        <h3 className="mt-1 truncate text-base font-medium text-gray-800">{activeConcept?.title || 'Select a concept'}</h3>
+        <p className="text-xs font-medium uppercase tracking-[0.14em] text-gray-400">检查器</p>
+        <h3 className="mt-1 truncate text-base font-medium text-gray-800">{activeConcept?.title || '选择一个概念'}</h3>
       </div>
 
       <div
@@ -825,7 +825,7 @@ function GraphInspectorSidebar(props: GraphInspectorSidebarProps) {
             </>
           ) : (
             <div className="px-3 py-8 text-center text-sm text-gray-400">
-              Select a concept on the graph to inspect sources and practice.
+              在图谱中选择一个概念，查看来源和练习。
             </div>
           )}
         </div>

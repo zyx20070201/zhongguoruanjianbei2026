@@ -16,7 +16,6 @@ import {
   LayoutDashboard,
   LibraryBig,
   Loader2,
-  MoreHorizontal,
   Plus,
   Sparkles,
   Upload
@@ -36,6 +35,7 @@ import LearningIntelligenceDashboard, {
 } from '../components/workspace/LearningIntelligenceDashboard';
 import WorkbenchEditorContent from '../components/workbench/WorkbenchEditorContent';
 import { getResourceKind } from '../components/workbench/editorResource';
+import WorkbenchNameDialog from '../components/workbench/WorkbenchNameDialog';
 
 type WorkspaceTab = 'workbenches' | 'files' | 'knowledge' | 'planning' | 'profile' | 'intelligence' | 'terminal';
 
@@ -65,6 +65,10 @@ interface CreateWorkspaceDraft {
   texts: QueuedTextSource[];
   webQuery: string;
 }
+
+type WorkbenchNameDialogState =
+  | { mode: 'create'; workspaceId: string; openAfterCreate: boolean }
+  | { mode: 'rename'; workbench: Workbench };
 
 interface TerminalChatSession {
   id: string;
@@ -111,18 +115,18 @@ const emptyDraft = (): CreateWorkspaceDraft => ({
 
 const workspaceTabs: Array<{ id: WorkspaceTab; label: string }> = [
   { id: 'workbenches', label: 'Workbenches' },
-  { id: 'files', label: 'Knowledge' },
-  { id: 'knowledge', label: 'Knowledge Graph' },
-  { id: 'planning', label: 'Planning' },
-  { id: 'profile', label: 'Profile' },
-  { id: 'terminal', label: 'AI Terminal' }
+  { id: 'files', label: '知识库' },
+  { id: 'knowledge', label: '知识图谱' },
+  { id: 'planning', label: '规划' },
+  { id: 'profile', label: '画像' },
+  { id: 'terminal', label: 'AI Chat' }
 ];
 
 const formatDate = (value?: string) => {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
 };
 
 const formatCalendarDate = (value?: string) => {
@@ -135,19 +139,19 @@ const formatCalendarDate = (value?: string) => {
   const time = date.getTime();
 
   if (time >= startOfToday) {
-    return `Today at ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+    return `今天 ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
   }
   if (time >= startOfYesterday) {
-    return `Yesterday at ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+    return `昨天 ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
   }
-  return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
 };
 
 const getTimeRange = (value?: string) => {
-  if (!value) return 'Older';
+  if (!value) return '更早';
   const date = new Date(value);
   const time = date.getTime();
-  if (Number.isNaN(time)) return 'Older';
+  if (Number.isNaN(time)) return '更早';
 
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -155,11 +159,11 @@ const getTimeRange = (value?: string) => {
   const startOfWeek = startOfToday - 7 * 24 * 60 * 60 * 1000;
   const startOfMonth = startOfToday - 30 * 24 * 60 * 60 * 1000;
 
-  if (time >= startOfToday) return 'Today';
-  if (time >= startOfYesterday) return 'Yesterday';
-  if (time >= startOfWeek) return 'Previous 7 days';
-  if (time >= startOfMonth) return 'Previous 30 days';
-  return date.toLocaleDateString('en-US', { month: 'long' });
+  if (time >= startOfToday) return '今天';
+  if (time >= startOfYesterday) return '昨天';
+  if (time >= startOfWeek) return '过去 7 天';
+  if (time >= startOfMonth) return '过去 30 天';
+  return date.toLocaleDateString('zh-CN', { month: 'long' });
 };
 
 const makeTerminalChatId = () => `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -173,9 +177,11 @@ const clipTerminalText = (value: unknown, maxLength = 4000) => {
   return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
 };
 
-const getTerminalChatTitle = (messages: LearningTerminalMessage[], fallback = 'New Chat') => {
+const getTerminalChatTitle = (messages: LearningTerminalMessage[], fallback = '新对话') => {
+  const existing = String(fallback || '').trim();
+  if (existing && existing !== '新对话' && existing !== 'New chat') return existing;
   const firstUserMessage = messages.find((message) => message.role === 'user')?.content.trim();
-  if (!firstUserMessage) return fallback;
+  if (!firstUserMessage) return existing || '新对话';
   return firstUserMessage.length > 64 ? `${firstUserMessage.slice(0, 61)}...` : firstUserMessage;
 };
 
@@ -202,7 +208,7 @@ const sanitizeTerminalChatFiles = (value: unknown): TerminalChatFile[] =>
     ? value
         .map((item: any): TerminalChatFile => ({
           id: typeof item?.id === 'string' ? item.id : '',
-          name: typeof item?.name === 'string' ? item.name : 'Attachment',
+          name: typeof item?.name === 'string' ? item.name : '附件',
           path: typeof item?.path === 'string' ? item.path : undefined,
           mimeType: typeof item?.mimeType === 'string' ? item.mimeType : undefined,
           size: typeof item?.size === 'number' ? item.size : undefined,
@@ -224,7 +230,7 @@ const sanitizeTerminalChatFiles = (value: unknown): TerminalChatFile[] =>
 
 const sanitizeTerminalSessionForStorage = (session: TerminalChatSession): TerminalChatSession => ({
   ...session,
-  title: clipTerminalText(session.title, 80) || 'New Chat',
+  title: clipTerminalText(session.title, 80) || '新对话',
   selectedSources: session.selectedSources.slice(0, 12),
   chatFiles: sanitizeTerminalChatFiles(session.chatFiles),
   messages: [],
@@ -363,8 +369,8 @@ const getKnowledgeIndexStatusInfo = (file: Pick<FileSystemObject, '_count' | 'kn
 
   if (status === 'queued' || status === 'pending' || status === 'running' || ['pending', 'extracting', 'chunking', 'embedding', 'upserting', 'verifying'].includes(stage)) {
     return {
-      label: 'Indexing',
-      detail: latestJob?.updatedAt ? `Updated ${formatRelative(latestJob.updatedAt)}` : 'Queued for processing',
+      label: '索引中',
+      detail: latestJob?.updatedAt ? `更新于 ${formatRelative(latestJob.updatedAt)}` : '已排队等待处理',
       tone: 'indexing' as const,
       chunkCount
     };
@@ -372,8 +378,8 @@ const getKnowledgeIndexStatusInfo = (file: Pick<FileSystemObject, '_count' | 'kn
 
   if (chunkCount > 0 && (status === 'degraded' || stage === 'degraded' || vectorError || !vectorIndexed)) {
     return {
-      label: 'Text ready',
-      detail: `${chunkCount} chunks; vector index ${vectorIndexed ? 'ready' : 'not ready'}`,
+      label: '文本已就绪',
+      detail: `${chunkCount} 个片段；向量索引${vectorIndexed ? '已就绪' : '未就绪'}`,
       tone: 'degraded' as const,
       chunkCount
     };
@@ -381,8 +387,8 @@ const getKnowledgeIndexStatusInfo = (file: Pick<FileSystemObject, '_count' | 'kn
 
   if (chunkCount > 0) {
     return {
-      label: 'Ready',
-      detail: `${chunkCount} chunks indexed`,
+      label: '已就绪',
+      detail: `已索引 ${chunkCount} 个片段`,
       tone: 'ready' as const,
       chunkCount
     };
@@ -390,8 +396,8 @@ const getKnowledgeIndexStatusInfo = (file: Pick<FileSystemObject, '_count' | 'kn
 
   if (status === 'failed' || stage === 'failed') {
     return {
-      label: 'Index failed',
-      detail: vectorError || 'No searchable chunks available',
+      label: '索引失败',
+      detail: vectorError || '没有可搜索的片段',
       tone: 'failed' as const,
       chunkCount
     };
@@ -399,16 +405,16 @@ const getKnowledgeIndexStatusInfo = (file: Pick<FileSystemObject, '_count' | 'kn
 
   if (latestJob) {
     return {
-      label: 'No chunks',
-      detail: 'Uploaded, but no searchable text chunks are available',
+      label: '无片段',
+      detail: '已上传，但没有可搜索的文本片段',
       tone: 'empty' as const,
       chunkCount
     };
   }
 
   return {
-    label: 'Not indexed',
-    detail: 'No indexing job has run for this file yet',
+    label: '未索引',
+    detail: '这个文件尚未运行索引任务',
     tone: 'empty' as const,
     chunkCount
   };
@@ -429,10 +435,10 @@ const groupRecentWorkbenches = (workbenches: SidebarWorkbench[]) => {
   const startOfWeek = startOfToday - 7 * 24 * 60 * 60 * 1000;
 
   const groups: Array<{ label: string; items: SidebarWorkbench[] }> = [
-    { label: 'Today', items: [] },
-    { label: 'Yesterday', items: [] },
-    { label: 'Previous 7 days', items: [] },
-    { label: 'Older', items: [] }
+    { label: '今天', items: [] },
+    { label: '昨天', items: [] },
+    { label: '过去 7 天', items: [] },
+    { label: '更早', items: [] }
   ];
 
   workbenches.forEach((workbench) => {
@@ -450,14 +456,14 @@ const getFileSectionLabel = (file: NonNullable<Workspace['fileObjects']>[number]
   const sourceUrl = getFileSourceUrl(file).toLowerCase();
   if (sourceUrl.includes('youtube.com') || sourceUrl.includes('youtu.be')) return 'YouTube';
   if (sourceUrl.includes('bilibili.com')) return 'Bilibili';
-  if (file.origin === 'web') return 'Web source';
-  if (file.origin === 'upload') return 'Uploaded file';
-  if (file.resourceType === 'generated' || file.fileCategory === 'generated') return 'Generated';
-  if (file.fileCategory === 'note') return 'Note';
-  if (file.fileCategory === 'code') return 'Code';
-  if (file.fileCategory === 'document') return 'Document';
-  if (file.nodeType === 'folder') return 'Folder';
-  return file.fileCategory || file.resourceType || 'File';
+  if (file.origin === 'web') return '网页资料';
+  if (file.origin === 'upload') return '上传文件';
+  if (file.resourceType === 'generated' || file.fileCategory === 'generated') return '生成内容';
+  if (file.fileCategory === 'note') return '笔记';
+  if (file.fileCategory === 'code') return '代码';
+  if (file.fileCategory === 'document') return '文档';
+  if (file.nodeType === 'folder') return '文件夹';
+  return file.fileCategory || file.resourceType || '文件';
 };
 
 const parseFileMetadata = (file: NonNullable<Workspace['fileObjects']>[number]) => {
@@ -590,6 +596,10 @@ const clampSidebarWidth = (value: number) => {
   const maxWidth = typeof window === 'undefined' ? 840 : Math.min(840, Math.max(420, window.innerWidth - 360));
   return Math.min(maxWidth, Math.max(244, value));
 };
+const clampTerminalPreviewWidth = (value: number) => {
+  const maxWidth = typeof window === 'undefined' ? 960 : Math.min(960, Math.max(480, window.innerWidth - 720));
+  return Math.min(maxWidth, Math.max(420, value));
+};
 const getMenuPositionStyle = (anchor: DOMRect | null, width: number): React.CSSProperties => {
   if (!anchor || typeof window === 'undefined') return {};
   return {
@@ -650,8 +660,8 @@ export default function WorkspaceShellPage() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<WorkspaceSettingsTab>('account');
-  const [editingWorkbenchId, setEditingWorkbenchId] = useState<string | null>(null);
-  const [editingWorkbenchTitle, setEditingWorkbenchTitle] = useState('');
+  const [workbenchNameDialog, setWorkbenchNameDialog] = useState<WorkbenchNameDialogState | null>(null);
+  const [workbenchNameError, setWorkbenchNameError] = useState<string | null>(null);
   const [pinnedWorkbenchIds, setPinnedWorkbenchIds] = useState<Set<string>>(() => {
     try {
       const parsed = JSON.parse(window.localStorage.getItem('workspace-shell:pinned-workbenches') || '[]');
@@ -664,12 +674,13 @@ export default function WorkspaceShellPage() {
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [createWorkspaceError, setCreateWorkspaceError] = useState<string | null>(null);
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
-  const [createWorkbenchOpen, setCreateWorkbenchOpen] = useState(false);
-  const [createWorkbenchError, setCreateWorkbenchError] = useState<string | null>(null);
   const [addSourcesOpen, setAddSourcesOpen] = useState(false);
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
   const [creatingKnowledgeFolder, setCreatingKnowledgeFolder] = useState(false);
   const [createFolderError, setCreateFolderError] = useState<string | null>(null);
+  const [renamingKnowledgeFolder, setRenamingKnowledgeFolder] = useState<FileSystemObject | null>(null);
+  const [renamingKnowledgeFolderLoading, setRenamingKnowledgeFolderLoading] = useState(false);
+  const [renamingKnowledgeFolderError, setRenamingKnowledgeFolderError] = useState<string | null>(null);
   const [knowledgeFolderId, setKnowledgeFolderId] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<FileSystemObject | null>(null);
   const [creatingWorkbench, setCreatingWorkbench] = useState(false);
@@ -677,9 +688,14 @@ export default function WorkspaceShellPage() {
   const [terminalDraftMode, setTerminalDraftMode] = useState<TerminalChatMode>('chat');
   const [terminalDraftSources, setTerminalDraftSources] = useState<Array<{ fileId: string; mode: 'focused' | 'full_context' }>>([]);
   const [terminalResourcePreview, setTerminalResourcePreview] = useState<TerminalResourcePreview | null>(null);
+  const [terminalPreviewWidth, setTerminalPreviewWidth] = useState(() => {
+    const stored = Number(window.localStorage.getItem('workspace-shell:terminal-preview-width') || 720);
+    return clampTerminalPreviewWidth(stored);
+  });
   const [terminalChatSessions, setTerminalChatSessions] = useState<Record<string, TerminalChatSession[]>>({});
   const [activeTerminalChatIds, setActiveTerminalChatIds] = useState<Record<string, string | null>>({});
   const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const terminalPreviewResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
     void hydrate();
@@ -782,6 +798,19 @@ export default function WorkspaceShellPage() {
   useEffect(() => {
     window.localStorage.setItem('workspace-shell:sidebar-width', String(sidebarWidth));
   }, [sidebarWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem('workspace-shell:terminal-preview-width', String(terminalPreviewWidth));
+  }, [terminalPreviewWidth]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setTerminalPreviewWidth((width) => clampTerminalPreviewWidth(width));
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem('workspace-shell:pinned-workbenches', JSON.stringify([...pinnedWorkbenchIds]));
@@ -960,36 +989,118 @@ export default function WorkspaceShellPage() {
     }
   };
 
+  const replaceWorkbenchLocally = (updatedWorkbench: Workbench) => {
+    setWorkspaceWorkbenches((current) => {
+      let changed = false;
+      const next = Object.fromEntries(
+        Object.entries(current).map(([workspaceId, items]) => [
+          workspaceId,
+          items.map((item) => {
+            if (item.id !== updatedWorkbench.id) return item;
+            changed = true;
+            return { ...item, ...updatedWorkbench };
+          })
+        ])
+      );
+      if (!changed) {
+        const workspaceId = updatedWorkbench.workspaceId;
+        next[workspaceId] = [updatedWorkbench, ...(next[workspaceId] || [])];
+      }
+      return next;
+    });
+    setWorkspaces((current) =>
+      current.map((workspace) => ({
+        ...workspace,
+        workbenches: Array.isArray(workspace.workbenches)
+          ? workspace.workbenches.map((item) =>
+              item.id === updatedWorkbench.id ? { ...item, ...updatedWorkbench } : item
+            )
+          : workspace.workbenches
+      }))
+    );
+  };
+
+  const removeWorkbenchLocally = (workbenchId: string) => {
+    setWorkspaceWorkbenches((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([workspaceId, items]) => [
+          workspaceId,
+          items.filter((item) => item.id !== workbenchId)
+        ])
+      )
+    );
+    setWorkspaces((current) =>
+      current.map((workspace) => ({
+        ...workspace,
+        workbenches: Array.isArray(workspace.workbenches)
+          ? workspace.workbenches.filter((item) => item.id !== workbenchId)
+          : workspace.workbenches
+      }))
+    );
+    setPinnedWorkbenchIds((current) => {
+      const next = new Set(current);
+      next.delete(workbenchId);
+      return next;
+    });
+  };
+
+  const moveWorkbenchLocally = (workbench: Workbench, movedWorkbench: Workbench, targetWorkspaceId: string) => {
+    const nextWorkbench = { ...workbench, ...movedWorkbench, workspaceId: targetWorkspaceId };
+    setWorkspaceWorkbenches((current) => {
+      const withoutMoved = Object.fromEntries(
+        Object.entries(current).map(([workspaceId, items]) => [
+          workspaceId,
+          items.filter((item) => item.id !== workbench.id)
+        ])
+      );
+      const targetItems = withoutMoved[targetWorkspaceId] || [];
+      return {
+        ...withoutMoved,
+        [targetWorkspaceId]: [nextWorkbench, ...targetItems]
+          .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())
+      };
+    });
+    setWorkspaces((current) =>
+      current.map((workspace) => ({
+        ...workspace,
+        workbenches: Array.isArray(workspace.workbenches)
+          ? workspace.id === targetWorkspaceId
+            ? [nextWorkbench, ...workspace.workbenches.filter((item) => item.id !== workbench.id)]
+            : workspace.workbenches.filter((item) => item.id !== workbench.id)
+          : workspace.workbenches
+      }))
+    );
+    setExpandedWorkspaceIds((current) => new Set(current).add(targetWorkspaceId));
+  };
+
   const openWorkbench = (workbenchId: string) => {
     navigate(`/workbenches/${workbenchId}`);
   };
 
   const beginRenameWorkbench = (workbench: Workbench) => {
     setOpenWorkbenchMenuId(null);
-    setEditingWorkbenchId(workbench.id);
-    setEditingWorkbenchTitle(workbench.title || '');
+    setWorkbenchNameError(null);
+    setWorkbenchNameDialog({ mode: 'rename', workbench });
   };
 
-  const cancelRenameWorkbench = () => {
-    setEditingWorkbenchId(null);
-    setEditingWorkbenchTitle('');
-  };
-
-  const submitRenameWorkbench = async () => {
-    const title = editingWorkbenchTitle.trim();
-    if (!editingWorkbenchId || !title) {
-      setEditingWorkbenchId(null);
+  const submitRenameWorkbench = async (title: string) => {
+    if (!workbenchNameDialog || workbenchNameDialog.mode !== 'rename') return;
+    if (title === workbenchNameDialog.workbench.title) {
+      setWorkbenchNameDialog(null);
       return;
     }
 
+    setCreatingWorkbench(true);
+    setWorkbenchNameError(null);
     try {
-      await workbenchApi.update(editingWorkbenchId, { title });
-      await loadWorkspaceShell();
-    } catch (error) {
+      const updatedWorkbench = await workbenchApi.update(workbenchNameDialog.workbench.id, { title });
+      replaceWorkbenchLocally(updatedWorkbench);
+      setWorkbenchNameDialog(null);
+    } catch (error: any) {
       console.error('Failed to rename workbench:', error);
+      setWorkbenchNameError(error?.response?.data?.error || error?.message || '重命名 workbench 失败。');
     } finally {
-      setEditingWorkbenchId(null);
-      setEditingWorkbenchTitle('');
+      setCreatingWorkbench(false);
     }
   };
 
@@ -1006,7 +1117,7 @@ export default function WorkspaceShellPage() {
   const cloneWorkbench = async (workbench: Workbench) => {
     setOpenWorkbenchMenuId(null);
     try {
-      await workbenchApi.clone(workbench.id, { title: `Clone of ${workbench.title}` });
+      await workbenchApi.clone(workbench.id, { title: `${workbench.title} 的副本` });
       await loadWorkspaceShell();
     } catch (error) {
       console.error('Failed to clone workbench:', error);
@@ -1016,8 +1127,8 @@ export default function WorkspaceShellPage() {
   const moveWorkbench = async (workbench: Workbench, workspaceId: string) => {
     setOpenWorkbenchMenuId(null);
     try {
-      await workbenchApi.move(workbench.id, { workspaceId });
-      await loadWorkspaceShell();
+      const movedWorkbench = await workbenchApi.move(workbench.id, { workspaceId });
+      moveWorkbenchLocally(workbench, movedWorkbench, workspaceId);
     } catch (error) {
       console.error('Failed to move workbench:', error);
     }
@@ -1025,82 +1136,56 @@ export default function WorkspaceShellPage() {
 
   const deleteWorkbenchFromSidebar = async (workbench: Workbench) => {
     setOpenWorkbenchMenuId(null);
-    if (!confirm(`Delete workbench "${workbench.title}"? This cannot be undone.`)) return;
+    if (!confirm(`确定删除 workbench “${workbench.title}”吗？此操作无法撤销。`)) return;
     try {
       await workbenchApi.delete(workbench.id);
-      setPinnedWorkbenchIds((current) => {
-        const next = new Set(current);
-        next.delete(workbench.id);
-        return next;
-      });
-      await loadWorkspaceShell();
+      removeWorkbenchLocally(workbench.id);
     } catch (error) {
       console.error('Failed to delete workbench:', error);
     }
   };
 
-  const createWorkbench = async (title?: string, openAfterCreate = true) => {
-    const target = selectedWorkspace || workspaces[0];
+  const openWorkbenchNameDialog = (workspaceId?: string, openAfterCreate = true) => {
+    const target = workspaceId
+      ? workspaces.find((workspace) => workspace.id === workspaceId)
+      : selectedWorkspace || workspaces[0];
     if (!target) {
+      setCreateWorkspaceOpen(true);
+      return;
+    }
+    setWorkbenchNameError(null);
+    setWorkbenchNameDialog({ mode: 'create', workspaceId: target.id, openAfterCreate });
+  };
+
+  const createWorkbench = async (title: string, workspaceId?: string, openAfterCreate = true) => {
+    const target = selectedWorkspace || workspaces[0];
+    const targetWorkspaceId = workspaceId || target?.id;
+    if (!targetWorkspaceId) {
       setCreateWorkspaceOpen(true);
       return;
     }
 
     setCreatingWorkbench(true);
+    setWorkbenchNameError(null);
     try {
       const workbench = await workbenchApi.create({
-        workspaceId: target.id,
-        title: title?.trim() || undefined
+        workspaceId: targetWorkspaceId,
+        title
       });
       await loadWorkspaceShell();
+      setExpandedWorkspaceIds((current) => new Set(current).add(targetWorkspaceId));
+      setWorkbenchNameDialog(null);
       if (openAfterCreate) navigate(`/workbenches/${workbench.id}`);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to create workbench:', error);
+      setWorkbenchNameError(error?.response?.data?.error || error?.message || '创建 workbench 失败。');
     } finally {
       setCreatingWorkbench(false);
     }
   };
 
-  const submitWorkbenchCreate = async (payload: { title: string; description: string; resourceIds: string[] }) => {
-    const target = selectedWorkspace || workspaces[0];
-    if (!target) {
-      setCreateWorkspaceOpen(true);
-      return;
-    }
-
-    setCreatingWorkbench(true);
-    setCreateWorkbenchError(null);
-    try {
-      const workbench = await workbenchApi.create({
-        workspaceId: target.id,
-        title: payload.title,
-        description: payload.description,
-        resourceIds: payload.resourceIds
-      });
-      await loadWorkspaceShell();
-      setExpandedWorkspaceIds((current) => new Set(current).add(target.id));
-      setCreateWorkbenchOpen(false);
-      navigate(`/workbenches/${workbench.id}`);
-    } catch (error) {
-      console.error('Failed to create workbench:', error);
-      setCreateWorkbenchError(error instanceof Error ? error.message : 'Failed to create workbench.');
-    } finally {
-      setCreatingWorkbench(false);
-    }
-  };
-
-  const createWorkbenchInWorkspace = async (workspaceId: string, openAfterCreate = true) => {
-    setCreatingWorkbench(true);
-    try {
-      const workbench = await workbenchApi.create({ workspaceId });
-      await loadWorkspaceShell();
-      setExpandedWorkspaceIds((current) => new Set(current).add(workspaceId));
-      if (openAfterCreate) navigate(`/workbenches/${workbench.id}`);
-    } catch (error) {
-      console.error('Failed to create workbench:', error);
-    } finally {
-      setCreatingWorkbench(false);
-    }
+  const createWorkbenchInWorkspace = (workspaceId: string, openAfterCreate = true) => {
+    openWorkbenchNameDialog(workspaceId, openAfterCreate);
   };
 
   const uploadWorkspaceFiles = async (files: File[]) => {
@@ -1163,9 +1248,40 @@ export default function WorkspaceShellPage() {
       await refreshSelectedWorkspace();
       setCreateFolderOpen(false);
     } catch (error: any) {
-      setCreateFolderError(error?.response?.data?.error || error?.message || 'Failed to create folder');
+      setCreateFolderError(error?.response?.data?.error || error?.message || '创建文件夹失败');
     } finally {
       setCreatingKnowledgeFolder(false);
+    }
+  };
+
+  const beginRenameKnowledgeFolder = (folder: FileSystemObject) => {
+    setRenamingKnowledgeFolder(folder);
+    setRenamingKnowledgeFolderError(null);
+  };
+
+  const renameKnowledgeFolder = async (name: string) => {
+    if (!selectedWorkspace || !renamingKnowledgeFolder) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (trimmed === renamingKnowledgeFolder.name) {
+      setRenamingKnowledgeFolder(null);
+      setRenamingKnowledgeFolderError(null);
+      return;
+    }
+
+    setRenamingKnowledgeFolderLoading(true);
+    setRenamingKnowledgeFolderError(null);
+    try {
+      await fileSystemApi.rename(selectedWorkspace.id, {
+        id: renamingKnowledgeFolder.id,
+        newName: trimmed
+      });
+      await refreshSelectedWorkspace();
+      setRenamingKnowledgeFolder(null);
+    } catch (error: any) {
+      setRenamingKnowledgeFolderError(error?.response?.data?.error || error?.message || '重命名文件夹失败');
+    } finally {
+      setRenamingKnowledgeFolderLoading(false);
     }
   };
 
@@ -1177,7 +1293,7 @@ export default function WorkspaceShellPage() {
 
   const openTerminalWithPrompt = (prompt: string) => {
     if (selectedWorkspace?.id) {
-      const chat = createTerminalChatSession({ title: 'New Chat', mode: 'agentic' });
+      const chat = createTerminalChatSession({ title: '新对话', mode: 'chat' });
       setTerminalChatSessions((current) => ({
         ...current,
         [selectedWorkspace.id]: [chat, ...(current[selectedWorkspace.id] || [])]
@@ -1197,7 +1313,7 @@ export default function WorkspaceShellPage() {
   ) => {
     if (!selectedWorkspace?.id) return;
     const chat = createTerminalChatSession({
-      title: 'New Chat',
+      title: '新对话',
       mode: options?.mode || terminalDraftMode,
       selectedSources: options?.selectedSources || terminalDraftSources
     });
@@ -1283,13 +1399,14 @@ export default function WorkspaceShellPage() {
   const updateActiveTerminalMessages = (messages: LearningTerminalMessage[]) => {
     if (!selectedWorkspace?.id || !activeTerminalChatId) return;
     const now = new Date().toISOString();
+    const generatedTitle = [...messages].reverse().find((message) => message.sessionTitle)?.sessionTitle?.trim();
     setTerminalChatSessions((current) => ({
       ...current,
       [selectedWorkspace.id]: (current[selectedWorkspace.id] || [])
         .map((chat) => chat.id === activeTerminalChatId ? {
           ...chat,
           messages,
-          title: getTerminalChatTitle(messages, chat.title),
+          title: generatedTitle || getTerminalChatTitle(messages, chat.title),
           updatedAt: now,
           messageCount: Math.max(chat.messageCount || 0, messages.length),
           lastMessagePreview: messages[messages.length - 1]?.content || chat.lastMessagePreview
@@ -1416,7 +1533,7 @@ export default function WorkspaceShellPage() {
 
   const deleteWorkspace = async (workspace: Workspace) => {
     setOpenWorkspaceMenuId(null);
-    if (!confirm(`Delete workspace "${workspace.name}"? This cannot be undone.`)) return;
+    if (!confirm(`确定删除 workspace “${workspace.name}”吗？此操作无法撤销。`)) return;
     try {
       await workspaceApi.deleteWorkspace(workspace.id);
       await loadWorkspaceShell();
@@ -1438,6 +1555,26 @@ export default function WorkspaceShellPage() {
 
     const handlePointerUp = () => {
       sidebarResizeRef.current = null;
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp, { once: true });
+  };
+
+  const beginTerminalPreviewResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    terminalPreviewResizeRef.current = { startX: event.clientX, startWidth: terminalPreviewWidth };
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const draft = terminalPreviewResizeRef.current;
+      if (!draft) return;
+      setTerminalPreviewWidth(clampTerminalPreviewWidth(draft.startWidth - (moveEvent.clientX - draft.startX)));
+    };
+
+    const handlePointerUp = () => {
+      terminalPreviewResizeRef.current = null;
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
     };
@@ -1632,7 +1769,7 @@ export default function WorkspaceShellPage() {
               <button
                 id="sidebar-new-workbench-button"
                 type="button"
-                onClick={() => void createWorkbench()}
+                onClick={() => openWorkbenchNameDialog()}
                 disabled={creatingWorkbench}
                 className="group flex grow items-center space-x-3 rounded-2xl px-2.5 py-2 text-left outline-none transition hover:bg-gray-100 disabled:opacity-60"
               >
@@ -1640,7 +1777,7 @@ export default function WorkspaceShellPage() {
                   {creatingWorkbench ? <Loader2 className="size-[1.125rem] animate-spin" /> : <OWPencilSquareIcon className="size-[1.125rem]" strokeWidth={2} />}
                 </div>
                 <div className="flex flex-1 self-center translate-y-[0.5px]">
-                  <div className="self-center font-primary text-sm">New Workbench</div>
+                  <div className="self-center font-primary text-sm">新建 Workbench</div>
                 </div>
               </button>
             </div>
@@ -1655,7 +1792,7 @@ export default function WorkspaceShellPage() {
                   <OWWorkspaceIcon className="size-[1.125rem]" strokeWidth={2} />
                 </div>
                 <div className="flex flex-1 self-center translate-y-[0.5px]">
-                  <div className="self-center font-primary text-sm">New Workspace</div>
+                  <div className="self-center font-primary text-sm">新建 Workspace</div>
                 </div>
               </button>
             </div>
@@ -1671,7 +1808,7 @@ export default function WorkspaceShellPage() {
                   <OWSearchIcon className="size-[1.125rem]" strokeWidth={2} />
                 </div>
                 <div className="flex flex-1 self-center translate-y-[0.5px]">
-                  <div className="self-center font-primary text-sm">Search</div>
+                  <div className="self-center font-primary text-sm">搜索</div>
                 </div>
               </button>
             </div>
@@ -1701,7 +1838,7 @@ export default function WorkspaceShellPage() {
                   setCreateWorkspaceOpen(true);
                 }}
                 className="absolute right-2 z-10 flex items-center self-center text-gray-600 invisible group-hover:visible"
-                aria-label="New Workspace"
+                aria-label="新建 Workspace"
               >
                 <span className="rounded-lg p-0.5 touch-auto">
                   <OWPlusIcon className="size-3" strokeWidth={2.5} />
@@ -1729,7 +1866,7 @@ export default function WorkspaceShellPage() {
                             toggleWorkspaceExpanded(workspace.id);
                           }}
                           className="flex shrink-0 items-center justify-center rounded-lg p-1 text-gray-500 transition hover:bg-gray-200"
-                          aria-label={isExpanded ? 'Collapse workspace' : 'Expand workspace'}
+                          aria-label={isExpanded ? '收起 workspace' : '展开 workspace'}
                         >
                           <span className="p-[1px]">
                             {isExpanded ? <OWChevronDownIcon className="size-3" strokeWidth={2.5} /> : <OWChevronRightIcon className="size-3" strokeWidth={2.5} />}
@@ -1746,10 +1883,10 @@ export default function WorkspaceShellPage() {
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation();
-                            void createWorkbenchInWorkspace(workspace.id, true);
+                            createWorkbenchInWorkspace(workspace.id, true);
                           }}
                           className="absolute right-8 z-10 invisible flex items-center self-center text-gray-500 group-hover/workspace:visible"
-                          aria-label="New workbench in this workspace"
+                          aria-label="在此 workspace 中新建 workbench"
                         >
                           <span className="rounded-lg p-1 touch-auto hover:bg-gray-200">
                             <OWPlusIcon className="size-3.5" />
@@ -1763,7 +1900,7 @@ export default function WorkspaceShellPage() {
                             setOpenWorkspaceMenuId((current) => current === workspace.id ? null : workspace.id);
                           }}
                           className="absolute right-2 z-10 invisible flex items-center self-center text-gray-500 group-hover/workspace:visible"
-                          aria-label="Workspace menu"
+                          aria-label="Workspace 菜单"
                         >
                           <span className="rounded-lg p-1 touch-auto hover:bg-gray-200">
                             <OWEllipsisHorizontalIcon className="size-4" strokeWidth={2.5} />
@@ -1784,16 +1921,11 @@ export default function WorkspaceShellPage() {
                                 workspaceName={workspace.name}
                                 workspaces={workspaces}
                                 isPinned={pinnedWorkbenchIds.has(workbench.id)}
-                                isEditing={editingWorkbenchId === workbench.id}
-                                editingTitle={editingWorkbenchTitle}
                                 emoji={inferWorkbenchEmoji(workbench.title, workbench.description)}
                                 openMenu={openWorkbenchMenuId === menuKey}
                                 onOpen={() => openWorkbench(workbench.id)}
                                 onOpenMenu={() => setOpenWorkbenchMenuId((current) => current === menuKey ? null : menuKey)}
                                 onStartRename={() => beginRenameWorkbench(workbench)}
-                                onSubmitRename={() => void submitRenameWorkbench()}
-                                onCancelRename={cancelRenameWorkbench}
-                                onRenameChange={setEditingWorkbenchTitle}
                                 onTogglePin={() => togglePinWorkbench(workbench.id)}
                                 onClone={() => void cloneWorkbench(workbench)}
                                 onMove={(workspaceId) => void moveWorkbench(workbench, workspaceId)}
@@ -1812,15 +1944,15 @@ export default function WorkspaceShellPage() {
                         >
                           <button type="button" onClick={() => editWorkspace(workspace.id)} className="workspace-card-menu-item flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left">
                             <OWPencilIcon className="size-4" />
-                            Edit
+                            编辑
                           </button>
                           <button type="button" onClick={() => exportWorkspace(workspace)} className="workspace-card-menu-item flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left">
                             <OWDownloadIcon className="size-4" />
-                            Export
+                            导出
                           </button>
                           <button type="button" onClick={() => void deleteWorkspace(workspace)} className="workspace-card-menu-danger workspace-card-menu-item flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left">
                             <OWGarbageBinIcon className="size-4" />
-                            Delete
+                            删除
                           </button>
                         </div>,
                         document.body
@@ -1873,7 +2005,7 @@ export default function WorkspaceShellPage() {
                             <span className="p-[1px]">
                               {pinnedWorkbenchesCollapsed ? <OWChevronRightIcon className="size-3" strokeWidth={2} /> : <OWChevronDownIcon className="size-3" strokeWidth={2} />}
                             </span>
-                            <span className="translate-y-[0.5px]">Pinned</span>
+                            <span className="translate-y-[0.5px]">已置顶</span>
                           </button>
                         </div>
                         <OpenWebUICollapse open={!pinnedWorkbenchesCollapsed}>
@@ -1886,16 +2018,11 @@ export default function WorkspaceShellPage() {
                                 workspaceName={workbench.workspaceName}
                                 workspaces={workspaces}
                                 isPinned
-                                isEditing={editingWorkbenchId === workbench.id}
-                                editingTitle={editingWorkbenchTitle}
                                 emoji={inferWorkbenchEmoji(workbench.title, workbench.description)}
                                 openMenu={openWorkbenchMenuId === `pinned:${workbench.id}`}
                                 onOpen={() => openWorkbench(workbench.id)}
                                 onOpenMenu={() => setOpenWorkbenchMenuId((current) => current === `pinned:${workbench.id}` ? null : `pinned:${workbench.id}`)}
                                 onStartRename={() => beginRenameWorkbench(workbench)}
-                                onSubmitRename={() => void submitRenameWorkbench()}
-                                onCancelRename={cancelRenameWorkbench}
-                                onRenameChange={setEditingWorkbenchTitle}
                                 onTogglePin={() => togglePinWorkbench(workbench.id)}
                                 onClone={() => void cloneWorkbench(workbench)}
                                 onMove={(workspaceId) => void moveWorkbench(workbench, workspaceId)}
@@ -1920,16 +2047,11 @@ export default function WorkspaceShellPage() {
                             workspaceName={workbench.workspaceName}
                             workspaces={workspaces}
                             isPinned={false}
-                            isEditing={editingWorkbenchId === workbench.id}
-                            editingTitle={editingWorkbenchTitle}
                             emoji={inferWorkbenchEmoji(workbench.title, workbench.description)}
                             openMenu={openWorkbenchMenuId === `recent:${group.label}:${workbench.id}`}
                             onOpen={() => openWorkbench(workbench.id)}
                             onOpenMenu={() => setOpenWorkbenchMenuId((current) => current === `recent:${group.label}:${workbench.id}` ? null : `recent:${group.label}:${workbench.id}`)}
                             onStartRename={() => beginRenameWorkbench(workbench)}
-                            onSubmitRename={() => void submitRenameWorkbench()}
-                            onCancelRename={cancelRenameWorkbench}
-                            onRenameChange={setEditingWorkbenchTitle}
                             onTogglePin={() => togglePinWorkbench(workbench.id)}
                             onClone={() => void cloneWorkbench(workbench)}
                             onMove={(workspaceId) => void moveWorkbench(workbench, workspaceId)}
@@ -1940,7 +2062,7 @@ export default function WorkspaceShellPage() {
                     </div>
                   ))}
                   {!filteredSidebarWorkbenches.length ? (
-                    <p className="px-2 text-xs leading-5 text-gray-500">No workbenches yet.</p>
+                    <p className="px-2 text-xs leading-5 text-gray-500">暂无 workbench。</p>
                   ) : null}
                 </div>
               </div>
@@ -1964,7 +2086,7 @@ export default function WorkspaceShellPage() {
                 <div className=" self-center mr-3">
                   <OWSettingsIcon className="w-5 h-5" strokeWidth={1.5} />
                 </div>
-                <div className=" self-center truncate">Settings</div>
+                <div className=" self-center truncate">设置</div>
               </button>
 
               <hr className=" border-gray-50/30 dark:border-gray-800/30 my-1 p-0" />
@@ -1980,7 +2102,7 @@ export default function WorkspaceShellPage() {
                 <div className=" self-center mr-3">
                   <OWSignOutIcon className="w-5 h-5" />
                 </div>
-                <div className=" self-center truncate">Sign Out</div>
+                <div className=" self-center truncate">退出登录</div>
               </button>
             </div>
           ) : null}
@@ -1993,13 +2115,13 @@ export default function WorkspaceShellPage() {
                 setUserMenuOpen((value) => !value);
               }}
               className=" flex items-center rounded-2xl py-2 px-1.5 w-full hover:bg-gray-100/50 dark:hover:bg-gray-900/50 transition"
-              aria-label="User menu"
+              aria-label="用户菜单"
               aria-haspopup="menu"
               aria-expanded={userMenuOpen}
             >
               <div className=" self-center mr-3 relative flex-shrink-0">
                 {user?.profileImageUrl ? (
-                  <img src={user.profileImageUrl} className="size-7 rounded-full object-cover" alt="Open User Profile Menu" />
+                  <img src={user.profileImageUrl} className="size-7 rounded-full object-cover" alt="打开用户资料菜单" />
                 ) : (
                   <div className="flex size-7 items-center justify-center rounded-full bg-gray-900 text-[11px] font-semibold text-white">
                     {user?.username?.slice(0, 1).toUpperCase() || 'U'}
@@ -2032,7 +2154,7 @@ export default function WorkspaceShellPage() {
             type="button"
             onClick={() => setSidebarVisible(true)}
             className="flex flex-col flex-1 cursor-pointer"
-            aria-label="Open sidebar"
+            aria-label="打开侧边栏"
           >
             <span className="flex rounded-xl transition hover:bg-gray-100">
               <span className="flex size-9 items-center justify-center self-center">
@@ -2073,28 +2195,11 @@ export default function WorkspaceShellPage() {
         }`}>
 
             {activeTab === 'workbenches' ? (
-              createWorkbenchOpen ? (
-                <CreateWorkbenchModal
-                  isOpen={Boolean(selectedWorkspace)}
-                  loading={creatingWorkbench}
-                  error={createWorkbenchError}
-                  workspaceName={selectedWorkspace.name}
-                  resources={sourceFiles}
-                  onClose={() => {
-                    if (!creatingWorkbench) setCreateWorkbenchOpen(false);
-                  }}
-                  onSubmit={(payload) => void submitWorkbenchCreate(payload)}
-                />
-              ) : (
-                <WorkbenchList
-                  workbenches={selectedWorkbenches}
-                  onOpen={openWorkbench}
-                  onCreate={() => {
-                    setCreateWorkbenchError(null);
-                    setCreateWorkbenchOpen(true);
-                  }}
-                />
-              )
+              <WorkbenchList
+                workbenches={selectedWorkbenches}
+                onOpen={openWorkbench}
+                onCreate={() => openWorkbenchNameDialog(selectedWorkspace.id)}
+              />
             ) : null}
 
             {activeTab === 'files' ? (
@@ -2110,6 +2215,7 @@ export default function WorkspaceShellPage() {
                 onChanged={refreshSelectedWorkspace}
                 currentFolderId={knowledgeFolderId}
                 onCurrentFolderChange={setKnowledgeFolderId}
+                onRenameFolder={beginRenameKnowledgeFolder}
               />
             ) : null}
 
@@ -2119,7 +2225,7 @@ export default function WorkspaceShellPage() {
                 workbenchId={selectedWorkbenches[0]?.id}
                 workbenches={selectedWorkbenches.map((workbench) => ({ id: workbench.id, title: workbench.title }))}
                 activeSection={activeIntelligenceSection === 'overview' || activeIntelligenceSection === 'diagnosis' ? activeIntelligenceSection : 'overview'}
-                headerTitle="Learning Intelligence"
+                headerTitle="学习智能"
                 headerDescription="Overview 和 Diagnosis 暂时保留在这里。"
                 onSectionChange={openLearningSection}
                 onOpenWorkbench={openWorkbench}
@@ -2135,7 +2241,7 @@ export default function WorkspaceShellPage() {
                 workbenches={selectedWorkbenches.map((workbench) => ({ id: workbench.id, title: workbench.title }))}
                 activeSection="knowledge"
                 hideSectionNav
-                headerTitle="Knowledge"
+                headerTitle="知识库"
                 headerDescription="概念对象、知识关系与学习路径。"
                 onSectionChange={openLearningSection}
                 onOpenWorkbench={openWorkbench}
@@ -2150,7 +2256,7 @@ export default function WorkspaceShellPage() {
                 workbenches={selectedWorkbenches.map((workbench) => ({ id: workbench.id, title: workbench.title }))}
                 activeSection="planning"
                 hideSectionNav
-                headerTitle="Planning"
+                headerTitle="规划"
                 headerDescription=""
                 onSectionChange={openLearningSection}
                 onOpenWorkbench={openWorkbench}
@@ -2166,7 +2272,7 @@ export default function WorkspaceShellPage() {
                 workbenches={selectedWorkbenches.map((workbench) => ({ id: workbench.id, title: workbench.title }))}
                 activeSection="memory"
                 hideSectionNav
-                headerTitle="Learning Profile"
+                headerTitle="学习画像"
                 headerDescription="学习画像、近期状态与长期记忆。"
                 onSectionChange={openLearningSection}
                 onOpenWorkbench={openWorkbench}
@@ -2177,8 +2283,8 @@ export default function WorkspaceShellPage() {
 
             {activeTab === 'terminal' ? (
               activeTerminalChat ? (
-                <div className="flex h-full min-h-0 bg-white">
-                  <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex h-full min-h-0 overflow-hidden bg-white">
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     <div className="mx-auto flex h-14 w-full max-w-6xl shrink-0 items-center px-4 md:px-6">
                       <button
                         type="button"
@@ -2224,7 +2330,22 @@ export default function WorkspaceShellPage() {
                     />
                   </div>
                   {terminalResourcePreview ? (
-                    <div className="hidden h-full min-h-0 w-[min(50vw,760px)] min-w-[520px] shrink-0 xl:block">
+                    <div
+                      className="relative hidden h-full min-h-0 min-w-0 shrink-0 overflow-hidden border-l border-gray-100 bg-white xl:block"
+                      style={{
+                        width: terminalPreviewWidth,
+                        maxWidth: 'calc(100% - 360px)'
+                      }}
+                    >
+                      <div
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label="调整预览面板宽度"
+                        onPointerDown={beginTerminalPreviewResize}
+                        className="group absolute -left-2 top-0 z-30 h-full w-4 cursor-col-resize touch-none"
+                      >
+                        <div className="mx-auto h-full w-px bg-transparent transition group-hover:bg-gray-200" />
+                      </div>
                       <TerminalResourcePreviewPanel
                         workspaceId={selectedWorkspace.id}
                         workbenchId={selectedWorkbenches[0]?.id}
@@ -2297,7 +2418,7 @@ export default function WorkspaceShellPage() {
         workbenches={filteredSidebarWorkbenches}
         onQueryChange={setSearchQuery}
         onClose={() => setSearchOpen(false)}
-        onCreateWorkbench={() => void createWorkbench()}
+        onCreateWorkbench={() => openWorkbenchNameDialog()}
         onOpenWorkspace={(workspaceId) => {
           setSearchOpen(false);
           navigate(`/workspaces/${workspaceId}`);
@@ -2308,9 +2429,36 @@ export default function WorkspaceShellPage() {
         }}
       />
 
+      <WorkbenchNameDialog
+        isOpen={Boolean(workbenchNameDialog)}
+        mode={workbenchNameDialog?.mode || 'create'}
+        initialTitle={workbenchNameDialog?.mode === 'rename' ? workbenchNameDialog.workbench.title : ''}
+        workspaceName={
+          workbenchNameDialog?.mode === 'rename'
+            ? workspaces.find((workspace) => workspace.id === workbenchNameDialog.workbench.workspaceId)?.name
+            : workspaces.find((workspace) => workspace.id === workbenchNameDialog?.workspaceId)?.name
+        }
+        loading={creatingWorkbench}
+        error={workbenchNameError}
+        onClose={() => {
+          if (!creatingWorkbench) {
+            setWorkbenchNameDialog(null);
+            setWorkbenchNameError(null);
+          }
+        }}
+        onSubmit={(title) => {
+          if (!workbenchNameDialog) return;
+          if (workbenchNameDialog.mode === 'create') {
+            void createWorkbench(title, workbenchNameDialog.workspaceId, workbenchNameDialog.openAfterCreate);
+          } else {
+            void submitRenameWorkbench(title);
+          }
+        }}
+      />
+
       <AddSourcesDialog
         isOpen={Boolean(addSourcesOpen && selectedWorkspace)}
-        targetLabel={addSourcesTargetFolder ? `To: ${addSourcesTargetFolder.path}` : 'To: Knowledge'}
+        targetLabel={addSourcesTargetFolder ? `目标：${addSourcesTargetFolder.path}` : '目标：知识库'}
         onClose={() => setAddSourcesOpen(false)}
         onUploadFiles={uploadWorkspaceFiles}
         onAddWebsite={addWorkspaceWebsite}
@@ -2323,7 +2471,7 @@ export default function WorkspaceShellPage() {
         isOpen={Boolean(createFolderOpen && selectedWorkspace)}
         loading={creatingKnowledgeFolder}
         error={createFolderError}
-        targetLabel={activeKnowledgeFolder ? activeKnowledgeFolder.path : 'Knowledge'}
+        targetLabel={activeKnowledgeFolder ? activeKnowledgeFolder.path : '知识库'}
         onClose={() => {
           if (!creatingKnowledgeFolder) {
             setCreateFolderOpen(false);
@@ -2331,6 +2479,25 @@ export default function WorkspaceShellPage() {
           }
         }}
         onSubmit={(name) => void createKnowledgeFolder(name)}
+      />
+
+      <WorkbenchNameDialog
+        isOpen={Boolean(renamingKnowledgeFolder)}
+        mode="rename"
+        initialTitle={renamingKnowledgeFolder?.name || ''}
+        headingOverride="重命名文件夹"
+        contextLabel={renamingKnowledgeFolder ? `位置：${renamingKnowledgeFolder.path}` : undefined}
+        inputLabel="文件夹名称"
+        placeholder="输入文件夹名称"
+        loading={renamingKnowledgeFolderLoading}
+        error={renamingKnowledgeFolderError}
+        onClose={() => {
+          if (!renamingKnowledgeFolderLoading) {
+            setRenamingKnowledgeFolder(null);
+            setRenamingKnowledgeFolderError(null);
+          }
+        }}
+        onSubmit={(name) => void renameKnowledgeFolder(name)}
       />
 
       <WorkspaceKnowledgePreviewModal
@@ -2401,8 +2568,8 @@ function WorkspaceSettingsModal({
       >
         <div className="text-gray-700 dark:text-gray-100 mx-1">
           <div className=" flex justify-between dark:text-gray-300 px-4 md:px-4.5 pt-4.5 pb-0.5 md:pb-2.5">
-            <div className=" text-lg font-medium self-center">Settings</div>
-            <button aria-label="Close settings modal" className="self-center" onClick={onClose}>
+            <div className=" text-lg font-medium self-center">设置</div>
+            <button aria-label="关闭设置弹窗" className="self-center" onClick={onClose}>
               <OWXMarkIcon className="w-5 h-5" />
             </button>
           </div>
@@ -2417,17 +2584,17 @@ function WorkspaceSettingsModal({
                 <div className="self-center rounded-l-xl bg-transparent">
                   <OWSearchIcon className="size-3.5" strokeWidth={1.5} />
                 </div>
-                <label className="sr-only" htmlFor="search-input-settings-modal">Search</label>
+                <label className="sr-only" htmlFor="search-input-settings-modal">搜索</label>
                 <input
                   className="w-full py-1 text-sm bg-transparent dark:text-gray-300 outline-hidden"
                   id="search-input-settings-modal"
-                  placeholder="Search"
+                  placeholder="搜索"
                   readOnly
                 />
               </div>
 
-              <SettingsTabButton id="account" active={selectedTab === 'account'} label="Account" icon={<OWUserCircleIcon strokeWidth={2} />} onClick={() => onSelectTab('account')} />
-              <SettingsTabButton id="about" active={selectedTab === 'about'} label="About" icon={<OWInfoCircleIcon strokeWidth={2} />} onClick={() => onSelectTab('about')} />
+              <SettingsTabButton id="account" active={selectedTab === 'account'} label="账号" icon={<OWUserCircleIcon strokeWidth={2} />} onClick={() => onSelectTab('account')} />
+              <SettingsTabButton id="about" active={selectedTab === 'about'} label="关于" icon={<OWInfoCircleIcon strokeWidth={2} />} onClick={() => onSelectTab('about')} />
             </div>
 
             <div className="flex-1 px-3.5 md:pl-0 md:pr-4.5 md:min-h-[min(42rem,calc(100dvh-10rem))] max-h-[min(42rem,calc(100dvh-10rem))] overflow-y-auto">
@@ -2520,7 +2687,7 @@ function OpenWebUIAccountPanel({
     setWebhookUrl(user?.notificationWebhookUrl ?? '');
   }, [user?.bio, user?.dateOfBirth, user?.gender, user?.notificationWebhookUrl, user?.profileImageUrl, user?.username]);
 
-  const displayName = name || user?.username || 'User';
+  const displayName = name || user?.username || '用户';
   const handleSaveProfile = async () => {
     setSavingProfile(true);
     setProfileStatus(null);
@@ -2533,10 +2700,10 @@ function OpenWebUIAccountPanel({
         dateOfBirth: dateOfBirth || null,
         notificationWebhookUrl: webhookUrl || null
       });
-      setProfileStatus('Saved');
+      setProfileStatus('已保存');
       window.setTimeout(() => setProfileStatus(null), 1600);
     } catch (error: any) {
-      setProfileStatus(error?.response?.data?.error || error?.message || 'Save failed');
+      setProfileStatus(error?.response?.data?.error || error?.message || '保存失败');
     } finally {
       setSavingProfile(false);
     }
@@ -2544,7 +2711,7 @@ function OpenWebUIAccountPanel({
 
   const handleUpdatePassword = async () => {
     if (newPassword !== newPasswordConfirm) {
-      setPasswordStatus("The passwords you entered don't quite match. Please double-check and try again.");
+      setPasswordStatus('两次输入的密码不一致，请检查后重试。');
       return;
     }
 
@@ -2555,10 +2722,10 @@ function OpenWebUIAccountPanel({
       setCurrentPassword('');
       setNewPassword('');
       setNewPasswordConfirm('');
-      setPasswordStatus('Successfully updated.');
+      setPasswordStatus('更新成功。');
       window.setTimeout(() => setPasswordStatus(null), 1600);
     } catch (error: any) {
-      setPasswordStatus(error?.response?.data?.error || error?.message || 'Update failed');
+      setPasswordStatus(error?.response?.data?.error || error?.message || '更新失败');
     } finally {
       setUpdatingPassword(false);
     }
@@ -2569,8 +2736,8 @@ function OpenWebUIAccountPanel({
       <div className=" overflow-y-scroll max-h-[28rem] md:max-h-full">
         <div className="space-y-1">
           <div>
-            <div className="text-base font-medium">Your Account</div>
-            <div className="text-xs text-gray-500 mt-0.5">Manage your account information.</div>
+            <div className="text-base font-medium">你的账号</div>
+            <div className="text-xs text-gray-500 mt-0.5">管理你的账号信息。</div>
           </div>
 
           <div className="flex space-x-5 my-4">
@@ -2584,49 +2751,49 @@ function OpenWebUIAccountPanel({
             <div className="flex flex-1 flex-col">
               <div className=" flex-1">
                 <div className="flex flex-col w-full">
-                  <div className=" mb-1 text-xs font-medium">Name</div>
+                  <div className=" mb-1 text-xs font-medium">姓名</div>
                   <div className="flex-1">
                     <input
                       className="w-full text-sm dark:text-gray-300 bg-transparent outline-hidden"
                       type="text"
                       value={name}
-                      aria-label="Name"
+                      aria-label="姓名"
                       required
-                      placeholder="Enter your name"
+                      placeholder="输入你的姓名"
                       onChange={(event) => setName(event.target.value)}
                     />
                   </div>
                 </div>
 
                 <div className="flex flex-col w-full mt-2">
-                  <div className=" mb-1 text-xs font-medium">Bio</div>
+                  <div className=" mb-1 text-xs font-medium">简介</div>
                   <div className="flex-1">
                     <textarea
                       className="w-full text-sm dark:text-gray-300 bg-transparent outline-hidden min-h-[60px] resize-y"
                       value={bio}
-                      aria-label="Bio"
-                      placeholder="Share your background and interests"
+                      aria-label="简介"
+                      placeholder="分享你的背景和兴趣"
                       onChange={(event) => setBio(event.target.value)}
                     />
                   </div>
                 </div>
 
                 <div className="flex flex-col w-full mt-2">
-                  <div className=" mb-1 text-xs font-medium">Gender</div>
+                  <div className=" mb-1 text-xs font-medium">性别</div>
                   <div className="flex-1">
                     <select
                       className="w-full text-sm dark:text-gray-300 bg-transparent outline-hidden"
                       value={genderChoice}
-                      aria-label="Gender"
+                      aria-label="性别"
                       onChange={(event) => {
                         setGenderChoice(event.target.value);
                         setGender(event.target.value === 'custom' ? '' : event.target.value);
                       }}
                     >
-                      <option value="">Prefer not to say</option>
-                      <option value="male">Male</option>
-                      <option value="female">Female</option>
-                      <option value="custom">Custom</option>
+                      <option value="">不想透露</option>
+                      <option value="male">男</option>
+                      <option value="female">女</option>
+                      <option value="custom">自定义</option>
                     </select>
                   </div>
 
@@ -2635,8 +2802,8 @@ function OpenWebUIAccountPanel({
                       className="w-full text-sm dark:text-gray-300 bg-transparent outline-hidden mt-1"
                       type="text"
                       required
-                      aria-label="Custom Gender"
-                      placeholder="Enter your gender"
+                      aria-label="自定义性别"
+                      placeholder="输入你的性别"
                       value={gender}
                       onChange={(event) => setGender(event.target.value)}
                     />
@@ -2644,12 +2811,12 @@ function OpenWebUIAccountPanel({
                 </div>
 
                 <div className="flex flex-col w-full mt-2">
-                  <div className=" mb-1 text-xs font-medium">Birth Date</div>
+                  <div className=" mb-1 text-xs font-medium">出生日期</div>
                   <div className="flex-1">
                     <input
                       className="w-full text-sm dark:text-gray-300 dark:placeholder:text-gray-300 bg-transparent outline-hidden"
                       type="date"
-                      aria-label="Birth Date"
+                      aria-label="出生日期"
                       value={dateOfBirth}
                       required
                       onChange={(event) => setDateOfBirth(event.target.value)}
@@ -2663,13 +2830,13 @@ function OpenWebUIAccountPanel({
 
         <div className="mt-2">
           <div className="flex flex-col w-full">
-            <div className=" mb-1 text-xs font-medium">Notification Webhook</div>
+            <div className=" mb-1 text-xs font-medium">通知 Webhook</div>
             <div className="flex-1">
               <input
                 className="w-full text-sm outline-hidden"
                 type="url"
-                placeholder="Enter your webhook URL"
-                aria-label="Notification Webhook"
+                placeholder="输入你的 Webhook URL"
+                aria-label="通知 Webhook"
                 value={webhookUrl}
                 required
                 onChange={(event) => setWebhookUrl(event.target.value)}
@@ -2688,18 +2855,18 @@ function OpenWebUIAccountPanel({
           }}
         >
           <div className="flex justify-between items-center text-sm">
-            <div className="  font-medium">Change Password</div>
+            <div className="  font-medium">修改密码</div>
             <button className=" text-xs font-medium text-gray-500" type="button" onClick={() => setShowPassword((value) => !value)}>
-              {showPassword ? 'Hide' : 'Show'}
+              {showPassword ? '隐藏' : '显示'}
             </button>
           </div>
 
           {showPassword ? (
             <>
               <div className=" py-2.5 space-y-1.5">
-                <SensitivePasswordField label="Current Password" value={currentPassword} placeholder="Enter your current password" autoComplete="current-password" onChange={setCurrentPassword} />
-                <SensitivePasswordField label="New Password" value={newPassword} placeholder="Enter your new password" autoComplete="new-password" onChange={setNewPassword} />
-                <SensitivePasswordField label="Confirm Password" value={newPasswordConfirm} placeholder="Confirm your new password" autoComplete="off" onChange={setNewPasswordConfirm} />
+                <SensitivePasswordField label="当前密码" value={currentPassword} placeholder="输入当前密码" autoComplete="current-password" onChange={setCurrentPassword} />
+                <SensitivePasswordField label="新密码" value={newPassword} placeholder="输入新密码" autoComplete="new-password" onChange={setNewPassword} />
+                <SensitivePasswordField label="确认密码" value={newPasswordConfirm} placeholder="再次输入新密码" autoComplete="off" onChange={setNewPasswordConfirm} />
               </div>
 
               <div className="mt-3 flex justify-end">
@@ -2707,7 +2874,7 @@ function OpenWebUIAccountPanel({
                   className="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full disabled:cursor-wait disabled:opacity-60"
                   disabled={updatingPassword}
                 >
-                  {updatingPassword ? 'Updating...' : 'Update password'}
+                  {updatingPassword ? '更新中...' : '更新密码'}
                 </button>
               </div>
             </>
@@ -2724,7 +2891,7 @@ function OpenWebUIAccountPanel({
           disabled={savingProfile}
           onClick={() => void handleSaveProfile()}
         >
-          {savingProfile ? 'Saving...' : 'Save'}
+          {savingProfile ? '保存中...' : '保存'}
         </button>
       </div>
     </div>
@@ -2776,7 +2943,7 @@ function OpenWebUIProfileImage({
       <div className="flex flex-col self-start group">
         <div className="self-center flex">
           <button className="relative rounded-full dark:bg-gray-700" type="button" onClick={() => inputRef.current?.click()}>
-            <img src={imageSrc} alt="profile" className=" rounded-full size-14 md:size-18 object-cover" />
+            <img src={imageSrc} alt="头像" className=" rounded-full size-14 md:size-18 object-cover" />
             <div className="absolute bottom-0 right-0 opacity-0 group-hover:opacity-100 transition">
               <div className="p-1 rounded-full bg-white text-black border-gray-100 shadow">
                 <OWPencilSolidIcon className="size-3" />
@@ -2786,10 +2953,10 @@ function OpenWebUIProfileImage({
         </div>
         <div className="flex flex-col w-full justify-center mt-2">
           <button className=" text-xs text-center text-gray-500 rounded-lg py-0.5 opacity-0 group-hover:opacity-100 transition-all" type="button" onClick={() => onProfileImageUrlChange('')}>
-            Remove
+            移除
           </button>
           <button className=" text-xs text-center text-gray-800 dark:text-gray-400 rounded-lg py-0.5 opacity-0 group-hover:opacity-100 transition-all" type="button" onClick={() => onProfileImageUrlChange(generateInitialsImage(name))}>
-            Initials
+            首字母头像
           </button>
           <button className=" text-xs text-center text-gray-800 dark:text-gray-400 rounded-lg py-0.5 opacity-0 group-hover:opacity-100 transition-all" type="button" onClick={() => onProfileImageUrlChange(`https://www.gravatar.com/avatar/${encodeURIComponent(email || name)}?d=identicon`)}>
             Gravatar
@@ -2831,13 +2998,142 @@ function SensitivePasswordField({
   );
 }
 
+const THIRD_PARTY_NOTICE_GROUPS = [
+  {
+    title: '主要前端与桌面技术',
+    items: [
+      { name: 'React', href: 'https://react.dev/' },
+      { name: 'React DOM', href: 'https://react.dev/reference/react-dom' },
+      { name: 'React Router', href: 'https://reactrouter.com/' },
+      { name: 'Vite', href: 'https://vite.dev/' },
+      { name: 'TypeScript', href: 'https://www.typescriptlang.org/' },
+      { name: 'Tailwind CSS', href: 'https://tailwindcss.com/' },
+      { name: 'PostCSS', href: 'https://postcss.org/' },
+      { name: 'Autoprefixer', href: 'https://github.com/postcss/autoprefixer' },
+      { name: 'Zustand', href: 'https://github.com/pmndrs/zustand' },
+      { name: 'Axios', href: 'https://axios-http.com/' },
+      { name: 'Lucide React', href: 'https://lucide.dev/' },
+      { name: 'Sonner', href: 'https://sonner.emilkowal.ski/' },
+      { name: 'Tauri', href: 'https://tauri.app/' },
+      { name: 'Serde', href: 'https://serde.rs/' },
+      { name: 'Serde JSON', href: 'https://github.com/serde-rs/json' }
+    ]
+  },
+  {
+    title: '后端与数据层',
+    items: [
+      { name: 'Node.js', href: 'https://nodejs.org/' },
+      { name: 'Express', href: 'https://expressjs.com/' },
+      { name: 'CORS', href: 'https://github.com/expressjs/cors' },
+      { name: 'dotenv', href: 'https://github.com/motdotla/dotenv' },
+      { name: 'Multer', href: 'https://github.com/expressjs/multer' },
+      { name: 'Prisma', href: 'https://www.prisma.io/' },
+      { name: 'SQLite', href: 'https://www.sqlite.org/' },
+      { name: 'ts-node', href: 'https://typestrong.org/ts-node/' },
+      { name: 'nodemon', href: 'https://nodemon.io/' }
+    ]
+  },
+  {
+    title: 'AI、检索与代码执行服务',
+    items: [
+      { name: 'LangGraph', href: 'https://github.com/langchain-ai/langgraphjs' },
+      { name: 'Qdrant', href: 'https://qdrant.tech/' },
+      { name: 'Hugging Face Text Embeddings Inference', href: 'https://github.com/huggingface/text-embeddings-inference' },
+      { name: 'BAAI/bge-m3', href: 'https://huggingface.co/BAAI/bge-m3' },
+      { name: 'BAAI/bge-reranker-v2-m3', href: 'https://huggingface.co/BAAI/bge-reranker-v2-m3' },
+      { name: 'Judge0 CE', href: 'https://github.com/judge0/judge0' },
+      { name: 'PostgreSQL', href: 'https://www.postgresql.org/' },
+      { name: 'Redis', href: 'https://redis.io/' }
+    ]
+  },
+  {
+    title: '编辑器、白板与可视化',
+    items: [
+      { name: 'BlockSuite', href: 'https://blocksuite.io/' },
+      { name: 'CodeMirror', href: 'https://codemirror.net/' },
+      { name: 'Monaco Editor', href: 'https://microsoft.github.io/monaco-editor/' },
+      { name: 'Mermaid', href: 'https://mermaid.js.org/' },
+      { name: 'Excalidraw', href: 'https://github.com/excalidraw/excalidraw' },
+      { name: 'tldraw', href: 'https://www.tldraw.com/' },
+      { name: 'Motion Canvas', href: 'https://motioncanvas.io/' },
+      { name: 'Reveal.js', href: 'https://revealjs.com/' },
+      { name: 'AntV X6', href: 'https://x6.antv.antgroup.com/' },
+      { name: 'Cosmograph', href: 'https://cosmograph.app/' },
+      { name: 'Cosmos Graph', href: 'https://github.com/cosmograph-org/cosmos' },
+      { name: 'Cytoscape.js', href: 'https://js.cytoscape.org/' },
+      { name: 'ELK', href: 'https://www.eclipse.org/elk/' },
+      { name: 'ECharts', href: 'https://echarts.apache.org/' },
+      { name: 'Recharts', href: 'https://recharts.org/' },
+      { name: 'Three.js', href: 'https://threejs.org/' },
+      { name: 'react-force-graph-3d', href: 'https://github.com/vasturiano/react-force-graph' },
+      { name: 'Mind Elixir', href: 'https://github.com/ssshooter/mind-elixir-core' }
+    ]
+  },
+  {
+    title: '文档解析、渲染与安全处理',
+    items: [
+      { name: 'PDF.js', href: 'https://mozilla.github.io/pdf.js/' },
+      { name: 'pdf-parse', href: 'https://www.npmjs.com/package/pdf-parse' },
+      { name: 'Mammoth', href: 'https://github.com/mwilliamson/mammoth.js' },
+      { name: 'JSZip', href: 'https://stuk.github.io/jszip/' },
+      { name: 'jsdom', href: 'https://github.com/jsdom/jsdom' },
+      { name: 'Mozilla Readability', href: 'https://github.com/mozilla/readability' },
+      { name: 'DOMPurify', href: 'https://github.com/cure53/DOMPurify' },
+      { name: 'Marked', href: 'https://marked.js.org/' },
+      { name: 'Highlight.js', href: 'https://highlightjs.org/' },
+      { name: 'KaTeX', href: 'https://katex.org/' },
+      { name: 'html-entities', href: 'https://github.com/mdevils/html-entities' },
+      { name: 'PptxGenJS', href: 'https://gitbrent.github.io/PptxGenJS/' }
+    ]
+  },
+  {
+    title: '视频、动画与运行时工具',
+    items: [
+      { name: 'FFmpeg', href: 'https://ffmpeg.org/' },
+      { name: 'ffmpeg.wasm', href: 'https://ffmpegwasm.netlify.app/' },
+      { name: 'Manim', href: 'https://www.manim.community/' },
+      { name: 'HyperFrames', href: 'https://hyperframes.heygen.com/' },
+      { name: 'Puppeteer Core', href: 'https://pptr.dev/' },
+      { name: 'GSAP', href: 'https://gsap.com/' },
+      { name: 'html2canvas', href: 'https://html2canvas.hertzen.com/' },
+      { name: 'Chart.js', href: 'https://www.chartjs.org/' },
+      { name: 'Babel Standalone', href: 'https://babeljs.io/docs/babel-standalone' },
+      { name: 'PropTypes', href: 'https://github.com/facebook/prop-types' }
+    ]
+  },
+  {
+    title: '字体与图形资源',
+    items: [
+      { name: 'Inter', href: 'https://github.com/rsms/inter' },
+      { name: 'Archivo', href: 'https://github.com/Omnibus-Type/Archivo' },
+      { name: 'Vazirmatn', href: 'https://github.com/rastikerdar/vazirmatn' },
+      { name: 'Twemoji', href: 'https://github.com/jdecked/twemoji' },
+      { name: 'CC-BY 4.0', href: 'https://creativecommons.org/licenses/by/4.0/' }
+    ]
+  }
+] as const;
+
+function ThirdPartyProjectLink({ name, href }: { name: string; href: string }) {
+  return (
+    <a
+      className="inline-flex items-center gap-1 rounded-full border border-gray-100 bg-white px-2 py-0.5 text-gray-600 transition hover:border-gray-200 hover:text-gray-900 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300 dark:hover:text-white"
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+    >
+      {name}
+      <ExternalLink className="size-3 opacity-60" />
+    </a>
+  );
+}
+
 function OpenWebUIAboutPanel() {
   return (
     <div id="tab-about" className="flex flex-col h-full justify-between space-y-3 text-sm mb-6">
       <div className=" space-y-3 overflow-y-scroll max-h-[28rem] md:max-h-full">
         <div>
           <div className=" mb-2.5 text-sm font-medium flex space-x-2 items-center">
-            <div>Open WebUI Version</div>
+            <div>Synapse Link 版本</div>
           </div>
           <div className="flex w-full justify-between items-center">
             <div className="flex flex-col text-xs text-gray-700 dark:text-gray-200">
@@ -2845,38 +3141,59 @@ function OpenWebUIAboutPanel() {
                 <span>v0.0.0</span>
               </div>
 
-              <button className=" underline flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-500">
-                <div>See what's new</div>
-              </button>
+              <a
+                className=" underline flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-500"
+                href="https://github.com/zyx20070201/zhongguoruanjianbei2026"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <div>查看项目仓库</div>
+              </a>
             </div>
           </div>
         </div>
 
         <hr className=" border-gray-100/30 dark:border-gray-850/30" />
 
-        <div className="flex space-x-1">
-          <a href="https://discord.gg/5rJgQTnV4s" target="_blank" rel="noreferrer">
-            <img alt="Discord" src="https://img.shields.io/badge/Discord-Open_WebUI-blue?logo=discord&logoColor=white" />
+        <div className="flex flex-wrap gap-1.5">
+          <a href="https://github.com/zyx20070201/zhongguoruanjianbei2026" target="_blank" rel="noreferrer">
+            <img alt="Project Repo" src="https://img.shields.io/badge/GitHub-zyx20070201%2Fzhongguoruanjianbei2026-111827?logo=github&logoColor=white" />
           </a>
-          <a href="https://twitter.com/OpenWebUI" target="_blank" rel="noreferrer">
-            <img alt="X (formerly Twitter) Follow" src="https://img.shields.io/twitter/follow/OpenWebUI" />
-          </a>
-          <a href="https://github.com/open-webui/open-webui" target="_blank" rel="noreferrer">
-            <img alt="Github Repo" src="https://img.shields.io/github/stars/open-webui/open-webui?style=social&label=Star us on Github" />
+          <a href="https://github.com/zyx20070201/zhongguoruanjianbei2026" target="_blank" rel="noreferrer">
+            <img alt="Repository" src="https://img.shields.io/badge/Repository-Synapse_Link-2563eb" />
           </a>
         </div>
 
-        <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
-          Emoji graphics provided by <a href="https://github.com/jdecked/twemoji" target="_blank" rel="noreferrer">Twemoji</a>, licensed under{' '}
-          <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC-BY 4.0</a>.
+        <div className="space-y-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
+          <p>
+            本项目基于开源软件与第三方资源构建。商业使用、二次分发或部署时，应保留相关项目的版权声明、许可证文本和必要的第三方声明。
+          </p>
+          <div className="space-y-3">
+            {THIRD_PARTY_NOTICE_GROUPS.map((group) => (
+              <section key={group.title} className="space-y-1.5">
+                <div className="font-medium text-gray-700 dark:text-gray-200">{group.title}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {group.items.map((item) => (
+                    <ThirdPartyProjectLink key={item.name} name={item.name} href={item.href} />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+          <p>
+            Emoji 图形由 <a href="https://github.com/jdecked/twemoji" target="_blank" rel="noreferrer" className="underline">Twemoji</a> 提供，遵循 <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer" className="underline">CC-BY 4.0</a> 许可。
+          </p>
+          <p>
+            本页面的早期设置界面曾参考 Open WebUI 的交互与部分展示结构。Open WebUI 及其原始版权、许可信息归其各自权利人所有。
+          </p>
         </div>
 
         <div>
-          <pre className="text-xs text-gray-400 dark:text-gray-500 whitespace-pre-wrap">{`Copyright (c) ${new Date().getFullYear()} `}<a href="https://openwebui.com" target="_blank" rel="noreferrer" className="underline">Open WebUI Inc.</a>{' '}<a href="https://github.com/open-webui/open-webui/blob/main/LICENSE" target="_blank" rel="noreferrer">All rights reserved.</a></pre>
+          <pre className="text-xs text-gray-400 dark:text-gray-500 whitespace-pre-wrap">{`Copyright (c) ${new Date().getFullYear()} Synapse Link contributors. `}<a href="https://github.com/zyx20070201/zhongguoruanjianbei2026" target="_blank" rel="noreferrer" className="underline">项目仓库</a></pre>
         </div>
 
         <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
-          Created by <a className=" text-gray-500 dark:text-gray-300 font-medium" href="https://github.com/tjbck" target="_blank" rel="noreferrer">Timothy J. Baek</a>
+          第三方开源项目的商标、名称与版权归各自权利人所有；详细许可证以各项目仓库和随包分发的 license 文件为准。
         </div>
       </div>
     </div>
@@ -3043,7 +3360,7 @@ function WorkspaceKnowledgePreviewModal({
             type="button"
             onClick={onClose}
             className="self-center rounded-lg p-1 text-gray-700 transition hover:bg-gray-100 hover:text-gray-900"
-            aria-label="Close knowledge preview"
+            aria-label="关闭知识预览"
           >
             <OWXMarkIcon className="size-5" />
           </button>
@@ -3152,7 +3469,7 @@ function WorkspaceSearchModal({
                 ref={inputRef}
                 value={query}
                 onChange={(event) => onQueryChange(event.target.value)}
-                placeholder="Search"
+                placeholder="搜索"
                 className="w-full bg-transparent text-sm outline-none placeholder:text-gray-400"
               />
               {query ? (
@@ -3165,7 +3482,7 @@ function WorkspaceSearchModal({
 
           <div className="flex px-4 pb-1">
             <div className="flex h-96 max-h-full w-full flex-1 flex-col overflow-y-auto pr-2 md:h-[40rem] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <div className="w-full px-2 pb-2 text-xs font-medium text-gray-500">Actions</div>
+              <div className="w-full px-2 pb-2 text-xs font-medium text-gray-500">操作</div>
               <button
                 type="button"
                 className={`flex w-full items-center rounded-xl px-3 py-2 text-sm hover:bg-gray-50 ${selectedIdx === 0 ? 'bg-gray-50' : ''}`}
@@ -3174,7 +3491,7 @@ function WorkspaceSearchModal({
                 onClick={onCreateWorkbench}
               >
                 <div className="pr-2"><OWPencilSquareIcon /></div>
-                <div className="flex-1 text-left"><div className="line-clamp-1 w-full text-ellipsis">Start a new workbench</div></div>
+                <div className="flex-1 text-left"><div className="line-clamp-1 w-full text-ellipsis">新建 workbench</div></div>
               </button>
 
               <hr className="my-3 border-gray-50" />
@@ -3224,11 +3541,11 @@ function WorkspaceSearchModal({
               ) : null}
 
               {!workspaces.length && !workbenches.length ? (
-                <div className="px-5 py-4 text-center text-xs text-gray-500">No results found</div>
+                <div className="px-5 py-4 text-center text-xs text-gray-500">未找到结果</div>
               ) : null}
             </div>
             <div className="hidden h-96 w-full flex-1 items-center justify-center overflow-y-auto text-sm text-gray-500 md:flex md:h-[40rem] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              Select a workspace or workbench to preview
+              选择 workspace 或 workbench 查看预览
             </div>
           </div>
         </div>
@@ -3257,7 +3574,7 @@ function WorkbenchList({
       <WorkspacePanelHeader
         title="Workbenches"
         count={sorted.length}
-        actionLabel="New Workbench"
+        actionLabel="新建 Workbench"
         onAction={onCreate}
       />
 
@@ -3265,7 +3582,7 @@ function WorkbenchList({
         <div className="flex text-xs font-medium mb-1 items-center -mr-0.5">
           <button type="button" className="px-1.5 py-1 cursor-pointer select-none basis-3/5 text-left">
             <div className="flex gap-1.5 items-center">
-              Title
+              标题
               <span className="invisible">
                 <OWChevronUpIcon className="size-2" />
               </span>
@@ -3273,7 +3590,7 @@ function WorkbenchList({
           </button>
           <button type="button" className="px-1.5 py-1 cursor-pointer select-none hidden sm:flex sm:basis-2/5 justify-end">
             <div className="flex gap-1.5 items-center">
-              Updated at
+              更新时间
               <OWChevronDownIcon className="size-2" />
             </div>
           </button>
@@ -3313,10 +3630,10 @@ function WorkbenchList({
         ))
       ) : (
         <div className="text-xs text-gray-500 text-center px-5 min-h-20 w-full h-full flex flex-col justify-center items-center">
-          <div>No workbenches found</div>
+          <div>未找到 workbench</div>
           <button type="button" onClick={onCreate} className="mt-4 px-2 py-1.5 rounded-xl bg-black text-white transition font-medium text-sm flex items-center">
             <OWPlusIcon className="size-3" strokeWidth={2.5} />
-            <span className="ml-1 text-xs">New Workbench</span>
+            <span className="ml-1 text-xs">新建 Workbench</span>
           </button>
         </div>
       )}
@@ -3420,32 +3737,32 @@ function CreateFolderDialog({
       <form onSubmit={submit} className="m-auto mx-2 w-[28rem] max-w-full overflow-hidden rounded-[2rem] border border-white bg-white/95 p-5 text-gray-900 shadow-3xl backdrop-blur-sm">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <div className="text-lg font-medium">Add Folder</div>
-            <div className="mt-1 max-w-[20rem] truncate text-xs text-gray-500">To: {targetLabel}</div>
+            <div className="text-lg font-medium">添加文件夹</div>
+            <div className="mt-1 max-w-[20rem] truncate text-xs text-gray-500">目标：{targetLabel}</div>
           </div>
-          <button type="button" onClick={onClose} disabled={loading} className="inline-flex size-8 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50" aria-label="Close">
+          <button type="button" onClick={onClose} disabled={loading} className="inline-flex size-8 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50" aria-label="关闭">
             <OWXMarkIcon className="size-4" />
           </button>
         </div>
 
-        <label className="mb-2 block text-xs text-gray-500">Folder name</label>
+        <label className="mb-2 block text-xs text-gray-500">文件夹名称</label>
         <input
           value={name}
           onChange={(event) => setName(event.target.value)}
           autoFocus
           className="w-full rounded-lg bg-gray-50 px-4 py-2 text-sm outline-none placeholder:text-gray-400"
-          placeholder="New folder"
+          placeholder="新文件夹"
         />
 
         {error ? <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div> : null}
 
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" onClick={onClose} disabled={loading} className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50">
-            Cancel
+            取消
           </button>
           <button type="submit" disabled={loading || !name.trim()} className="inline-flex items-center gap-2 rounded-lg bg-black px-4 py-2 text-sm font-medium text-white transition hover:bg-gray-900 disabled:cursor-not-allowed disabled:opacity-45">
             {loading ? <Loader2 className="size-4 animate-spin" /> : <Folder className="size-4" />}
-            Create
+            创建
           </button>
         </div>
       </form>
@@ -3454,11 +3771,11 @@ function CreateFolderDialog({
 }
 
 const knowledgeTypeItems = [
-  { value: '', label: 'All' },
-  { value: 'uploaded', label: 'Uploaded file' },
-  { value: 'web', label: 'Web source' },
-  { value: 'generated', label: 'Generated' },
-  { value: 'notes', label: 'Notes' }
+  { value: '', label: '全部' },
+  { value: 'uploaded', label: '上传文件' },
+  { value: 'web', label: '网页资料' },
+  { value: 'generated', label: '生成内容' },
+  { value: 'notes', label: '笔记' }
 ];
 
 function KnowledgeTypeSelector({
@@ -3473,7 +3790,7 @@ function KnowledgeTypeSelector({
   const [rect, setRect] = useState<DOMRect | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const selectedLabel = knowledgeTypeItems.find((item) => item.value === value)?.label || 'All';
+  const selectedLabel = knowledgeTypeItems.find((item) => item.value === value)?.label || '全部';
 
   const closeDropdown = React.useCallback(() => {
     if (!open || closing) return;
@@ -3517,7 +3834,7 @@ function KnowledgeTypeSelector({
       <button
         ref={triggerRef}
         type="button"
-        aria-label="Select view"
+        aria-label="选择视图"
         onClick={(event) => {
           event.stopPropagation();
           setRect(event.currentTarget.getBoundingClientRect());
@@ -3587,10 +3904,10 @@ function KnowledgeTypeSelector({
 
 const getKnowledgeTypeGroup = (file: NonNullable<Workspace['fileObjects']>[number]) => {
   const section = getFileSectionLabel(file);
-  if (section === 'Generated') return 'generated';
-  if (section === 'Note') return 'notes';
-  if (section === 'Web source' || section === 'YouTube' || section === 'Bilibili') return 'web';
-  if (section === 'Uploaded file' || section === 'Code' || section === 'Document') return 'uploaded';
+  if (section === '生成内容') return 'generated';
+  if (section === '笔记') return 'notes';
+  if (section === '网页资料' || section === 'YouTube' || section === 'Bilibili') return 'web';
+  if (section === '上传文件' || section === '代码' || section === '文档') return 'uploaded';
   if (file.origin === 'upload') return 'uploaded';
   if (file.origin === 'web') return 'web';
   return '';
@@ -3604,7 +3921,8 @@ function FilesPanel({
   onOpenFile,
   onChanged,
   currentFolderId,
-  onCurrentFolderChange
+  onCurrentFolderChange,
+  onRenameFolder
 }: {
   workspaceId: string;
   files: NonNullable<Workspace['fileObjects']>;
@@ -3614,6 +3932,7 @@ function FilesPanel({
   onChanged: () => Promise<void>;
   currentFolderId: string | null;
   onCurrentFolderChange: (folderId: string | null) => void;
+  onRenameFolder: (folder: FileSystemObject) => void;
 }) {
   const [query, setQuery] = useState('');
   const [knowledgeType, setKnowledgeType] = useState('');
@@ -3943,15 +4262,20 @@ function FilesPanel({
     onOpenFile(item.id);
   };
 
-  const exportFile = (fileId: string) => {
+  const exportItem = (fileId: string) => {
     window.open(fileSystemApi.downloadUrl(workspaceId, fileId), '_blank', 'noopener,noreferrer');
     setOpenMenuFileId(null);
   };
 
-  const deleteFile = async (fileId: string) => {
+  const deleteItem = async (fileId: string) => {
     setOpenMenuFileId(null);
     await fileSystemApi.remove(workspaceId, fileId);
     await onChanged();
+  };
+
+  const renameFolder = (folder: NonNullable<Workspace['fileObjects']>[number]) => {
+    setOpenMenuFileId(null);
+    onRenameFolder(folder);
   };
 
   const indexFile = async (fileId: string, force = false) => {
@@ -3968,11 +4292,11 @@ function FilesPanel({
   return (
     <section>
       <WorkspacePanelHeader
-        title="Knowledge"
+        title="知识库"
         count={fileCount}
-        actionLabel="Add Knowledge"
+        actionLabel="添加知识"
         onAction={onAdd}
-        secondaryActionLabel="Add Folder"
+        secondaryActionLabel="添加文件夹"
         onSecondaryAction={onAddFolder}
       />
 
@@ -3986,11 +4310,11 @@ function FilesPanel({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               className="w-full text-sm py-1 rounded-r-xl outline-none bg-transparent"
-              placeholder="Search Knowledge"
+              placeholder="搜索知识库"
             />
             {query ? (
               <div className="self-center pl-1.5 translate-y-[0.5px] rounded-l-xl bg-transparent">
-                <button type="button" onClick={() => setQuery('')} className="p-0.5 rounded-full hover:bg-gray-100 transition" aria-label="Clear search">
+                <button type="button" onClick={() => setQuery('')} className="p-0.5 rounded-full hover:bg-gray-100 transition" aria-label="清空搜索">
                   <OWXMarkIcon className="size-3" />
                 </button>
               </div>
@@ -4029,10 +4353,10 @@ function FilesPanel({
               setQuery('');
             }}
             className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 font-medium transition hover:bg-gray-50 ${isActiveValidDropTarget && dropTargetFolderId === null ? 'bg-gray-100 text-gray-950 ring-1 ring-gray-300 shadow-sm' : currentFolderId ? 'text-gray-600' : 'bg-gray-50 text-gray-900'}`}
-            aria-label="Open Knowledge root"
+            aria-label="打开知识库根目录"
           >
             <Home className="size-3.5" />
-            Knowledge
+            知识库
           </button>
           {folderCrumbs.map((folder) => (
             <React.Fragment key={folder.id}>
@@ -4060,7 +4384,7 @@ function FilesPanel({
             </React.Fragment>
           ))}
           <span className="ml-auto shrink-0 text-gray-400">
-            {query.trim() ? `${visibleItems.length} results` : `${visibleItems.length} items`}
+            {query.trim() ? `${visibleItems.length} 个结果` : `${visibleItems.length} 个项目`}
           </span>
         </div>
 
@@ -4080,7 +4404,7 @@ function FilesPanel({
               const isDragging = draggingItemId === file.id;
               const isMoving = movingItemId === file.id;
               const isFolderDropTarget = isFolder && dropTargetActive && dropTargetFolderId === file.id && draggingItemId;
-              const section = isFolder ? 'Folder' : getFileSectionLabel(file);
+              const section = isFolder ? '文件夹' : getFileSectionLabel(file);
               const coverUrl = isFolder ? undefined : getFileCoverUrl(file);
               const faviconUrl = isFolder ? undefined : getFileFaviconUrl(file);
               const displayName = isFolder ? file.name : getFileDisplayName(file);
@@ -4143,14 +4467,14 @@ function FilesPanel({
                         </div>
 
                         <div className="hidden min-w-0 items-center justify-end gap-2 text-xs text-gray-500 whitespace-nowrap sm:flex">
-                          <div className="whitespace-nowrap">{isFolder ? `${folderItemCount} items` : file.origin || file.resourceType || file.fileCategory || '-'}</div>
+                          <div className="whitespace-nowrap">{isFolder ? `${folderItemCount} 个项目` : file.origin || file.resourceType || file.fileCategory || '-'}</div>
                           <div className="whitespace-nowrap">{formatRelative(file.updatedAt)}</div>
-                          <div className="whitespace-nowrap">{isFolder ? 'Folder' : formatFileSize(file.size)}</div>
+                          <div className="whitespace-nowrap">{isFolder ? '文件夹' : formatFileSize(file.size)}</div>
                         </div>
                       </div>
                     </div>
                   </div>
-                  {!isFolder ? <button
+                  <button
                     data-resource-menu={file.id}
                     type="button"
                     onPointerDown={(event) => event.stopPropagation()}
@@ -4167,11 +4491,11 @@ function FilesPanel({
                       setOpenMenuFileId(openMenuFileId === file.id ? null : file.id);
                     }}
                     className="absolute right-2 top-2 flex self-center w-fit text-sm p-1.5 text-gray-700 hover:bg-black/5 rounded-xl"
-                    aria-label="More Options"
+                    aria-label="更多选项"
                   >
                     <OWEllipsisHorizontalIcon className="size-5" />
-                  </button> : null}
-                  {!isFolder && openMenuFileId === file.id && indexStatus ? createPortal(
+                  </button>
+                  {openMenuFileId === file.id ? createPortal(
                     <div
                       className="workspace-card-menu z-[9999] min-w-[170px] rounded-2xl px-1 py-1 text-sm text-gray-900"
                       style={getMenuPositionStyle(menuRect, 170)}
@@ -4180,40 +4504,50 @@ function FilesPanel({
                       onClick={(event) => event.stopPropagation()}
                       onKeyDown={(event) => event.stopPropagation()}
                     >
-                      <div
-                        className="flex w-full select-none items-start gap-2 rounded-xl px-3 py-2 text-left"
-                        title={indexStatus.detail}
-                      >
-                        <BookOpen className="mt-0.5 size-4 shrink-0 text-gray-500" />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span>Status</span>
-                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${knowledgeIndexToneClass(indexStatus.tone)}`}>
-                              {indexStatus.label}
-                            </span>
+                      {!isFolder && indexStatus ? (
+                        <>
+                          <div
+                            className="flex w-full select-none items-start gap-2 rounded-xl px-3 py-2 text-left"
+                            title={indexStatus.detail}
+                          >
+                            <BookOpen className="mt-0.5 size-4 shrink-0 text-gray-500" />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span>状态</span>
+                                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${knowledgeIndexToneClass(indexStatus.tone)}`}>
+                                  {indexStatus.label}
+                                </span>
+                              </div>
+                              <div className="mt-0.5 line-clamp-2 text-xs text-gray-500">{indexStatus.detail}</div>
+                            </div>
                           </div>
-                          <div className="mt-0.5 line-clamp-2 text-xs text-gray-500">{indexStatus.detail}</div>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={indexingFileId === file.id}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void indexFile(file.id, indexStatus.chunkCount > 0);
-                        }}
-                        className="workspace-card-menu-item flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left disabled:cursor-wait disabled:opacity-60"
-                      >
-                        {indexingFileId === file.id ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                        {indexStatus.chunkCount > 0 ? 'Re-index' : 'Index now'}
-                      </button>
-                      <button type="button" onClick={() => exportFile(file.id)} className="workspace-card-menu-item flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left">
+                          <button
+                            type="button"
+                            disabled={indexingFileId === file.id}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void indexFile(file.id, indexStatus.chunkCount > 0);
+                            }}
+                            className="workspace-card-menu-item flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left disabled:cursor-wait disabled:opacity-60"
+                          >
+                            {indexingFileId === file.id ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                            {indexStatus.chunkCount > 0 ? '重新索引' : '立即索引'}
+                          </button>
+                        </>
+                      ) : null}
+                      {isFolder ? (
+                        <button type="button" onClick={() => renameFolder(file)} className="workspace-card-menu-item flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left">
+                          <OWPencilSquareIcon className="size-4" />
+                          重命名
+                        </button>
+                      ) : null}
+                      <button type="button" onClick={() => exportItem(file.id)} className="workspace-card-menu-item flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left">
                         <OWDownloadIcon className="size-4" />
-                        Export
+                        导出
                       </button>
-                      <button type="button" onClick={() => void deleteFile(file.id)} className="workspace-card-menu-item workspace-card-menu-danger flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left">
+                      <button type="button" onClick={() => void deleteItem(file.id)} className="workspace-card-menu-item workspace-card-menu-danger flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left">
                         <OWGarbageBinIcon className="size-4" />
-                        Delete
+                        删除
                       </button>
                     </div>,
                     document.body
@@ -4235,9 +4569,9 @@ function FilesPanel({
           >
             <div className="max-w-md text-center">
               <div className="text-3xl mb-3">😕</div>
-              <div className="text-lg font-medium mb-1">{query.trim() ? 'No knowledge found' : currentFolder ? 'This folder is empty' : 'No knowledge yet'}</div>
+              <div className="text-lg font-medium mb-1">{query.trim() ? '未找到知识' : currentFolder ? '此文件夹为空' : '暂无知识'}</div>
               <div className="text-gray-500 text-center text-xs">
-                {query.trim() ? 'Try adjusting your search to find what you are looking for.' : currentFolder ? 'Add files here or return to Knowledge.' : 'Upload knowledge, add web sources, or paste text into this workspace.'}
+                {query.trim() ? '尝试调整搜索条件。' : currentFolder ? '在这里添加文件，或返回知识库。' : '上传知识、添加网页资料，或粘贴文本到此 workspace。'}
               </div>
             </div>
           </div>
@@ -4278,12 +4612,12 @@ function ToolsPanel({
 }) {
   return (
     <section>
-      <h1 className="text-4xl font-semibold tracking-normal text-[#34373c]">Tools</h1>
+      <h1 className="text-4xl font-semibold tracking-normal text-[#34373c]">工具</h1>
       <div className="mt-8 grid gap-4 md:grid-cols-3">
         {[
           { label: 'Workbenches', value: workbenchCount, icon: LayoutDashboard },
-          { label: 'Knowledge', value: sourceCount, icon: LibraryBig },
-          { label: 'Updated', value: formatDate(workspace.updatedAt), icon: Sparkles }
+          { label: '知识', value: sourceCount, icon: LibraryBig },
+          { label: '更新时间', value: formatDate(workspace.updatedAt), icon: Sparkles }
         ].map((item) => {
           const Icon = item.icon;
           return (
@@ -4298,11 +4632,11 @@ function ToolsPanel({
       <div className="mt-6 flex flex-wrap gap-3">
         <button type="button" onClick={onCreateWorkbench} className="inline-flex h-10 items-center gap-2 rounded-full bg-[#202124] px-4 text-sm font-semibold text-white hover:bg-black">
           <Plus className="h-4 w-4" />
-          New Workbench
+          新建 Workbench
         </button>
         <button type="button" onClick={onAddKnowledge} className="inline-flex h-10 items-center gap-2 rounded-full bg-[#f5f5f4] px-4 text-sm font-semibold text-[#34373c] hover:bg-[#eeeeeb]">
           <Upload className="h-4 w-4" />
-          Add Knowledge
+          添加知识
         </button>
       </div>
     </section>
@@ -4397,7 +4731,7 @@ function WorkspaceTerminalFolderChat({
               <button
                 type="button"
                 className="flex size-11 shrink-0 items-center justify-center rounded-full bg-gray-50 text-gray-800 transition hover:bg-gray-100"
-                title="Workspace chat folder"
+                title="Workspace 对话文件夹"
               >
                 <Folder className="size-4.5" strokeWidth={2} />
               </button>
@@ -4405,13 +4739,6 @@ function WorkspaceTerminalFolderChat({
                 {workspaceName}
               </h1>
             </div>
-            <button
-              type="button"
-              className="flex shrink-0 translate-x-2.5 items-center justify-center rounded-full p-1.5 text-gray-700 transition hover:bg-gray-100"
-              title="Folder options"
-            >
-              <MoreHorizontal className="size-4" strokeWidth={2.5} />
-            </button>
           </div>
 
           <div className="w-full py-3 text-base font-normal">
@@ -4419,7 +4746,7 @@ function WorkspaceTerminalFolderChat({
               value={prompt}
               onValueChange={setPrompt}
               onSubmit={submitPrompt}
-              placeholder="How can I help you today?"
+              placeholder="今天想做些什么？"
               mode={mode}
               onModeChange={setMode}
               selectedSources={selectedSources}
@@ -4437,7 +4764,7 @@ function WorkspaceTerminalFolderChat({
                 className="basis-3/5 cursor-pointer select-none px-1.5 py-1 text-left"
               >
                 <span className="flex items-center gap-1.5">
-                  Title
+                  标题
                   <SortIcon active={orderBy === 'title'} />
                 </span>
               </button>
@@ -4447,7 +4774,7 @@ function WorkspaceTerminalFolderChat({
                 className="hidden basis-2/5 cursor-pointer select-none justify-end px-1.5 py-1 text-right sm:flex"
               >
                 <span className="flex items-center gap-1.5">
-                  Updated at
+                  更新时间
                   <SortIcon active={orderBy === 'updatedAt'} />
                 </span>
               </button>
@@ -4468,7 +4795,7 @@ function WorkspaceTerminalFolderChat({
                         className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition hover:bg-gray-50"
                       >
                         <span className="line-clamp-1 w-full min-w-0 text-ellipsis text-left sm:basis-3/5">
-                          {chat.title || 'New Chat'}
+                          {chat.title || '新对话'}
                         </span>
                         <span className="hidden basis-2/5 items-center justify-end sm:flex">
                           <span className="text-xs text-gray-500">{formatCalendarDate(chat.updatedAt)}</span>
@@ -4480,7 +4807,7 @@ function WorkspaceTerminalFolderChat({
               </div>
             ) : (
               <div className="flex min-h-20 items-center justify-center px-5 text-center text-xs text-gray-500">
-                No chats found
+                暂无对话
               </div>
             )}
 
@@ -4489,7 +4816,7 @@ function WorkspaceTerminalFolderChat({
               onClick={onNewChat}
               className="mt-2 rounded-lg px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 hover:text-gray-900"
             >
-              New Chat
+              新建对话
             </button>
           </div>
         </div>
@@ -4503,10 +4830,10 @@ function EmptyWorkspaceState({ onCreate }: { onCreate: () => void }) {
     <div className="flex h-full items-center justify-center px-6">
       <div className="max-w-md text-center">
         <BookOpen className="mx-auto h-10 w-10 text-[#96999d]" />
-        <h1 className="mt-5 text-2xl font-semibold text-[#34373c]">Create your first workspace</h1>
-        <p className="mt-2 text-sm leading-6 text-[#777b80]">A workspace organizes course context, knowledge, resources, and workbenches.</p>
+        <h1 className="mt-5 text-2xl font-semibold text-[#34373c]">创建你的第一个 workspace</h1>
+        <p className="mt-2 text-sm leading-6 text-[#777b80]">Workspace 用来组织课程上下文、知识、资源和 workbench。</p>
         <button type="button" onClick={onCreate} className="mt-6 h-10 rounded-full bg-[#202124] px-5 text-sm font-semibold text-white hover:bg-black">
-          New Workspace
+          新建 Workspace
         </button>
       </div>
     </div>
@@ -4568,15 +4895,10 @@ function WorkbenchSidebarItem({
   workspaceName,
   workspaces,
   isPinned,
-  isEditing,
-  editingTitle,
   emoji,
   onOpen,
   onOpenMenu,
   onStartRename,
-  onSubmitRename,
-  onCancelRename,
-  onRenameChange,
   onTogglePin,
   onClone,
   onMove,
@@ -4588,15 +4910,10 @@ function WorkbenchSidebarItem({
   workspaceName: string;
   workspaces: Workspace[];
   isPinned: boolean;
-  isEditing: boolean;
-  editingTitle: string;
   emoji: string;
   onOpen: () => void;
   onOpenMenu: () => void;
   onStartRename: () => void;
-  onSubmitRename: () => void;
-  onCancelRename: () => void;
-  onRenameChange: (value: string) => void;
   onTogglePin: () => void;
   onClone: () => void;
   onMove: (workspaceId: string) => void;
@@ -4615,43 +4932,20 @@ function WorkbenchSidebarItem({
 
   return (
     <div className="group/workbench relative" data-workbench-menu={menuKey}>
-      {isEditing ? (
-        <div
-          id="sidebar-chat-item"
-          className="relative flex w-full justify-between rounded-xl bg-gray-100 px-[11px] py-[6px] whitespace-nowrap text-ellipsis selected"
-        >
-          <input
-            autoFocus
-            value={editingTitle}
-            onFocus={(event) => event.currentTarget.select()}
-            onChange={(event) => onRenameChange(event.target.value)}
-            onBlur={onSubmitRename}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') onSubmitRename();
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                onCancelRename();
-              }
-            }}
-            className="bg-transparent w-full outline-none mr-10"
-          />
-        </div>
-      ) : (
-        <button
-          id="sidebar-chat-item"
-          type="button"
-          onClick={onOpen}
-          className="group relative flex w-full justify-between rounded-xl px-[11px] py-[6px] text-left whitespace-nowrap text-ellipsis transition hover:bg-gray-100"
-        >
-          <span className="flex w-full min-w-0 flex-1 self-center">
-            <span dir="auto" className="flex w-full items-center gap-1.5 overflow-hidden truncate text-left self-center text-gray-900 h-[20px]">
-              <span className="shrink-0 text-[13px] leading-none">{emoji}</span>
-              <span className="min-w-0 truncate">{workbench.title}</span>
-            </span>
-            <span className="ml-2 shrink-0 self-center text-[10px] text-gray-400 group-hover:hidden">{formatRelative(workbench.updatedAt)}</span>
+      <button
+        id="sidebar-chat-item"
+        type="button"
+        onClick={onOpen}
+        className="group relative flex w-full justify-between rounded-xl px-[11px] py-[6px] text-left whitespace-nowrap text-ellipsis transition hover:bg-gray-100"
+      >
+        <span className="flex w-full min-w-0 flex-1 self-center">
+          <span dir="auto" className="flex w-full items-center gap-1.5 overflow-hidden truncate text-left self-center text-gray-900 h-[20px]">
+            <span className="shrink-0 text-[13px] leading-none">{emoji}</span>
+            <span className="min-w-0 truncate">{workbench.title}</span>
           </span>
-        </button>
-      )}
+          <span className="ml-2 shrink-0 self-center text-[10px] text-gray-400 group-hover:hidden">{formatRelative(workbench.updatedAt)}</span>
+        </span>
+      </button>
 
       <button
         ref={menuButtonRef}
@@ -4662,7 +4956,7 @@ function WorkbenchSidebarItem({
           onOpenMenu();
         }}
         className={`absolute right-1 top-[4px] z-10 mr-1.5 flex items-center self-center bg-gradient-to-l from-gray-100 from-80% to-transparent py-1 pl-5 pr-0.5 text-gray-500 transition ${openMenu ? 'visible' : 'invisible group-hover/workbench:visible'}`}
-        aria-label="Workbench menu"
+        aria-label="Workbench 菜单"
       >
         <span className="self-center transition">
           <OWEllipsisHorizontalIcon className="size-4" strokeWidth={2.5} />
@@ -4677,15 +4971,15 @@ function WorkbenchSidebarItem({
         >
           <button type="button" onClick={onStartRename} className="workspace-card-menu-item flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-left">
             <OWPencilIcon className="size-4" />
-            Rename
+            重命名
           </button>
           <button type="button" onClick={onTogglePin} className="workspace-card-menu-item flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-left">
             {isPinned ? <OWBookmarkSlashIcon className="size-4" /> : <OWBookmarkIcon className="size-4" />}
-            {isPinned ? 'Unpin' : 'Pin'}
+            {isPinned ? '取消置顶' : '置顶'}
           </button>
           <button type="button" onClick={onClone} className="workspace-card-menu-item flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-left">
             <OWDocumentDuplicateIcon className="size-4" />
-            Clone
+            复制
           </button>
           <div
             className="relative"
@@ -4694,7 +4988,7 @@ function WorkbenchSidebarItem({
           >
             <button type="button" className="workspace-card-menu-item flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-left">
               <OWFolderOpenIcon className="size-4" />
-              <span className="flex flex-1 items-center">Move</span>
+              <span className="flex flex-1 items-center">移动</span>
             </button>
             {moveSubmenuOpen ? (
               <div className="absolute left-full top-0 z-[10000] pl-2">
@@ -4717,7 +5011,7 @@ function WorkbenchSidebarItem({
           </div>
           <button type="button" onClick={onDelete} className="workspace-card-menu-danger workspace-card-menu-item flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-left">
             <OWGarbageBinIcon className="size-4" />
-            Delete
+            删除
           </button>
         </div>,
         document.body
@@ -4953,183 +5247,6 @@ function OWXMarkIcon({ className = 'size-3.5' }: { className?: string }) {
   );
 }
 
-function CreateWorkbenchModal({
-  isOpen,
-  loading,
-  error,
-  workspaceName,
-  resources,
-  onClose,
-  onSubmit
-}: {
-  isOpen: boolean;
-  loading: boolean;
-  error: string | null;
-  workspaceName: string;
-  resources: NonNullable<Workspace['fileObjects']>;
-  onClose: () => void;
-  onSubmit: (payload: { title: string; description: string; resourceIds: string[] }) => void;
-}) {
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [query, setQuery] = useState('');
-  const [selectedResourceIds, setSelectedResourceIds] = useState<Set<string>>(() => new Set());
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setTitle('');
-    setDescription('');
-    setQuery('');
-    setSelectedResourceIds(new Set());
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
-  const normalizedQuery = query.trim().toLowerCase();
-  const sortedResources = [...resources].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  const visibleResources = sortedResources.filter((resource) => {
-    if (!normalizedQuery) return true;
-    return [resource.name, resource.path, resource.origin, resource.resourceType, resource.fileCategory]
-      .filter(Boolean)
-      .some((item) => String(item).toLowerCase().includes(normalizedQuery));
-  });
-
-  const toggleResource = (resourceId: string) => {
-    setSelectedResourceIds((current) => {
-      const next = new Set(current);
-      if (next.has(resourceId)) {
-        next.delete(resourceId);
-      } else {
-        next.add(resourceId);
-      }
-      return next;
-    });
-  };
-
-  const submit = (event: React.FormEvent) => {
-    event.preventDefault();
-    const trimmedTitle = title.trim();
-    const trimmedDescription = description.trim();
-    if (!trimmedTitle || !trimmedDescription || loading) return;
-    onSubmit({
-      title: trimmedTitle,
-      description: trimmedDescription,
-      resourceIds: [...selectedResourceIds]
-    });
-  };
-
-  return (
-    <div className="w-full max-h-full">
-        <button type="button" onClick={onClose} disabled={loading} className="flex w-fit space-x-1 text-gray-700 transition hover:text-black disabled:opacity-50">
-          <div className="self-center">
-            <OWArrowLeftIcon className="size-4" />
-          </div>
-          <div className="self-center text-sm font-medium">Back</div>
-        </button>
-
-        <form className="mx-auto mb-10 mt-10 flex w-full max-w-lg flex-col" onSubmit={submit}>
-          <div className="flex w-full flex-col justify-center">
-            <div className="mb-2.5 font-primary text-2xl font-medium text-gray-700">Create a workbench</div>
-
-            <div className="flex w-full flex-col gap-2.5">
-              <div className="w-full">
-                <div className="mb-2 text-sm text-gray-700">What are you working on?</div>
-                <div className="mt-1 w-full">
-                  <input
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                    className="w-full rounded-lg bg-gray-50 px-4 py-2 text-sm outline-none placeholder:text-gray-400"
-                    type="text"
-                    placeholder="Name your workbench"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-2 text-sm text-gray-700">What are you trying to achieve?</div>
-                <div className="mt-1 w-full">
-                  <textarea
-                    value={description}
-                    onChange={(event) => setDescription(event.target.value)}
-                    className="w-full resize-none rounded-lg bg-gray-50 px-4 py-2 text-sm outline-none placeholder:text-gray-400"
-                    rows={4}
-                    placeholder="Describe your workbench and objectives"
-                    required
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-5">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="text-sm font-medium text-gray-500">Access List</div>
-              <div className="text-xs font-medium text-gray-400">{selectedResourceIds.size} selected from {workspaceName}</div>
-            </div>
-
-            <div className="rounded-2xl bg-gray-50 px-3 py-2">
-              <div className="flex items-center gap-2 border-b border-gray-100 pb-2">
-                <OWSearchIcon className="size-3.5 text-gray-500" />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  className="w-full bg-transparent py-1 text-sm outline-none placeholder:text-gray-400"
-                  placeholder="Search workspace knowledge"
-                />
-              </div>
-
-              <div className="max-h-56 overflow-y-auto py-2">
-                {visibleResources.length ? (
-                  visibleResources.map((resource) => {
-                    const selected = selectedResourceIds.has(resource.id);
-                    return (
-                      <button
-                        key={resource.id}
-                        type="button"
-                        onClick={() => toggleResource(resource.id)}
-                        className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition hover:bg-gray-100"
-                      >
-                        <span className={`flex size-4 shrink-0 items-center justify-center rounded border transition ${selected ? 'border-black bg-black text-white' : 'border-gray-300 bg-white text-transparent'}`}>
-                          <OWCheckIcon className="size-3" />
-                        </span>
-                        <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-white text-gray-500">
-                          {resource.origin === 'web' ? <Globe2 className="size-4" /> : <FileText className="size-4" />}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-gray-700">{resource.name}</span>
-                          <span className="block truncate text-xs text-gray-400">{resource.path}</span>
-                        </span>
-                        <span className="hidden shrink-0 text-xs text-gray-400 sm:block">{resource.resourceType || resource.fileCategory || 'file'}</span>
-                      </button>
-                    );
-                  })
-                ) : (
-                  <div className="flex min-h-20 items-center justify-center text-center text-xs text-gray-400">
-                    {query.trim() ? 'No workspace knowledge found.' : 'No workspace knowledge yet.'}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {error ? <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div> : null}
-
-          <div className="mt-4 flex justify-end">
-            <button
-              className={`flex rounded-lg px-4 py-2 text-sm transition ${loading ? 'cursor-not-allowed bg-gray-100 text-gray-500' : 'bg-gray-50 text-gray-700 hover:bg-gray-100'}`}
-              type="submit"
-              disabled={loading || !title.trim() || !description.trim()}
-            >
-              <div className="self-center font-medium">Create Workbench</div>
-              {loading ? <Loader2 className="ml-1.5 size-4 animate-spin self-center" /> : null}
-            </button>
-          </div>
-        </form>
-    </div>
-  );
-}
-
 function CreateWorkspaceModal({
   isOpen,
   loading,
@@ -5250,12 +5367,12 @@ function CreateWorkspaceModal({
         Object.fromEntries(response.results.slice(0, 5).map((source) => [source.id, true]))
       );
       if (response.results.length === 0) {
-        setDiscoveryError('No sources found. Try a more specific topic or keywords.');
+        setDiscoveryError('未找到来源。请尝试更具体的主题或关键词。');
       }
     } catch (searchError: any) {
       setDiscoveredSources([]);
       setSelectedSourceIds({});
-      setDiscoveryError(searchError?.response?.data?.error || searchError?.message || 'Source discovery failed');
+      setDiscoveryError(searchError?.response?.data?.error || searchError?.message || '来源检索失败');
     } finally {
       setIsDiscovering(false);
     }
@@ -5291,9 +5408,9 @@ function CreateWorkspaceModal({
   };
 
   const knowledgeSummary = [
-    draft.files.length ? `${draft.files.length} files` : null,
+    draft.files.length ? `${draft.files.length} 个文件` : null,
     draft.urls.length ? `${draft.urls.length} URLs` : null,
-    draft.texts.length ? `${draft.texts.length} text sources` : null
+    draft.texts.length ? `${draft.texts.length} 个文本来源` : null
   ].filter(Boolean).join(' · ');
 
   return (
@@ -5314,7 +5431,7 @@ function CreateWorkspaceModal({
         className="m-auto flex max-h-[min(820px,calc(100vh-24px))] min-h-fit w-full max-w-[42rem] flex-col overflow-hidden rounded-[32px] border border-white bg-white/95 shadow-[0_24px_90px_rgba(0,0,0,0.24)] backdrop-blur-sm animate-[openwebui-scale-up_100ms_ease-out_forwards]"
       >
         <div className="flex justify-between px-5 pb-1 pt-4 text-gray-900">
-          <h2 className="self-center text-lg font-medium">{isEditMode ? 'Edit Workspace' : 'Create Workspace'}</h2>
+          <h2 className="self-center text-lg font-medium">{isEditMode ? '编辑 Workspace' : '创建 Workspace'}</h2>
           <button type="button" onClick={onClose} disabled={loading} className="self-center rounded-xl p-1 text-gray-700 hover:bg-gray-100 disabled:opacity-50">
             <OWXMarkIcon className="size-5" />
           </button>
@@ -5324,22 +5441,22 @@ function CreateWorkspaceModal({
           <div className="flex w-full flex-col">
             <div className="space-y-3">
               <label className="block">
-                <span className="mb-1 block text-xs text-gray-500">Workspace Name</span>
+                <span className="mb-1 block text-xs text-gray-500">Workspace 名称</span>
                 <input
                   value={draft.name}
                   onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
-                  placeholder="Enter workspace name"
+                  placeholder="输入 workspace 名称"
                   autoFocus
                   className="w-full bg-transparent text-sm outline-none placeholder:text-gray-300"
                 />
               </label>
 
               <label className="block">
-                <span className="mb-2 block text-xs text-gray-500">Workspace Background</span>
+                <span className="mb-2 block text-xs text-gray-500">Workspace 背景</span>
                 <textarea
                   value={draft.background}
                   onChange={(event) => setDraft((current) => ({ ...current, background: event.target.value }))}
-                  placeholder="Describe the background, goals, constraints, and standing context for this course or project."
+                  placeholder="描述这个课程或项目的背景、目标、约束和长期上下文。"
                   rows={1}
                   style={{ fieldSizing: 'content', maxHeight: 200 } as React.CSSProperties}
                   className="text-sm w-full bg-transparent outline-none placeholder:text-gray-300"
@@ -5349,11 +5466,11 @@ function CreateWorkspaceModal({
               <hr className="my-2.5 w-full border-gray-50" />
 
               <label className="block">
-                <span className="mb-2 block text-xs text-gray-500">System Prompt</span>
+                <span className="mb-2 block text-xs text-gray-500">系统提示词</span>
                 <textarea
                   value={draft.systemPrompt}
                   onChange={(event) => setDraft((current) => ({ ...current, systemPrompt: event.target.value }))}
-                  placeholder="Write your model system prompt content here&#10;e.g.) You are Mario from Super Mario Bros, acting as an assistant."
+                  placeholder="在这里编写模型系统提示词&#10;例如：你是一位耐心的课程助教。"
                   rows={1}
                   style={{ fieldSizing: 'content', maxHeight: 200 } as React.CSSProperties}
                   className="text-sm w-full bg-transparent outline-none placeholder:text-gray-300"
@@ -5364,7 +5481,7 @@ function CreateWorkspaceModal({
             {!isEditMode ? <div className="my-2">
               <div className="mb-2">
                 <div className="flex w-full justify-between mb-1">
-                  <div className="self-center text-xs font-medium text-gray-500">Knowledge</div>
+                  <div className="self-center text-xs font-medium text-gray-500">知识</div>
                 </div>
               </div>
               <div className="flex flex-col mb-1">
@@ -5374,7 +5491,7 @@ function CreateWorkspaceModal({
                       <CreateWorkspaceKnowledgeItem
                         key={`${draft.fileRelativePaths[index] || file.name}-${file.size}-${file.lastModified}-${index}`}
                         name={draft.fileRelativePaths[index] || file.name}
-                        type="File"
+                        type="文件"
                         size={file.size}
                         onRemove={() =>
                           setDraft((current) => ({
@@ -5389,7 +5506,7 @@ function CreateWorkspaceModal({
                       <CreateWorkspaceKnowledgeItem
                         key={source.id}
                         name={source.title || makeTitleFromUrl(source.url)}
-                        type="Web source"
+                        type="网页资料"
                         onRemove={() =>
                           setDraft((current) => ({
                             ...current,
@@ -5401,8 +5518,8 @@ function CreateWorkspaceModal({
                     {draft.texts.map((source) => (
                       <CreateWorkspaceKnowledgeItem
                         key={source.id}
-                        name={source.title || 'Pasted source'}
-                        type="Text"
+                        name={source.title || '粘贴文本'}
+                        type="文本"
                         onRemove={() =>
                           setDraft((current) => ({
                             ...current,
@@ -5452,14 +5569,14 @@ function CreateWorkspaceModal({
                   }}
                 />
                 <div className="flex flex-wrap flex-row text-sm gap-1">
-                  <KnowledgePill onClick={() => fileInputRef.current?.click()} icon={<OWArrowUpCircleIcon className="size-4" />} label="Upload Files" />
-                  <KnowledgePill onClick={() => folderInputRef.current?.click()} icon={<Folder className="size-4" />} label="Upload Folder" />
-                  <KnowledgePill onClick={() => setKnowledgeDialog('web')} icon={<OWSearchIcon className="size-4" />} label="Search Web" />
-                  <KnowledgePill onClick={() => setKnowledgeDialog('url')} icon={<OWGlobeAltIcon className="size-4" />} label="Paste URL" />
-                  <KnowledgePill onClick={() => setKnowledgeDialog('text')} icon={<OWBarsArrowUpIcon className="size-4" />} label="Paste Text" />
+                  <KnowledgePill onClick={() => fileInputRef.current?.click()} icon={<OWArrowUpCircleIcon className="size-4" />} label="上传文件" />
+                  <KnowledgePill onClick={() => folderInputRef.current?.click()} icon={<Folder className="size-4" />} label="上传文件夹" />
+                  <KnowledgePill onClick={() => setKnowledgeDialog('web')} icon={<OWSearchIcon className="size-4" />} label="搜索网页" />
+                  <KnowledgePill onClick={() => setKnowledgeDialog('url')} icon={<OWGlobeAltIcon className="size-4" />} label="粘贴 URL" />
+                  <KnowledgePill onClick={() => setKnowledgeDialog('text')} icon={<OWBarsArrowUpIcon className="size-4" />} label="粘贴文本" />
                 </div>
                 <p className="px-1 pt-2 text-xs leading-5 text-gray-500">
-                  {knowledgeSummary || 'Attach files, web pages, search topics, or pasted notes.'}
+                  {knowledgeSummary || '添加文件、网页、搜索主题，或粘贴笔记。'}
                 </p>
               </div>
             </div> : null}
@@ -5469,10 +5586,10 @@ function CreateWorkspaceModal({
 
         <div className="flex justify-end gap-1.5 px-5 pb-4 pt-3 text-sm font-medium">
           <button type="button" onClick={onClose} disabled={loading} className="h-9 rounded-full px-3.5 text-sm font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50">
-            Cancel
+            取消
           </button>
           <button type="submit" disabled={!draft.name.trim() || loading} className="inline-flex h-9 items-center gap-2 rounded-full bg-black px-3.5 text-sm font-medium text-white transition hover:bg-gray-950 disabled:cursor-not-allowed disabled:opacity-50">
-            {isEditMode ? 'Update' : 'Save'}
+            {isEditMode ? '更新' : '保存'}
             {loading ? <Loader2 className="size-4 animate-spin" /> : null}
           </button>
         </div>
@@ -5568,7 +5685,7 @@ function CreateWorkspaceKnowledgeItem({
       <div className=" absolute -top-1 -right-1">
         <button
           type="button"
-          aria-label="Remove File"
+          aria-label="移除文件"
           onClick={(event) => {
             event.stopPropagation();
             onRemove();
@@ -5635,7 +5752,7 @@ function KnowledgeSourceDialog({
 }) {
   if (!type) return null;
 
-  const title = type === 'web' ? 'Search Web' : type === 'url' ? 'Paste URL' : 'Paste Text';
+  const title = type === 'web' ? '搜索网页' : type === 'url' ? '粘贴 URL' : '粘贴文本';
   const selectedSources = discoveredSources.filter((source) => selectedSourceIds[source.id]);
 
   return createPortal(
@@ -5660,7 +5777,7 @@ function KnowledgeSourceDialog({
         {type === 'web' ? (
           <div>
             <label className="block">
-              <span className="mb-1 block text-xs text-gray-500">Search topic</span>
+              <span className="mb-1 block text-xs text-gray-500">搜索主题</span>
               <div className="flex items-center gap-2 rounded-2xl bg-gray-50 px-3">
                 <OWSearchIcon className="size-4 shrink-0 text-gray-400" />
                 <input
@@ -5672,7 +5789,7 @@ function KnowledgeSourceDialog({
                       onSearchWeb();
                     }
                   }}
-                  placeholder="Search topic"
+                  placeholder="搜索主题"
                   autoFocus
                   className="h-11 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-gray-300"
                 />
@@ -5683,7 +5800,7 @@ function KnowledgeSourceDialog({
                   className="flex shrink-0 items-center gap-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {isDiscovering ? <Loader2 className="size-3.5 animate-spin" /> : <OWSearchIcon className="size-3.5" />}
-                  Search
+                  搜索
                 </button>
               </div>
             </label>
@@ -5697,14 +5814,14 @@ function KnowledgeSourceDialog({
             {discoveredSources.length ? (
               <div className="mt-4 space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm">{selectedSources.length} selected from {discoveredSources.length} results</p>
+                  <p className="text-sm">已从 {discoveredSources.length} 个结果中选择 {selectedSources.length} 个</p>
                   <button
                     type="button"
                     onClick={onAddSelectedWebSources}
                     disabled={!selectedSources.length}
                     className="rounded-lg bg-gray-50 px-3 py-1.5 text-sm font-medium transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-45"
                   >
-                    Add selected
+                    添加已选
                   </button>
                 </div>
 
@@ -5753,7 +5870,7 @@ function KnowledgeSourceDialog({
 
             <div className="mt-4 flex justify-end gap-1.5">
               <button type="button" onClick={onClose} className="h-9 rounded-full px-3.5 text-sm font-medium text-gray-600 hover:bg-gray-100">
-                Cancel
+                取消
               </button>
             </div>
           </div>
@@ -5772,20 +5889,20 @@ function KnowledgeSourceDialog({
               />
             </label>
             <label className="mt-3 block">
-              <span className="mb-1 block text-xs text-gray-500">Title</span>
+              <span className="mb-1 block text-xs text-gray-500">标题</span>
               <input
                 value={urlTitleDraft}
                 onChange={(event) => onUrlTitleChange(event.target.value)}
-                placeholder="Optional title"
+                placeholder="可选标题"
                 className="h-11 w-full rounded-2xl bg-gray-50 px-3 text-sm outline-none placeholder:text-gray-300"
               />
             </label>
             <div className="mt-4 flex justify-end gap-1.5">
               <button type="button" onClick={onClose} className="h-9 rounded-full px-3.5 text-sm font-medium text-gray-600 hover:bg-gray-100">
-                Cancel
+                取消
               </button>
               <button type="button" onClick={onAddUrl} disabled={!urlDraft.trim()} className="h-9 rounded-full bg-black px-3.5 text-sm font-medium text-white hover:bg-gray-950 disabled:opacity-40">
-                Add URL
+                添加 URL
               </button>
             </div>
           </div>
@@ -5794,7 +5911,7 @@ function KnowledgeSourceDialog({
         {type === 'text' ? (
           <div>
             <label className="block">
-              <span className="mb-1 block text-xs text-gray-500">Title</span>
+              <span className="mb-1 block text-xs text-gray-500">标题</span>
               <input
                 value={textTitleDraft}
                 onChange={(event) => onTextTitleChange(event.target.value)}
@@ -5803,20 +5920,20 @@ function KnowledgeSourceDialog({
               />
             </label>
             <label className="mt-3 block">
-              <span className="mb-1 block text-xs text-gray-500">Text</span>
+              <span className="mb-1 block text-xs text-gray-500">文本</span>
               <textarea
                 value={textContentDraft}
                 onChange={(event) => onTextContentChange(event.target.value)}
-                placeholder="Paste notes or source text"
+                placeholder="粘贴笔记或资料文本"
                 className="min-h-32 w-full resize-none rounded-2xl bg-gray-50 px-3 py-2 text-sm leading-6 outline-none placeholder:text-gray-300"
               />
             </label>
             <div className="mt-4 flex justify-end gap-1.5">
               <button type="button" onClick={onClose} className="h-9 rounded-full px-3.5 text-sm font-medium text-gray-600 hover:bg-gray-100">
-                Cancel
+                取消
               </button>
               <button type="button" onClick={onAddText} disabled={!textContentDraft.trim()} className="h-9 rounded-full bg-black px-3.5 text-sm font-medium text-white hover:bg-gray-950 disabled:opacity-40">
-                Add Text
+                添加文本
               </button>
             </div>
           </div>

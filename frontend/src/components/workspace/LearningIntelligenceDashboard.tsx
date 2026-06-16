@@ -311,12 +311,12 @@ const formatCalendarDate = (value?: string | null) => {
   const time = date.getTime();
 
   if (time >= startOfToday) {
-    return `Today at ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+    return `今天 ${date.toLocaleTimeString('zh-CN', { hour: 'numeric', minute: '2-digit' })}`;
   }
   if (time >= startOfYesterday) {
-    return `Yesterday at ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+    return `昨天 ${date.toLocaleTimeString('zh-CN', { hour: 'numeric', minute: '2-digit' })}`;
   }
-  return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', year: 'numeric' });
 };
 const formatRelative = (value?: string | null) => {
   if (!value) return '';
@@ -326,17 +326,17 @@ const formatRelative = (value?: string | null) => {
   const minute = 60 * 1000;
   const hour = 60 * minute;
   const day = 24 * hour;
-  if (diffMs < minute) return 'now';
-  if (diffMs < hour) return `${Math.floor(diffMs / minute)}m ago`;
-  if (diffMs < day) return `${Math.floor(diffMs / hour)}h ago`;
-  if (diffMs < day * 7) return `${Math.floor(diffMs / day)}d ago`;
-  return `${Math.floor(diffMs / day / 7)}w ago`;
+  if (diffMs < minute) return '刚刚';
+  if (diffMs < hour) return `${Math.floor(diffMs / minute)} 分钟前`;
+  if (diffMs < day) return `${Math.floor(diffMs / hour)} 小时前`;
+  if (diffMs < day * 7) return `${Math.floor(diffMs / day)} 天前`;
+  return `${Math.floor(diffMs / day / 7)} 周前`;
 };
 const getTimeRange = (value?: string | null) => {
-  if (!value) return 'Older';
+  if (!value) return '更早';
   const date = new Date(value);
   const time = date.getTime();
-  if (Number.isNaN(time)) return 'Older';
+  if (Number.isNaN(time)) return '更早';
 
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -344,18 +344,18 @@ const getTimeRange = (value?: string | null) => {
   const startOfWeek = startOfToday - 7 * 24 * 60 * 60 * 1000;
   const startOfMonth = startOfToday - 30 * 24 * 60 * 60 * 1000;
 
-  if (time >= startOfToday) return 'Today';
-  if (time >= startOfYesterday) return 'Yesterday';
-  if (time >= startOfWeek) return 'Previous 7 days';
-  if (time >= startOfMonth) return 'Previous 30 days';
-  return date.toLocaleDateString('en-US', { month: 'long' });
+  if (time >= startOfToday) return '今天';
+  if (time >= startOfYesterday) return '昨天';
+  if (time >= startOfWeek) return '过去 7 天';
+  if (time >= startOfMonth) return '过去 30 天';
+  return date.toLocaleDateString('zh-CN', { month: 'long' });
 };
 const clipText = (value: unknown, max = 110) => {
   const text = String(value || '').trim();
   if (!text) return '';
   return text.length > max ? `${text.slice(0, max)}...` : text;
 };
-type KgSearchGroup = 'Concepts' | 'Sources' | 'Tags' | 'Relations' | 'Misconceptions';
+type KgSearchGroup = '概念' | '来源' | '标签' | '关系' | '误区';
 type KgSearchFacet = 'All' | KgSearchGroup;
 type KgSearchResult = {
   id: string;
@@ -372,7 +372,7 @@ type KgSearchResult = {
   tags: string[];
   score: number;
 };
-const kgSearchFacets: KgSearchFacet[] = ['All', 'Concepts', 'Sources', 'Tags', 'Relations', 'Misconceptions'];
+const kgSearchFacets: KgSearchFacet[] = ['All', '概念', '来源', '标签', '关系', '误区'];
 const kgRecentSearchesStorageKey = 'workspace_kg_recent_searches';
 const normalizeSearchText = (value: unknown) =>
   String(value || '')
@@ -984,14 +984,14 @@ type ProfileVisualNode = {
   statusCounts?: Record<LearnerPortraitEntity['status'], number>;
 };
 const profileDimensionMeta: Record<string, { title: string; detail: string }> = {
-  profileBase: { title: 'Profile Base', detail: '学习目标、当前课程上下文与阶段性关注点。' },
-  knowledgeState: { title: 'Knowledge State', detail: '已掌握、薄弱、前置缺口等知识状态。' },
+  profileBase: { title: '画像基础', detail: '学习目标、当前课程上下文与阶段性关注点。' },
+  knowledgeState: { title: '知识状态', detail: '已掌握、薄弱、前置缺口等知识状态。' },
   preferenceStyle: { title: 'Preference Style', detail: '解释方式、资源形态和练习偏好。' },
   misconceptionState: { title: 'Misconception State', detail: '反复出现的误区、错误模式与纠正线索。' },
   cognitiveState: { title: 'Cognitive State', detail: '认知负荷、提问模式与学习习惯特征。' },
   behaviorEngagement: { title: 'Behavior / Engagement', detail: '近期行为、参与度与使用节奏。' },
   reviewPlanning: { title: 'Review Planning', detail: '复习压力、下一步动作与计划状态。' },
-  savedMemory: { title: 'Saved Memory', detail: '用户可控的长期偏好、背景或明确记住的信息。' }
+  savedMemory: { title: '已保存记忆', detail: '用户可控的长期偏好、背景或明确记住的信息。' }
 };
 const portraitDimensionMeta: Record<PortraitDimension, { title: string; detail: string }> = {
   learningBackground: { title: '学习背景', detail: '专业、课程、历史经验与学习场景。' },
@@ -2082,19 +2082,19 @@ export function KnowledgeGraphWorkbench({
       >
         <canvas ref={rippleCanvasRef} className="pointer-events-none absolute inset-0 z-[1]" />
         <div className="absolute left-3 top-3 z-10 flex flex-wrap items-center gap-0.5 rounded-md border border-[#dfe3e8] bg-white/82 p-1 shadow-sm backdrop-blur">
-          <button type="button" onClick={() => zoomBy(1.16)} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="Zoom in">
+          <button type="button" onClick={() => zoomBy(1.16)} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="放大">
             <ZoomIn className="h-4 w-4" />
           </button>
-          <button type="button" onClick={() => zoomBy(0.86)} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="Zoom out">
+          <button type="button" onClick={() => zoomBy(0.86)} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="缩小">
             <ZoomOut className="h-4 w-4" />
           </button>
-          <button type="button" onClick={fitGraph} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="Fit graph">
+          <button type="button" onClick={fitGraph} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="适应图谱">
             <Maximize2 className="h-4 w-4" />
           </button>
-          <button type="button" onClick={runLayout} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="Run force layout">
+          <button type="button" onClick={runLayout} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="运行力导向布局">
             <RefreshCw className="h-4 w-4" />
           </button>
-          <button type="button" onClick={() => setShowControls((current) => !current)} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="Display controls">
+          <button type="button" onClick={() => setShowControls((current) => !current)} className="rounded p-1.5 text-[#6b7077] hover:bg-[#f4f5f6]" title="显示控制项">
             <SlidersHorizontal className="h-4 w-4" />
           </button>
           <span className="mx-1 h-5 w-px bg-[#e5e7eb]" />
@@ -2105,7 +2105,7 @@ export function KnowledgeGraphWorkbench({
               onClick={() => patchPrefs({ scope: item, localRootId: item === 'local' ? (selectedNodeId || prefs.localRootId) : prefs.localRootId })}
               className={`h-7 rounded px-2 text-xs font-medium ${prefs.scope === item ? 'bg-[#202124] text-white' : 'text-[#6b7077] hover:bg-[#f4f5f6]'}`}
             >
-              {item === 'connected' ? 'Connected' : item === 'local' ? 'Local' : 'All'}
+              {item === 'connected' ? '关联' : item === 'local' ? '局部' : '全部'}
             </button>
           ))}
           <button
@@ -2114,7 +2114,7 @@ export function KnowledgeGraphWorkbench({
             className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs font-medium ${prefs.showNodeLabels ? 'bg-[#202124] text-white' : 'text-[#6b7077] hover:bg-[#f4f5f6]'}`}
           >
             {prefs.showNodeLabels ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-            Nodes
+            节点
           </button>
           <button
             type="button"
@@ -2122,38 +2122,38 @@ export function KnowledgeGraphWorkbench({
             className={`inline-flex h-7 items-center gap-1 rounded px-2 text-xs font-medium ${prefs.showEdgeLabels ? 'bg-[#202124] text-white' : 'text-[#6b7077] hover:bg-[#f4f5f6]'}`}
           >
             <Filter className="h-3.5 w-3.5" />
-            Edges
+            边
           </button>
         </div>
         {showControls ? (
           <div className="absolute right-3 top-3 z-10 w-[286px] rounded-lg border border-[#d8dde4] bg-white/94 p-3 text-xs text-[#4d5864] shadow-sm backdrop-blur">
             <div className="mb-3 flex items-center justify-between">
-              <p className="font-semibold text-[#202124]">Graph controls</p>
-              <button type="button" onClick={resetDisplay} className="rounded-md px-2 py-1 text-[#666a70] hover:bg-[#f1f3f5]">Reset</button>
+              <p className="font-semibold text-[#202124]">图谱控制</p>
+              <button type="button" onClick={resetDisplay} className="rounded-md px-2 py-1 text-[#666a70] hover:bg-[#f1f3f5]">重置</button>
             </div>
             <div className="space-y-3">
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#666a70]"><span>Local depth</span><span>{prefs.localDepth}</span></span>
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>局部深度</span><span>{prefs.localDepth}</span></span>
                 <input type="range" min={1} max={4} value={prefs.localDepth} onChange={(event) => patchPrefs({ localDepth: Number(event.target.value) })} className="w-full accent-[#4386b5]" />
               </label>
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#666a70]"><span>Node size</span><span>{prefs.nodeScale.toFixed(1)}x</span></span>
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>节点大小</span><span>{prefs.nodeScale.toFixed(1)}x</span></span>
                 <input type="range" min={0.7} max={1.6} step={0.1} value={prefs.nodeScale} onChange={(event) => patchPrefs({ nodeScale: Number(event.target.value) })} className="w-full accent-[#4386b5]" />
               </label>
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#666a70]"><span>Link thickness</span><span>{prefs.edgeScale.toFixed(1)}x</span></span>
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>连线粗细</span><span>{prefs.edgeScale.toFixed(1)}x</span></span>
                 <input type="range" min={0.7} max={1.8} step={0.1} value={prefs.edgeScale} onChange={(event) => patchPrefs({ edgeScale: Number(event.target.value) })} className="w-full accent-[#5b8f66]" />
               </label>
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#666a70]"><span>Repel force</span><span>{prefs.repelForce.toFixed(1)}x</span></span>
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>排斥力</span><span>{prefs.repelForce.toFixed(1)}x</span></span>
                 <input type="range" min={0.6} max={2.2} step={0.1} value={prefs.repelForce} onChange={(event) => patchPrefs({ repelForce: Number(event.target.value) })} className="w-full accent-[#7b6fd1]" />
               </label>
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#666a70]"><span>Link distance</span><span>{prefs.linkDistance.toFixed(1)}x</span></span>
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>连线距离</span><span>{prefs.linkDistance.toFixed(1)}x</span></span>
                 <input type="range" min={0.7} max={1.8} step={0.1} value={prefs.linkDistance} onChange={(event) => patchPrefs({ linkDistance: Number(event.target.value) })} className="w-full accent-[#c17b32]" />
               </label>
               <label className="block">
-                <span className="mb-1 flex justify-between text-[#666a70]"><span>Center force</span><span>{prefs.centerForce.toFixed(1)}x</span></span>
+                <span className="mb-1 flex justify-between text-[#666a70]"><span>居中力</span><span>{prefs.centerForce.toFixed(1)}x</span></span>
                 <input type="range" min={0.4} max={1.8} step={0.1} value={prefs.centerForce} onChange={(event) => patchPrefs({ centerForce: Number(event.target.value) })} className="w-full accent-[#c75c5c]" />
               </label>
             </div>
@@ -2161,7 +2161,7 @@ export function KnowledgeGraphWorkbench({
         ) : null}
         {matchedConcepts.length ? (
           <div className="absolute left-3 top-16 z-10 w-[280px] rounded-lg border border-[#d8dde4] bg-white/94 p-2 text-xs text-[#34373c] shadow-sm backdrop-blur">
-            <p className="px-2 pb-1 text-[#666a70]">Search results</p>
+            <p className="px-2 pb-1 text-[#666a70]">搜索结果</p>
             {matchedConcepts.map((concept) => (
               <button key={concept.id} type="button" onClick={() => focusById(concept.id)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-[#f1f3f5]">
                 <Search className="h-3.5 w-3.5 text-[#c9a227]" />
@@ -2174,7 +2174,7 @@ export function KnowledgeGraphWorkbench({
           <div className="absolute bottom-3 right-3 z-10 w-[318px] rounded-lg border border-[#d8dde4] bg-white/94 p-3 text-xs text-[#4d5864] shadow-sm backdrop-blur">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-[#666a70]">Selected concept</p>
+                <p className="text-[#666a70]">已选概念</p>
                 <h3 className="mt-1 truncate text-sm font-semibold text-[#202124]">{selectedConcept.title}</h3>
               </div>
               <button type="button" onClick={() => setSelectedNodeId(null)} className="rounded-md p-1 text-[#666a70] hover:bg-[#f1f3f5]">
@@ -2182,14 +2182,14 @@ export function KnowledgeGraphWorkbench({
               </button>
             </div>
             <div className="mt-3 grid grid-cols-3 gap-2">
-              <div className="rounded-md bg-[#f4f5f6] p-2"><p className="text-[#666a70]">Mastery</p><p className="mt-1 text-[#202124]">{pct(selectedConcept.learnerState?.masteryEstimate)}</p></div>
-              <div className="rounded-md bg-[#f4f5f6] p-2"><p className="text-[#666a70]">Weak</p><p className="mt-1 text-[#202124]">{pct(selectedConcept.learnerState?.weaknessEstimate)}</p></div>
-              <div className="rounded-md bg-[#f4f5f6] p-2"><p className="text-[#666a70]">Ready</p><p className="mt-1 text-[#202124]">{pct(selectedConcept.learnerState?.readinessEstimate)}</p></div>
+              <div className="rounded-md bg-[#f4f5f6] p-2"><p className="text-[#666a70]">掌握</p><p className="mt-1 text-[#202124]">{pct(selectedConcept.learnerState?.masteryEstimate)}</p></div>
+              <div className="rounded-md bg-[#f4f5f6] p-2"><p className="text-[#666a70]">薄弱</p><p className="mt-1 text-[#202124]">{pct(selectedConcept.learnerState?.weaknessEstimate)}</p></div>
+              <div className="rounded-md bg-[#f4f5f6] p-2"><p className="text-[#666a70]">准备度</p><p className="mt-1 text-[#202124]">{pct(selectedConcept.learnerState?.readinessEstimate)}</p></div>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               <button type="button" onClick={() => openLocalGraph(selectedConcept.id)} className="inline-flex h-8 items-center gap-1 rounded-md bg-[#202124] px-2 text-xs font-medium text-white">
                 <LocateFixed className="h-3.5 w-3.5" />
-                Local graph
+                局部图谱
               </button>
               <button type="button" onClick={() => focusById(selectedConcept.id)} className="inline-flex h-8 items-center gap-1 rounded-md bg-[#f1f3f5] px-2 text-xs font-medium text-[#34373c]">
                 <Network className="h-3.5 w-3.5" />
@@ -2230,7 +2230,7 @@ export default function LearningIntelligenceDashboard({
   workbenches = [],
   activeSection,
   hideSectionNav = false,
-  headerTitle = 'Learning Intelligence Dashboard',
+  headerTitle = '学习智能仪表盘',
   headerDescription = '学习状态、知识结构、诊断、计划与画像。',
   onSectionChange,
   onOpenWorkbench,
@@ -3406,14 +3406,14 @@ export default function LearningIntelligenceDashboard({
         ].filter(Boolean).slice(0, 3);
         pushResult({
           id: `concept:${concept.id}`,
-          group: 'Concepts',
+          group: '概念',
           conceptId: concept.id,
           title: concept.title || concept.id,
           subtitle: concept.category || `${relatedEdges.length} relations`,
           matchReason: titleScore ? 'Matched concept title' : descriptionScore ? 'Matched concept description' : categoryScore ? 'Matched category' : semanticScore ? 'Semantic match in concept context' : 'Matched concept evidence',
           explanation: `Best match across title, description, category, tags, sources, evidence, and related concepts.`,
           previewTitle: concept.title || concept.id,
-          previewBody: concept.description || 'No description available for this concept.',
+          previewBody: concept.description || '这个概念暂无描述。',
           previewMeta: [concept.category || 'Concept', `${tags.length} tags`, `${nodeSources.length} sources`, `${relatedEdges.length} relations`],
           snippets,
           tags,
@@ -3426,7 +3426,7 @@ export default function LearningIntelligenceDashboard({
         if (tagMatchScore <= 0.45) return;
         pushResult({
           id: `tag:${concept.id}:${normalizeSearchText(tag)}`,
-          group: 'Tags',
+          group: '标签',
           conceptId: concept.id,
           title: tag,
           subtitle: concept.title,
@@ -3447,7 +3447,7 @@ export default function LearningIntelligenceDashboard({
         if (misconceptionScore <= 0.45) return;
         pushResult({
           id: `misconception:${concept.id}:${index}`,
-          group: 'Misconceptions',
+          group: '误区',
           conceptId: concept.id,
           title: misconception.title || 'Misconception',
           subtitle: concept.title,
@@ -3469,15 +3469,15 @@ export default function LearningIntelligenceDashboard({
         if (sourceMatchScore <= 0.45) return;
         pushResult({
           id: `source:${concept.id}:${source.id}`,
-          group: 'Sources',
+          group: '来源',
           conceptId: concept.id,
-          title: source.name || 'Knowledge source',
+          title: source.name || '知识来源',
           subtitle: concept.title,
           matchReason: 'Matched source name, path, or evidence snippet',
           explanation: `This source grounds ${concept.title}.`,
-          previewTitle: source.name || 'Knowledge source',
+          previewTitle: source.name || '知识来源',
           previewBody: source.path || source.origin || concept.description || '',
-          previewMeta: [source.resourceType || 'Source', concept.title],
+          previewMeta: [source.resourceType || '来源', concept.title],
           snippets: safeArray<any>((source as GraphSourceRef).snippets).map((snippet) => clipText(snippet.quote || snippet.rationale, 180)).filter(Boolean).slice(0, 3),
           tags,
           score: sourceMatchScore
@@ -3495,7 +3495,7 @@ export default function LearningIntelligenceDashboard({
       if (!concept) return;
       pushResult({
         id: `relation:${edge.id}`,
-        group: 'Relations',
+        group: '关系',
         conceptId: concept.id,
         title: `${from?.title || edge.from} -> ${to?.title || edge.to}`,
         subtitle: edge.relationType,
@@ -3592,7 +3592,7 @@ export default function LearningIntelligenceDashboard({
     ...safeArray<any>(learnerState?.coreState?.workingState?.currentCourseState?.activeGoals).map((signal) => toProfileSignal(signal, 'profileBase', 'Active goal', 'working_state')),
     ...safeArray<any>(learnerState?.coreState?.workingState?.currentCourseState?.focusKnowledge).map((signal) => toProfileSignal(signal, 'knowledgeState', 'Focus knowledge', 'working_state')),
     ...safeArray<any>(learnerState?.coreState?.workingState?.currentCourseState?.pendingQuestions).map((signal) => toProfileSignal(signal, 'cognitiveState', 'Pending question', 'working_state')),
-    ...safeArray<any>(learnerState?.coreState?.workingState?.currentCourseState?.nextActions).map((signal) => toProfileSignal(signal, 'reviewPlanning', 'Next action', 'working_state')),
+    ...safeArray<any>(learnerState?.coreState?.workingState?.currentCourseState?.nextActions).map((signal) => toProfileSignal(signal, 'reviewPlanning', '下一步行动', 'working_state')),
     ...safeArray<any>(learnerState?.coreState?.workingState?.recentBehaviorSummary?.recentTopics).map((signal) => toProfileSignal(signal, 'profileBase', 'Recent topic', 'working_state')),
     ...safeArray<any>(learnerState?.coreState?.workingState?.recentBehaviorSummary?.engagementSignals).map((signal) => toProfileSignal(signal, 'behaviorEngagement', 'Engagement signal', 'working_state')),
     ...safeArray<any>(learnerState?.coreState?.workingState?.recentBehaviorSummary?.reviewPressure).map((signal) => toProfileSignal(signal, 'reviewPlanning', 'Review pressure', 'working_state')),
@@ -3611,10 +3611,10 @@ export default function LearningIntelligenceDashboard({
     ? safeArray<any>(learnerProfileView?.stableProfile).map((group) => ({
         dimension: String(group.key || group.dimension || 'profileBase'),
         meta: {
-          title: String(group.title || profileDimensionMeta[group.key]?.title || group.key || 'Profile Dimension'),
+          title: String(group.title || profileDimensionMeta[group.key]?.title || group.key || '画像维度'),
           detail: String(group.summary || profileDimensionMeta[group.key]?.detail || '学习画像维度。')
         },
-        items: safeArray<any>(group.items).map((item) => toProfileSignal(item, String(item.dimension || group.key || 'profileBase'), String(item.label || 'Profile signal'), 'llm_profile_view'))
+        items: safeArray<any>(group.items).map((item) => toProfileSignal(item, String(item.dimension || group.key || 'profileBase'), String(item.label || '画像信号'), 'llm_profile_view'))
       })).filter((group) => group.items.length)
     : stableGroups;
   const displayWorkingGroups = safeArray<any>(learnerProfileView?.workingState).length
@@ -3773,7 +3773,7 @@ export default function LearningIntelligenceDashboard({
           className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#202124] px-3 text-sm font-medium text-white transition hover:bg-black"
         >
           <Sparkles className="h-4 w-4" />
-          发给 AI Terminal
+          发给 AI Chat
         </button>
       ) : null}
     </div>
@@ -3787,16 +3787,16 @@ export default function LearningIntelligenceDashboard({
         className="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-950 text-white transition rounded-full flex flex-row space-x-1 items-center justify-center disabled:cursor-not-allowed disabled:opacity-50"
       >
         {graphActionRunning === 'build' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
-        <span>Rebuild Graph</span>
+        <span>重建图谱</span>
       </button>
       <button
         type="button"
         onClick={() => setKnowledgeSearchOpen(true)}
         className={`px-3.5 py-1.5 text-sm font-medium hover:bg-black/5 outline outline-1 outline-gray-100 rounded-3xl bg-white/95 shadow-sm backdrop-blur flex items-center gap-1.5 transition ${knowledgeSearchOpen || query.trim() ? 'bg-gray-50' : ''}`}
-        aria-label="Search"
+        aria-label="搜索"
       >
         <Search className="size-4" />
-        <span>Search</span>
+        <span>搜索</span>
       </button>
       {knowledgeSearchOpen ? (
         <div
@@ -3824,12 +3824,12 @@ export default function LearningIntelligenceDashboard({
                       onKeyDown={(event) => {
                         if (event.key === 'Escape') setKnowledgeSearchOpen(false);
                       }}
-                      placeholder="Search"
+                      placeholder="搜索"
                       className="w-full rounded-r-xl py-1.5 pl-2.5 text-sm bg-transparent outline-none placeholder:text-gray-400"
                       maxLength={500}
                     />
                     {query.trim() ? (
-                      <button type="button" onClick={() => setQuery('')} className="self-center p-0.5 rounded-full hover:bg-gray-100 transition" aria-label="Clear search">
+                      <button type="button" onClick={() => setQuery('')} className="self-center p-0.5 rounded-full hover:bg-gray-100 transition" aria-label="清除搜索">
                         <X className="size-3" />
                       </button>
                     ) : null}
@@ -3850,7 +3850,7 @@ export default function LearningIntelligenceDashboard({
                             kgSearchFacet === facet ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-800'
                           }`}
                         >
-                          {facet}
+                          {facet === 'All' ? '全部' : facet}
                           {query.trim() ? <span className="ml-1 text-[11px] text-gray-400">{count}</span> : null}
                         </button>
                       );
@@ -3859,7 +3859,7 @@ export default function LearningIntelligenceDashboard({
 
                   {!query.trim() ? (
                     <div className="pt-1">
-                      <div className="w-full text-xs text-gray-500 font-medium pb-2 px-2">Recent searches</div>
+                      <div className="w-full text-xs text-gray-500 font-medium pb-2 px-2">最近搜索</div>
                       {kgRecentSearches.length ? kgRecentSearches.map((item) => (
                         <button
                           key={item}
@@ -3872,7 +3872,7 @@ export default function LearningIntelligenceDashboard({
                         </button>
                       )) : (
                         <div className="flex h-full min-h-40 items-center justify-center text-center text-xs text-gray-500">
-                          Search concepts, sources, tags, relations, and misconceptions.
+                          搜索概念、来源、标签、关系和误区。
                         </div>
                       )}
                     </div>
@@ -3908,7 +3908,7 @@ export default function LearningIntelligenceDashboard({
 
                   {query.trim() && !filteredSearchResults.length ? (
                     <div className="flex h-full min-h-40 items-center justify-center text-center text-xs text-gray-500">
-                      No knowledge found
+                      未找到知识
                     </div>
                   ) : null}
                 </div>
@@ -3927,14 +3927,14 @@ export default function LearningIntelligenceDashboard({
                         ))}
                       </div>
                       <div className="mt-5">
-                        <div className="text-xs font-medium text-gray-500">Why this matched</div>
+                        <div className="text-xs font-medium text-gray-500">匹配原因</div>
                         <div className="mt-2 rounded-xl bg-gray-50 px-3 py-2 text-sm leading-6 text-gray-600">
                           {previewSearchResult.matchReason}. {previewSearchResult.explanation}
                         </div>
                       </div>
                       {previewSearchResult.tags.length ? (
                         <div className="mt-5">
-                          <div className="text-xs font-medium text-gray-500">Tags</div>
+                          <div className="text-xs font-medium text-gray-500">标签</div>
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             {previewSearchResult.tags.slice(0, 12).map((tag) => (
                               <span key={tag} className="rounded-full border border-gray-100 px-2.5 py-1 text-xs text-gray-600">{tag}</span>
@@ -3944,7 +3944,7 @@ export default function LearningIntelligenceDashboard({
                       ) : null}
                       {previewSearchResult.snippets.length ? (
                         <div className="mt-5">
-                          <div className="text-xs font-medium text-gray-500">Preview</div>
+                          <div className="text-xs font-medium text-gray-500">预览</div>
                           <div className="mt-2 space-y-2">
                             {previewSearchResult.snippets.map((snippet, index) => (
                               <div key={`${previewSearchResult.id}-snippet-${index}`} className="rounded-xl border border-gray-100 px-3 py-2 text-sm leading-6 text-gray-600">
@@ -3957,7 +3957,7 @@ export default function LearningIntelligenceDashboard({
                     </div>
                   ) : (
                     <div className="w-full h-full flex justify-center items-center text-gray-500 text-sm">
-                      Select a result to preview
+                      选择一个结果以预览
                     </div>
                   )}
                 </div>
@@ -3972,9 +3972,9 @@ export default function LearningIntelligenceDashboard({
   const renderKnowledgeViewSwitch = () => (
     <div className="grid grid-cols-3 rounded-lg bg-[#f1f1ef] p-1">
       {[
-        { id: 'graph', label: 'Graph View', icon: Network },
-        { id: 'list', label: 'List View', icon: ListTree },
-        { id: 'path', label: 'Path View', icon: MapIcon }
+        { id: 'graph', label: '图谱视图', icon: Network },
+        { id: 'list', label: '列表视图', icon: ListTree },
+        { id: 'path', label: '路径视图', icon: MapIcon }
       ].map((item) => {
         const Icon = item.icon;
         return (
@@ -4007,7 +4007,7 @@ export default function LearningIntelligenceDashboard({
           {integration?.continueLearning?.nextStepTitle || '学习智能体正在等待更多上下文'}
         </h2>
         <p className="mt-3 max-w-3xl whitespace-pre-line text-sm leading-6 text-[#55585d]">
-          {integration?.learnerState?.summary || learnerState?.summary || '继续使用学习现场、资源和 AI Terminal 后，这里会形成稳定摘要。'}
+          {integration?.learnerState?.summary || learnerState?.summary || '继续使用学习现场、资源和 AI Chat 后，这里会形成稳定摘要。'}
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <button type="button" onClick={() => setSection('planning')} className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#202124] px-3 text-sm font-medium text-white">
@@ -4063,7 +4063,7 @@ export default function LearningIntelligenceDashboard({
         <>
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold text-[#202124]">Knowledge</h2>
+              <h2 className="text-xl font-semibold text-[#202124]">知识</h2>
               <p className="mt-1 text-sm text-[#777b80]">知识点是稳定对象；图谱、列表和路径只是不同视图。</p>
             </div>
             <div className="w-full max-w-md sm:w-auto">{renderKnowledgeViewSwitch()}</div>
@@ -4232,7 +4232,7 @@ export default function LearningIntelligenceDashboard({
           <div className="flex flex-col gap-1 px-1 mt-1.5 mb-3">
             <div className="flex justify-between items-center">
               <div className="flex items-center md:self-center text-xl font-medium px-0.5 gap-2 shrink-0">
-                <div>Planning</div>
+                <div>规划</div>
                 <div className="text-lg font-medium text-gray-500">{plans.length}</div>
               </div>
               <div className="flex w-full justify-end gap-1.5">
@@ -4243,7 +4243,7 @@ export default function LearningIntelligenceDashboard({
                   className="px-2 py-1.5 rounded-xl bg-black text-white transition font-medium text-sm flex items-center disabled:opacity-60"
                 >
                   {planningBusy ? <Loader2 className="size-3 animate-spin" /> : <Plus className="size-3" strokeWidth={2.5} />}
-                  <div className="hidden md:block md:ml-1 text-xs">{planningBusy ? 'Generating' : 'New Plan'}</div>
+                  <div className="hidden md:block md:ml-1 text-xs">{planningBusy ? '生成中' : '新建计划'}</div>
                 </button>
               </div>
             </div>
@@ -4253,13 +4253,13 @@ export default function LearningIntelligenceDashboard({
             <div className="flex text-xs font-medium mb-1 items-center -mr-0.5">
               <button type="button" className="px-1.5 py-1 cursor-pointer select-none basis-3/5 text-left">
                 <div className="flex gap-1.5 items-center">
-                  Title
+                  标题
                   <span className="invisible"><ChevronDown className="size-2" /></span>
                 </div>
               </button>
               <button type="button" className="px-1.5 py-1 cursor-pointer select-none hidden sm:flex sm:basis-2/5 justify-end">
                 <div className="flex gap-1.5 items-center">
-                  Updated at
+                  更新时间
                   <ChevronDown className="size-2" />
                 </div>
               </button>
@@ -4313,7 +4313,7 @@ export default function LearningIntelligenceDashboard({
                           setPlanMenuSubmenu(null);
                         }}
                         className="self-center w-fit text-sm p-0.5 hover:bg-black/5 rounded-lg"
-                        aria-label="Plan options"
+                        aria-label="计划选项"
                       >
                         <MoreHorizontal className="size-4" strokeWidth={2.5} />
                       </button>
@@ -4331,8 +4331,8 @@ export default function LearningIntelligenceDashboard({
             <div className="w-full h-full flex flex-col justify-center items-center my-16 mb-24">
               <div className="max-w-md text-center">
                 <div className="text-3xl mb-3">🗺️</div>
-                <div className="text-lg font-medium mb-1">No plans found</div>
-                <div className="text-gray-500 text-center text-xs">Create a plan to start a focused learning route.</div>
+                <div className="text-lg font-medium mb-1">未找到计划</div>
+                <div className="text-gray-500 text-center text-xs">创建一个计划，开始聚焦学习路线。</div>
               </div>
               <button
                 type="button"
@@ -4341,7 +4341,7 @@ export default function LearningIntelligenceDashboard({
                 className="mt-4 px-2 py-1.5 rounded-xl bg-black text-white transition font-medium text-sm flex items-center disabled:opacity-60"
               >
                 {planningBusy ? <Loader2 className="size-3 animate-spin" /> : <Plus className="size-3" strokeWidth={2.5} />}
-                <span className="ml-1 text-xs">{planningBusy ? 'Generating' : 'New Plan'}</span>
+                <span className="ml-1 text-xs">{planningBusy ? '生成中' : '新建计划'}</span>
               </button>
             </div>
           )}
@@ -4394,7 +4394,7 @@ export default function LearningIntelligenceDashboard({
                 className={`select-none flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm transition hover:bg-gray-50 disabled:cursor-wait disabled:opacity-60 ${planMenuSubmenu === 'apply' ? 'bg-gray-50' : ''}`}
               >
                 {planActionBusyId === plan.id ? <Loader2 className="size-4 animate-spin" /> : <FolderInput className="size-4" />}
-                <div className="flex items-center">Apply</div>
+                <div className="flex items-center">应用</div>
                 <ChevronRight className="ml-auto size-4 text-gray-400" />
               </button>
               <button
@@ -4407,7 +4407,7 @@ export default function LearningIntelligenceDashboard({
                 className="select-none flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm transition hover:bg-gray-50 disabled:cursor-wait disabled:opacity-60"
               >
                 {planActionBusyId === plan.id ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                <div className="flex items-center">Delete</div>
+                <div className="flex items-center">删除</div>
               </button>
             </div>
             {planMenuSubmenu === 'apply' ? (
@@ -4428,7 +4428,7 @@ export default function LearningIntelligenceDashboard({
                   className="select-none flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm transition hover:bg-gray-50 disabled:cursor-wait disabled:opacity-60"
                 >
                   {planActionBusyId === plan.id ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-                  <div className="min-w-0 flex-1 truncate">New learning workspace</div>
+                  <div className="min-w-0 flex-1 truncate">新的学习 workspace</div>
                 </button>
                 {workbenches.map((item) => (
                   <button
@@ -4464,7 +4464,7 @@ export default function LearningIntelligenceDashboard({
             style={{ animation: 'workspace-soft-scale 100ms ease-out both' }}
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <div className="text-lg font-medium self-center font-primary">New Plan</div>
+            <div className="text-lg font-medium self-center font-primary">新建计划</div>
             <div className="mt-4">
               <textarea
                 value={planningDraftObjective}
@@ -4477,7 +4477,7 @@ export default function LearningIntelligenceDashboard({
                 }}
                 autoFocus
                 rows={4}
-                placeholder="What do you want to learn?"
+                placeholder="你想学习什么？"
                 className="w-full resize-none rounded-2xl border border-gray-100 bg-white px-3 py-2 text-sm leading-6 text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-200"
               />
             </div>
@@ -4487,7 +4487,7 @@ export default function LearningIntelligenceDashboard({
                 onClick={() => setNewPlanModalOpen(false)}
                 className="px-3.5 py-1.5 text-sm font-medium bg-white text-black hover:bg-gray-100 transition rounded-full"
               >
-                Cancel
+                取消
               </button>
               <button
                 type="button"
@@ -4496,7 +4496,7 @@ export default function LearningIntelligenceDashboard({
                 className="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white transition rounded-full flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {planningBusy ? <Loader2 className="size-4 animate-spin" /> : null}
-                Create
+                创建
               </button>
             </div>
           </div>
@@ -4571,8 +4571,8 @@ export default function LearningIntelligenceDashboard({
                             if (routeActionMode === 'explain') void explainRouteInline(routeCanvasStages, routeActionInput.trim());
                             if (routeActionMode === 'modify') void requestPlanReview(routeActionInput.trim());
                           }}
-                          placeholder={routeActionMode === 'explain' ? 'Ask a question' : 'Tell AI what to change'}
-                          aria-label={routeActionMode === 'explain' ? 'Ask a question about this route' : 'Tell AI how to modify this route'}
+                          placeholder={routeActionMode === 'explain' ? '提一个问题' : '告诉 AI 要修改什么'}
+                          aria-label={routeActionMode === 'explain' ? '就这条路线提问' : '告诉 AI 如何修改这条路线'}
                           className="ml-5 w-full flex-1 appearance-none border-0 bg-transparent text-sm font-normal text-gray-900 outline-none ring-0 placeholder:text-gray-400 focus:border-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0"
                         />
                         <div className="ml-1 mr-1">
@@ -4584,7 +4584,7 @@ export default function LearningIntelligenceDashboard({
                             }}
                             disabled={routeActionMode === 'explain' ? planningInlineBusy === 'route_explain' : stageGovernanceBusy === 'review'}
                             className={`${routeActionInput.trim() ? 'bg-black text-white hover:bg-gray-900' : 'bg-gray-200 text-white'} m-0.5 rounded-full p-1.5 transition disabled:opacity-60`}
-                            aria-label={routeActionMode === 'explain' ? 'Submit question' : 'Submit modification request'}
+                            aria-label={routeActionMode === 'explain' ? '提交问题' : '提交修改请求'}
                           >
                             {(routeActionMode === 'explain' && planningInlineBusy === 'route_explain') || (routeActionMode === 'modify' && stageGovernanceBusy === 'review') ? (
                               <Loader2 className="size-4 animate-spin" />
@@ -4602,7 +4602,7 @@ export default function LearningIntelligenceDashboard({
                             setRouteActionInput('');
                           }}
                           className="mr-1 self-center rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-                          aria-label="Close route chat"
+                          aria-label="关闭路线聊天"
                         >
                           <X className="size-3.5" />
                         </button>
@@ -4648,7 +4648,7 @@ export default function LearningIntelligenceDashboard({
                                         className="inline-flex h-7 items-center gap-1 rounded-full bg-[#202124] px-2.5 text-xs font-medium text-white transition hover:bg-black disabled:opacity-60"
                                       >
                                         {applying ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
-                                        Apply
+                                        应用
                                       </button>
                                     </div>
                                   </div>
@@ -4698,7 +4698,7 @@ export default function LearningIntelligenceDashboard({
                             {markdownForStage(panelStructuredStage) || stageRouteNarrative(stage)}
                           </div>
                           <div className="mt-3 border-t border-gray-100 pt-3">
-                            <div className="text-[11px] font-medium text-gray-400">Grounding</div>
+                            <div className="text-[11px] font-medium text-gray-400">依据</div>
                             <p className="mt-1 text-sm leading-6 text-gray-600">{supportSummaryText(panelSupport)}</p>
                             {panelSupport?.matchedConcepts.length ? (
                               <p className="mt-1 text-sm leading-6 text-gray-500">{panelSupport.matchedConcepts.slice(0, 4).join(' / ')}</p>
@@ -4721,7 +4721,7 @@ export default function LearningIntelligenceDashboard({
                             className="flex min-w-fit items-center gap-1 rounded-xl px-1.5 py-[1px] text-[#111214] transition hover:bg-gray-50 disabled:opacity-50"
                           >
                             {planningInlineBusy === 'stage_explain' ? <Loader2 className="size-3 shrink-0 animate-spin" /> : <Lightbulb className="size-3 shrink-0" />}
-                            <div className="shrink-0">Explain</div>
+                            <div className="shrink-0">解释</div>
                           </button>
                           <button
                             type="button"
@@ -4736,7 +4736,7 @@ export default function LearningIntelligenceDashboard({
                             className="flex min-w-fit items-center gap-1 rounded-xl px-1.5 py-[1px] text-[#111214] transition hover:bg-gray-50"
                           >
                             <Tag className="size-3 shrink-0" />
-                            <div className="shrink-0">Modify</div>
+                            <div className="shrink-0">修改</div>
                           </button>
                           <button
                             type="button"
@@ -4750,7 +4750,7 @@ export default function LearningIntelligenceDashboard({
                             className="flex min-w-fit items-center gap-1 rounded-xl px-1.5 py-[1px] text-[#111214] transition hover:bg-gray-50"
                           >
                             <FileText className="size-3 shrink-0" />
-                            <div className="shrink-0">Sources</div>
+                            <div className="shrink-0">来源</div>
                           </button>
                           <button
                             type="button"
@@ -4772,7 +4772,7 @@ export default function LearningIntelligenceDashboard({
                               closeStagePopover();
                             }}
                             className="flex min-w-fit items-center rounded-xl px-1.5 py-[1px] text-[#111214] transition hover:bg-gray-50"
-                            aria-label="Close stage actions"
+                            aria-label="关闭阶段操作"
                           >
                             <X className="size-3 shrink-0" />
                           </button>
@@ -4819,10 +4819,10 @@ export default function LearningIntelligenceDashboard({
                                 className="inline-flex h-8 items-center gap-1 rounded-md bg-[#202124] px-2 text-xs font-medium text-white disabled:opacity-60"
                               >
                                 {stageGovernanceBusy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                                Save
+                                保存
                               </button>
                               <button type="button" onClick={cancelStageEdit} className="inline-flex h-8 items-center gap-1 rounded-md bg-[#f1f3f5] px-2 text-xs font-medium text-[#34373c] hover:bg-[#e9ecef]">
-                                Cancel
+                                取消
                               </button>
                             </div>
                           </div>
@@ -4844,14 +4844,14 @@ export default function LearningIntelligenceDashboard({
                                   if (stageActionMode === 'explain') void explainStageInline(stageActionInput.trim());
                                   if (stageActionMode === 'modify') void requestStagePatch(panelStructuredStageId, stageActionInput.trim());
                                 }}
-                                placeholder={stageActionMode === 'explain' ? 'Ask a question' : 'Tell AI what to change'}
-                                aria-label={stageActionMode === 'explain' ? 'Ask a question about this stage' : 'Tell AI how to modify this stage'}
+                                placeholder={stageActionMode === 'explain' ? '提一个问题' : '告诉 AI 要修改什么'}
+                                aria-label={stageActionMode === 'explain' ? '就这个阶段提问' : '告诉 AI 如何修改这个阶段'}
                                 className="ml-5 w-full flex-1 appearance-none border-0 bg-transparent text-sm font-normal text-gray-900 outline-none ring-0 placeholder:text-gray-400 focus:border-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0"
                               />
                               <div className="ml-1 mr-1">
                                 <button
                                   type="button"
-                                  aria-label={stageActionMode === 'explain' ? 'Submit question' : 'Submit modification request'}
+                                  aria-label={stageActionMode === 'explain' ? '提交问题' : '提交修改请求'}
                                   onClick={() => {
                                     if (stageActionMode === 'explain') void explainStageInline(stageActionInput.trim());
                                     if (stageActionMode === 'modify') void requestStagePatch(panelStructuredStageId, stageActionInput.trim());
@@ -4879,7 +4879,7 @@ export default function LearningIntelligenceDashboard({
                                   setStageActionInput('');
                                 }}
                                 className="mr-1 self-center rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-                                aria-label="Close stage chat"
+                                aria-label="关闭阶段聊天"
                               >
                                 <X className="size-3.5" />
                               </button>
@@ -4918,7 +4918,7 @@ export default function LearningIntelligenceDashboard({
                                         className="mt-2 inline-flex h-8 items-center gap-1 rounded-md bg-[#202124] px-2 text-xs font-medium text-white disabled:opacity-60"
                                       >
                                         {stageGovernanceBusy === 'apply_patch' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                                        Apply
+                                        应用
                                       </button>
                                     </div>
                                   </div>
@@ -4930,7 +4930,7 @@ export default function LearningIntelligenceDashboard({
                         {pinnedToSelected && stageActionMode === 'sources' && stageSourcesOpen ? (
                           <div className="mt-3 w-[360px] max-h-72 overflow-auto rounded-lg border border-[#d8dde4] bg-white/94 px-3 py-3 text-xs text-[#4d5864] shadow-sm backdrop-blur">
                             <div className="flex items-center justify-between gap-2">
-                              <p className="font-semibold text-[#202124]">Sources</p>
+                              <p className="font-semibold text-[#202124]">来源</p>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -4938,7 +4938,7 @@ export default function LearningIntelligenceDashboard({
                                   setStageSourcesOpen(false);
                                 }}
                                 className="rounded-full p-1 text-[#666a70] hover:bg-[#f1f3f5]"
-                                aria-label="Close sources"
+                                aria-label="关闭来源"
                               >
                                 <X className="h-3.5 w-3.5" />
                               </button>
@@ -5503,7 +5503,7 @@ export default function LearningIntelligenceDashboard({
         const evidence = safeArray<NonNullable<LearnerPortraitEntity['evidence']>[number]>(entity.evidence);
         const hasMemoryEvidence = evidence.some((item) => item.sourceType === 'saved_memory');
         const summary = entity.displayDescription || entity.description || entity.displayRecommendation || 'Learner profile item';
-        const sourceLabel = hasMemoryEvidence ? 'By Memory' : entity.status === 'stable' ? 'Stable Profile' : 'Profile Builder';
+        const sourceLabel = hasMemoryEvidence ? '来自记忆' : entity.status === 'stable' ? '稳定画像' : '画像构建器';
         const actionTarget = {
           key: memoryKey,
           memoryKey,
@@ -5574,7 +5574,7 @@ export default function LearningIntelligenceDashboard({
           dimension: String(memory.category || memory.dimension || 'savedMemory'),
           categoryLabel: '长期记忆',
           filterKey: 'memory',
-          sourceLabel: memory.source === 'manual_user_entry' ? 'By You' : 'Saved Memory',
+          sourceLabel: memory.source === 'manual_user_entry' ? '由你添加' : '已保存记忆',
           commandLabel: `/${String(memory.category || memory.dimension || 'memory')}`,
           time: memory.updatedAt || memory.createdAt || memory.lastObservedAt || null,
           confidence: typeof memory.confidence === 'number' ? memory.confidence : null,
@@ -5628,11 +5628,11 @@ export default function LearningIntelligenceDashboard({
     const applyEntryFilter = (entries: ProfileLedgerEntry[], filter: string) =>
       filter === 'all' ? entries : entries.filter((entry) => entry.filterKey === filter);
     const profileFilterOptions = [
-      { value: 'all', label: 'All dimensions' },
+      { value: 'all', label: '全部维度' },
       ...portraitDimensionOrder.map((dimension) => ({ value: dimension, label: portraitDimensionMeta[dimension]?.title || dimension }))
     ];
     const governanceFilterOptions = [
-      { value: 'all', label: 'All records' },
+      { value: 'all', label: '全部记录' },
       { value: 'memory', label: '长期记忆' },
       { value: 'event', label: '近期事件' }
     ];
@@ -5651,13 +5651,13 @@ export default function LearningIntelligenceDashboard({
       return (
         <div key={entry.id} className="group grid w-full grid-cols-[minmax(0,1fr)_32px] items-center gap-2 rounded-lg px-3 py-2 text-sm transition hover:bg-gray-50 sm:grid-cols-[minmax(0,1fr)_112px_108px_32px]">
           <div className="line-clamp-1 min-w-0 text-ellipsis text-left">
-            {entry.title || 'Untitled profile item'}
+            {entry.title || '未命名画像条目'}
           </div>
           <div className="hidden min-w-0 items-center justify-start sm:flex">
             <span className="truncate text-xs text-gray-500">{entry.categoryLabel}</span>
           </div>
           <div className="hidden items-center justify-end sm:flex">
-            <span className="text-xs text-gray-500">{formatCalendarDate(entry.time) || 'Unknown'}</span>
+            <span className="text-xs text-gray-500">{formatCalendarDate(entry.time) || '未知'}</span>
           </div>
           <button
             type="button"
@@ -5667,7 +5667,7 @@ export default function LearningIntelligenceDashboard({
             }}
             disabled={!menuKey}
             className="flex size-7 shrink-0 items-center justify-center rounded-full text-gray-500 opacity-0 transition hover:bg-gray-100 disabled:opacity-0 group-hover:opacity-100"
-            aria-label="More profile actions"
+            aria-label="更多画像操作"
           >
             <MoreHorizontal className="size-4" strokeWidth={2.5} />
           </button>
@@ -5686,34 +5686,34 @@ export default function LearningIntelligenceDashboard({
       action?: React.ReactNode
     ) => {
       const selectedFilter = filterOptions.find((item) => item.value === filter);
-      const emptyState = title === 'Profile Ledger'
+      const emptyState = title === '画像台账'
         ? filter === 'all'
           ? {
               emoji: '🫧',
-              title: 'No profile items found',
-              description: 'Learner profile signals will appear here once there is enough evidence.'
+              title: '未找到画像条目',
+              description: '当有足够证据后，学习者画像信号会显示在这里。'
             }
           : {
               emoji: ['🌱', '🧭', '🔎', '🪄', '🧩'][Math.max(0, filterOptions.findIndex((item) => item.value === filter) - 1) % 5],
-              title: `No ${selectedFilter?.label || 'profile'} found`,
-              description: 'Try another dimension or add a profile item manually.'
+              title: `未找到${selectedFilter?.label || '画像'}内容`,
+              description: '可以尝试其他维度，或手动添加画像条目。'
             }
         : filter === 'memory'
           ? {
               emoji: '🧠',
-              title: 'No memory found',
-              description: 'Saved long-term memories will appear here after you add or confirm them.'
+              title: '未找到记忆',
+              description: '添加或确认长期记忆后，它们会显示在这里。'
             }
           : filter === 'event'
             ? {
                 emoji: '🕰️',
-                title: 'No recent events found',
-                description: 'Recent learning evidence will appear here after workspace activity is recorded.'
+                title: '未找到近期事件',
+                description: 'workspace 活动被记录后，近期学习证据会显示在这里。'
               }
             : {
                 emoji: '🗂️',
-                title: 'No governance records found',
-                description: 'Memories and recent learning events will appear here when available.'
+                title: '未找到治理记录',
+                description: '可用的记忆和近期学习事件会显示在这里。'
               };
       return (
         <section className="min-w-0">
@@ -5737,7 +5737,7 @@ export default function LearningIntelligenceDashboard({
             <div className="mb-1 hidden grid-cols-[minmax(0,1fr)_112px_108px_32px] items-center gap-2 px-3 text-xs font-medium text-gray-900 sm:grid">
               <button type="button" onClick={() => setSort('updated')} className="col-start-3 flex cursor-pointer select-none justify-end py-1 text-right">
                 <span className="flex items-center gap-1.5">
-                  Updated at
+                  更新时间
                   {renderSortControl(sort === 'updated')}
                 </span>
               </button>
@@ -5752,7 +5752,7 @@ export default function LearningIntelligenceDashboard({
                     {groupIndex === 0 ? (
                       <button type="button" onClick={() => setSort('updated')} className="col-start-3 hidden cursor-pointer select-none justify-end py-1 text-right text-gray-900 sm:flex">
                         <span className="flex items-center gap-1.5">
-                          Updated at
+                          更新时间
                           {renderSortControl(sort === 'updated')}
                         </span>
                       </button>
@@ -5777,7 +5777,7 @@ export default function LearningIntelligenceDashboard({
         <div className="mx-auto w-full max-w-3xl">
           <div className="mb-3 flex items-center justify-center gap-2 text-sm font-medium text-[#34373c]">
             <Activity className="h-4 w-4 text-[#8a8e94]" />
-            <span>Learner Timeline</span>
+            <span>学习者时间线</span>
           </div>
           <div className="h-[210px]">
             {allTrendData.length ? (
@@ -5806,7 +5806,7 @@ export default function LearningIntelligenceDashboard({
                   )}
                 </ResponsiveContainer>
               ) : (
-                <div className="flex h-full items-center justify-center text-xs font-medium text-gray-400">No timeline data in this range.</div>
+                <div className="flex h-full items-center justify-center text-xs font-medium text-gray-400">这个范围内暂无时间线数据。</div>
               )
             ) : (
               <ResponsiveContainer width="100%" height="100%">
@@ -5827,8 +5827,8 @@ export default function LearningIntelligenceDashboard({
               <div className="flex items-center justify-between gap-3">
                 <div className="inline-flex rounded-full bg-gray-100 p-1 text-xs font-medium text-gray-500">
                   {[
-                    { id: 'line' as ProfileTimelineChartMode, label: 'Line' },
-                    { id: 'bar' as ProfileTimelineChartMode, label: 'Bar' }
+                    { id: 'line' as ProfileTimelineChartMode, label: '折线' },
+                    { id: 'bar' as ProfileTimelineChartMode, label: '柱状' }
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -5845,7 +5845,7 @@ export default function LearningIntelligenceDashboard({
                     { id: '7d' as ProfileTimelineRange, label: '7D' },
                     { id: '30d' as ProfileTimelineRange, label: '30D' },
                     { id: '1y' as ProfileTimelineRange, label: '1Y' },
-                    { id: 'all' as ProfileTimelineRange, label: 'All' }
+                    { id: 'all' as ProfileTimelineRange, label: '全部' }
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -5859,45 +5859,45 @@ export default function LearningIntelligenceDashboard({
                 </div>
               </div>
               <div className="flex flex-col justify-between gap-1 text-xs font-medium text-gray-400 sm:flex-row sm:items-start">
-                <p>Timeline reflects extracted profile signals, saved memories, and recent evidence.</p>
-                <p className="sm:text-right">Updated when learner profile signals change.</p>
+                <p>时间线反映已提取的画像信号、保存的记忆和近期证据。</p>
+                <p className="sm:text-right">学习者画像信号变化时会更新。</p>
               </div>
             </div>
           ) : null}
         </div>
         <div className="grid min-w-0 gap-8 lg:grid-cols-2">
           {renderMiniPanel(
-            'Profile Ledger',
+            '画像台账',
             profileLedgerSort,
             setProfileLedgerSort,
             profileLedgerFilter,
             setProfileLedgerFilter,
             profileFilterOptions,
             profileGroups,
-            'No profile items found',
+            '未找到画像条目',
             <button
               type="button"
               onClick={openNewProfileItemEditor}
               className="flex size-8 items-center justify-center rounded-full text-gray-700 transition hover:bg-gray-100"
-              aria-label="Add profile item"
+              aria-label="添加画像条目"
             >
               <Plus className="size-4" strokeWidth={2.25} />
             </button>
           )}
           {renderMiniPanel(
-            'Memory Governance',
+            '记忆治理',
             memoryGovernanceSort,
             setMemoryGovernanceSort,
             memoryGovernanceFilter,
             setMemoryGovernanceFilter,
             governanceFilterOptions,
             governanceGroups,
-            'No governance items found',
+            '未找到治理条目',
             <button
               type="button"
               onClick={openNewGovernanceItemEditor}
               className="flex size-8 items-center justify-center rounded-full text-gray-700 transition hover:bg-gray-100"
-              aria-label="Add governance item"
+              aria-label="添加治理条目"
             >
               <Plus className="size-4" strokeWidth={2.25} />
             </button>
@@ -5911,7 +5911,7 @@ export default function LearningIntelligenceDashboard({
       <div className="flex flex-col gap-1 px-1 mt-1.5 mb-3">
         <div className="flex justify-between items-center">
           <div className="flex items-center md:self-center text-xl font-medium px-0.5 gap-2 shrink-0">
-            <div>Learning Profile</div>
+            <div>学习画像</div>
           </div>
         </div>
       </div>
@@ -5931,7 +5931,7 @@ export default function LearningIntelligenceDashboard({
                 <p className="shrink-0 text-sm font-medium text-[#9a9a9d]">/{savedMemory?.category || item.label || 'profile'}</p>
               </div>
               <p className="mt-0.5 truncate text-sm leading-5 text-[#55585d]">
-                <span className="font-medium text-[#8a8e94]">{savedMemory?.source === 'manual_user_entry' ? 'By You' : 'By Memory'}</span>
+                <span className="font-medium text-[#8a8e94]">{savedMemory?.source === 'manual_user_entry' ? '由你添加' : '来自记忆'}</span>
                 <span className="px-1 text-[#a7a7aa]">·</span>
                 {item.confidence != null ? `confidence ${score(item.confidence)}` : 'User managed learner profile'}
               </p>
@@ -5978,7 +5978,7 @@ export default function LearningIntelligenceDashboard({
           </section>
           <section>
             <div className="mb-3">
-              <h3 className="text-base font-semibold text-[#202124]">Recent Evidence Trail</h3>
+              <h3 className="text-base font-semibold text-[#202124]">近期证据链</h3>
               <p className="mt-1 text-sm leading-6 text-[#777b80]">可审计的近期行为和对话证据。</p>
             </div>
             <div className="border-y border-[#eeeeeb]">
@@ -6005,12 +6005,12 @@ export default function LearningIntelligenceDashboard({
           <div className="flex items-start justify-between gap-3 border-b border-[#e8e8e4] pb-5">
             <div>
               <h2 className="text-xl font-semibold text-[#202124]">记忆</h2>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-[#777b80]">Saved Memory 和长期可控偏好。</p>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-[#777b80]">已保存记忆和长期可控偏好。</p>
             </div>
             <button type="button" onClick={() => setProfileEntryKind(null)} className="rounded-lg px-3 py-2 text-sm text-[#34373c] hover:bg-[#f1f1ef]">返回</button>
           </div>
           <div className="flex justify-end">
-            <button type="button" onClick={() => openProfileMemoryEditor()} className="rounded-xl bg-[#202124] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#34373c]">Add Profile Item</button>
+            <button type="button" onClick={() => openProfileMemoryEditor()} className="rounded-xl bg-[#202124] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#34373c]">添加画像条目</button>
           </div>
           {renderProfileMemoryRows(displaySavedMemories)}
         </section>
@@ -6027,7 +6027,7 @@ export default function LearningIntelligenceDashboard({
         </div>
         <section>
           <div className="mb-3">
-            <h3 className="text-base font-semibold text-[#202124]">Stable Profile</h3>
+            <h3 className="text-base font-semibold text-[#202124]">稳定画像</h3>
             <p className="mt-1 text-sm leading-6 text-[#777b80]">经 LLM 归并后的长期画像。</p>
           </div>
           {renderProfileGroups(displayStableGroups, {
@@ -6041,28 +6041,28 @@ export default function LearningIntelligenceDashboard({
   const renderMemory = () => renderProfileDetail();
   const profileEditorCopy: ProfileEditorCopy = profileMemoryEditorKind === 'profile'
     ? {
-        title: profileMemoryEditingKey ? 'Edit Profile Item' : 'Add Profile Item',
-        description: 'User-governed learner portrait signal. It stays in the high-level profile ledger.',
-        fieldLabel: 'Profile content',
+        title: profileMemoryEditingKey ? '编辑画像条目' : '添加画像条目',
+        description: '由用户管理的学习者画像信号，会保留在高层画像台账中。',
+        fieldLabel: '画像内容',
         placeholder: 'e.g. Prefers concise explanations with one concrete example.',
-        selectLabel: 'Dimension',
+        selectLabel: '维度',
         options: portraitDimensionOrder.map((dimension) => ({ value: dimension, label: portraitDimensionMeta[dimension]?.title || dimension }))
       }
     : profileMemoryEditorKind === 'event'
       ? {
-          title: profileMemoryEditingKey ? 'Edit Recent Event' : 'Add Recent Event',
-          description: 'Short-term evidence for the memory governance timeline.',
-          fieldLabel: 'Event summary',
+          title: profileMemoryEditingKey ? '编辑近期事件' : '添加近期事件',
+          description: '记忆治理时间线中的短期证据。',
+          fieldLabel: '事件摘要',
           placeholder: 'e.g. Asked twice for a visual explanation of Bayes theorem today.',
-          selectLabel: 'Event type',
+          selectLabel: '事件类型',
           options: recentEventTypeOptions
         }
       : {
-          title: profileMemoryEditingKey ? 'Edit Long-term Memory' : 'Add Long-term Memory',
-          description: 'User-managed long-term memory used by future learning sessions.',
-          fieldLabel: 'Memory content',
+          title: profileMemoryEditingKey ? '编辑长期记忆' : '添加长期记忆',
+          description: '由用户管理、供未来学习会话使用的长期记忆。',
+          fieldLabel: '记忆内容',
           placeholder: 'e.g. I prefer concise explanations with one concrete example.',
-          selectLabel: 'Type',
+          selectLabel: '类型',
           options: savedMemoryCategoryOptions
         };
   const activeProfileMenuMemory = profileMemoryMenu
@@ -6135,22 +6135,22 @@ export default function LearningIntelligenceDashboard({
           <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-[#e6e6e1] bg-white p-6 shadow-[0_20px_80px_rgba(32,33,36,0.18)]" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Learner Profile Audit</p>
-                <h3 className="mt-2 text-2xl font-semibold text-[#202124]">Version History</h3>
+                <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">学习者画像审计</p>
+                <h3 className="mt-2 text-2xl font-semibold text-[#202124]">版本历史</h3>
                 <p className="mt-2 text-sm leading-6 text-[#777b80]">当前版本 {activeVersion}。版本记录用于解释画像如何变化，事件流只作为证据链，不再作为主页面。</p>
               </div>
-              <button type="button" onClick={() => setProfileHistoryOpen(false)} className="rounded-lg p-2 text-[#777b80] hover:bg-[#f1f1ef]" aria-label="Close learner profile history">
+              <button type="button" onClick={() => setProfileHistoryOpen(false)} className="rounded-lg p-2 text-[#777b80] hover:bg-[#f1f1ef]" aria-label="关闭学习者画像历史">
                 <X className="h-4 w-4" />
               </button>
             </div>
             <section className="mt-6">
-              <h4 className="text-sm font-semibold text-[#202124]">Snapshot Versions</h4>
+              <h4 className="text-sm font-semibold text-[#202124]">快照版本</h4>
               <div className="mt-3 border-y border-[#eeeeeb]">
                 {versionItems.length ? versionItems.map((item) => (
                   <RowButton key={item.id || item.version}>
                     <CheckCircle2 className="h-4 w-4 text-[#8a8e94]" />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-[#202124]">Version {item.version}</p>
+                      <p className="truncate text-sm font-medium text-[#202124]">版本 {item.version}</p>
                       <p className="mt-1 line-clamp-2 text-xs text-[#96999d]">{item.summary || item.changeReason || 'Snapshot version'}</p>
                     </div>
                   </RowButton>
@@ -6158,7 +6158,7 @@ export default function LearningIntelligenceDashboard({
                   <RowButton>
                     <CheckCircle2 className="h-4 w-4 text-[#8a8e94]" />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-[#202124]">Version {activeVersion}</p>
+                      <p className="truncate text-sm font-medium text-[#202124]">版本 {activeVersion}</p>
                       <p className="mt-1 line-clamp-2 text-xs text-[#96999d]">{learnerState?.summary || 'Current learner state snapshot'}</p>
                     </div>
                   </RowButton>
@@ -6166,7 +6166,7 @@ export default function LearningIntelligenceDashboard({
               </div>
             </section>
             <section className="mt-7">
-              <h4 className="text-sm font-semibold text-[#202124]">Recent Evidence Trail</h4>
+              <h4 className="text-sm font-semibold text-[#202124]">近期证据链</h4>
               <div className="mt-3 border-y border-[#eeeeeb]">
                 {events.slice(0, 12).map((event) => (
                   <RowButton key={event.id}>
@@ -6190,16 +6190,16 @@ export default function LearningIntelligenceDashboard({
           <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-[#e6e6e1] bg-white p-6 shadow-[0_20px_80px_rgba(32,33,36,0.18)]" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">{profileEvidenceView.sourceLabel || 'Profile evidence'}</p>
-                <h3 className="mt-2 text-xl font-semibold text-[#202124]">{profileEvidenceView.title || 'Profile item'}</h3>
+                <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">{profileEvidenceView.sourceLabel || '画像证据'}</p>
+                <h3 className="mt-2 text-xl font-semibold text-[#202124]">{profileEvidenceView.title || '画像条目'}</h3>
                 {profileEvidenceView.summary ? <p className="mt-2 text-sm leading-6 text-[#777b80]">{profileEvidenceView.summary}</p> : null}
               </div>
-              <button type="button" onClick={() => setProfileEvidenceView(null)} className="rounded-lg p-2 text-[#777b80] hover:bg-[#f1f1ef]" aria-label="Close profile evidence">
+              <button type="button" onClick={() => setProfileEvidenceView(null)} className="rounded-lg p-2 text-[#777b80] hover:bg-[#f1f1ef]" aria-label="关闭画像证据">
                 <X className="h-4 w-4" />
               </button>
             </div>
             <section className="mt-6">
-              <h4 className="text-sm font-semibold text-[#202124]">Evidence</h4>
+              <h4 className="text-sm font-semibold text-[#202124]">证据</h4>
               <div className="mt-3 divide-y divide-[#eeeeeb] border-y border-[#eeeeeb]">
                 {safeArray<NonNullable<LearnerPortraitEntity['evidence']>[number]>(profileEvidenceView.evidence).map((item, index) => (
                   <div key={`${item.id || item.sourceId || index}`} className="py-3">
@@ -6208,7 +6208,7 @@ export default function LearningIntelligenceDashboard({
                       {item.confidence != null ? <span>confidence {score(item.confidence)}</span> : null}
                       {item.observedAt ? <span>{formatCalendarDate(item.observedAt)}</span> : null}
                     </div>
-                    <p className="mt-2 text-sm leading-6 text-[#34373c]">{item.summary || 'Evidence detail unavailable.'}</p>
+                    <p className="mt-2 text-sm leading-6 text-[#34373c]">{item.summary || '证据详情不可用。'}</p>
                     {safeArray<string>(item.relatedConcepts).length ? (
                       <p className="mt-1 text-xs leading-5 text-[#96999d]">Related: {safeArray<string>(item.relatedConcepts).slice(0, 4).join(', ')}</p>
                     ) : null}
@@ -6223,7 +6223,7 @@ export default function LearningIntelligenceDashboard({
       {profileMemoryMenu && activeProfileMenuMemory && createPortal(
         <>
           <style>{profileMenuAnimationStyle}</style>
-          <button type="button" className="fixed inset-0 z-[140] cursor-default" aria-label="Close profile memory menu" onClick={() => setProfileMemoryMenu(null)} />
+          <button type="button" className="fixed inset-0 z-[140] cursor-default" aria-label="关闭画像记忆菜单" onClick={() => setProfileMemoryMenu(null)} />
           <div
             className="fixed z-[141] min-w-[170px] origin-top-right animate-[profile-menu-in_200ms_cubic-bezier(0.33,1,0.68,1)] rounded-2xl border border-gray-100 bg-white p-1 text-gray-900 shadow-lg"
             style={{
@@ -6238,7 +6238,7 @@ export default function LearningIntelligenceDashboard({
                   onClick={() => openProfileMemoryEditor(activeProfileMenuMemory, undefined, 'event')}
                   className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm transition hover:bg-gray-50"
                 >
-                  Edit
+                  编辑
                 </button>
                 <button
                   type="button"
@@ -6256,22 +6256,22 @@ export default function LearningIntelligenceDashboard({
                   onClick={() => void deleteProfileEvent(activeProfileMenuMemory)}
                   className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm transition hover:bg-gray-50"
                 >
-                  Delete
+                  删除
                 </button>
               </>
             ) : (
               <>
                 <button type="button" onClick={() => openProfileMemoryEditor(activeProfileMenuMemory)} className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm transition hover:bg-gray-50">
-                  Edit
+                  编辑
                 </button>
                 {activeProfileMenuEvidence.length ? (
                   <button
                     type="button"
                     onClick={() => {
                       setProfileEvidenceView({
-                        title: activeProfileMenuMemory.value || activeProfileMenuMemory.originalValue || 'Profile item',
+                        title: activeProfileMenuMemory.value || activeProfileMenuMemory.originalValue || '画像条目',
                         summary: activeProfileMenuMemory.summary || '',
-                        sourceLabel: activeProfileMenuMemory.sourceLabel || 'Profile evidence',
+                        sourceLabel: activeProfileMenuMemory.sourceLabel || '画像证据',
                         evidence: activeProfileMenuEvidence
                       });
                       setProfileMemoryMenu(null);
@@ -6289,7 +6289,7 @@ export default function LearningIntelligenceDashboard({
                     : void controlProfileSignal(activeProfileMenuMemory, 'delete', { reason: 'User deleted profile item from Learning Profile menu.' })}
                   className="flex w-full cursor-pointer select-none items-center gap-2 rounded-xl px-3 py-1.5 text-left text-sm transition hover:bg-gray-50"
                 >
-                  Delete
+                  删除
                 </button>
               </>
             )}
@@ -6299,14 +6299,14 @@ export default function LearningIntelligenceDashboard({
       )}
       {profileMemoryEditorOpen && createPortal(
         <div className="fixed inset-0 z-[145] flex items-center justify-center bg-black/20 px-4">
-          <button type="button" className="absolute inset-0 cursor-default" aria-label="Close profile editor" onClick={closeProfileMemoryEditor} />
+          <button type="button" className="absolute inset-0 cursor-default" aria-label="关闭画像编辑器" onClick={closeProfileMemoryEditor} />
           <div className="relative w-full max-w-xl rounded-3xl bg-white p-6 shadow-[0_24px_80px_rgba(32,33,36,0.20)]">
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-xl font-semibold text-[#202124]">{profileEditorCopy.title}</h3>
                 <p className="mt-1 text-sm text-[#777b80]">{profileEditorCopy.description}</p>
               </div>
-              <button type="button" onClick={closeProfileMemoryEditor} className="rounded-full p-2 text-[#777b80] hover:bg-gray-100" aria-label="Close">
+              <button type="button" onClick={closeProfileMemoryEditor} className="rounded-full p-2 text-[#777b80] hover:bg-gray-100" aria-label="关闭">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -6327,7 +6327,7 @@ export default function LearningIntelligenceDashboard({
                 </select>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" onClick={closeProfileMemoryEditor} className="rounded-xl px-4 py-2 text-sm font-medium text-[#55585d] hover:bg-gray-100">Cancel</button>
+                <button type="button" onClick={closeProfileMemoryEditor} className="rounded-xl px-4 py-2 text-sm font-medium text-[#55585d] hover:bg-gray-100">取消</button>
                 <button
                   type="button"
                   onClick={() => void saveProfileMemory()}
@@ -6335,7 +6335,7 @@ export default function LearningIntelligenceDashboard({
                   className="inline-flex items-center gap-2 rounded-xl bg-[#202124] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#34373c] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {profileMemoryBusyKey ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  Save
+                  保存
                 </button>
               </div>
             </div>
@@ -6348,17 +6348,17 @@ export default function LearningIntelligenceDashboard({
           <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-[#e6e6e1] bg-white p-6 shadow-[0_20px_80px_rgba(32,33,36,0.18)]" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">Concept Detail</p>
+                <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#96999d]">概念详情</p>
                 <h3 className="mt-2 text-2xl font-semibold text-[#202124]">{drawerConcept.title}</h3>
               </div>
-              <button type="button" onClick={() => setDrawerConcept(null)} className="rounded-lg p-2 text-[#777b80] hover:bg-[#f1f1ef]" aria-label="Close concept detail">
+              <button type="button" onClick={() => setDrawerConcept(null)} className="rounded-lg p-2 text-[#777b80] hover:bg-[#f1f1ef]" aria-label="关闭概念详情">
                 <X className="h-4 w-4" />
               </button>
             </div>
             <div className="mt-6 grid gap-4 border-y border-[#eeeeeb] py-5 sm:grid-cols-3">
-              <div><p className="text-xs text-[#96999d]">Mastery</p><p className="mt-1 text-sm font-medium text-[#202124]">{pct(drawerConcept.learnerState?.masteryEstimate)}</p></div>
-              <div><p className="text-xs text-[#96999d]">Weakness</p><p className="mt-1 text-sm font-medium text-[#202124]">{pct(drawerConcept.learnerState?.weaknessEstimate)}</p></div>
-              <div><p className="text-xs text-[#96999d]">Readiness</p><p className="mt-1 text-sm font-medium text-[#202124]">{pct(drawerConcept.learnerState?.readinessEstimate)}</p></div>
+              <div><p className="text-xs text-[#96999d]">掌握度</p><p className="mt-1 text-sm font-medium text-[#202124]">{pct(drawerConcept.learnerState?.masteryEstimate)}</p></div>
+              <div><p className="text-xs text-[#96999d]">薄弱度</p><p className="mt-1 text-sm font-medium text-[#202124]">{pct(drawerConcept.learnerState?.weaknessEstimate)}</p></div>
+              <div><p className="text-xs text-[#96999d]">准备度</p><p className="mt-1 text-sm font-medium text-[#202124]">{pct(drawerConcept.learnerState?.readinessEstimate)}</p></div>
             </div>
             <div className="mt-6 space-y-6">
               <section>

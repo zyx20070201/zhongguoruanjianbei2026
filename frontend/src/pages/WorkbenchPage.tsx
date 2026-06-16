@@ -30,7 +30,6 @@ import { useAuthStore } from '../store/authStore';
 import { workbenchApi } from '../services/workbenchApi';
 import { learningApi } from '../services/learningApi';
 import { useTheme } from '../theme';
-import ResourcePickerDialog from '../components/workbench/ResourcePickerDialog';
 import WorkbenchSidebar from '../components/workbench/WorkbenchSidebar';
 import WorkbenchEditor from '../components/workbench/WorkbenchEditor';
 import {
@@ -39,6 +38,7 @@ import {
 } from '../components/workbench/WorkbenchEditorContent';
 import AIStudioPanel from '../components/workbench/AIStudioPanel';
 import WorkbenchSettingsDialog from '../components/workbench/WorkbenchSettingsDialog';
+import WorkbenchNameDialog from '../components/workbench/WorkbenchNameDialog';
 import { AddSourcesDialog } from '../components/workspace/AddSourcesDialog';
 import {
   canEditResource,
@@ -67,15 +67,8 @@ const getEditorTypeForResource = (resource: ResourceReference): WorkbenchEditorT
 };
 
 type OpenResourceOptions =
-  | { kind: 'tab'; paneId?: string | null; bindEditorId?: string | null }
+  | { kind: 'tab'; paneId?: string | null; replaceEditorId?: string | null }
   | { kind: 'split'; paneId: string | null; placement: WorkbenchDropPlacement };
-
-interface ResourcePickerState {
-  mode: 'replace' | 'add-tab';
-  editorId?: string | null;
-  paneId?: string | null;
-  anchorRect?: { left: number; top: number; bottom: number; width: number } | null;
-}
 
 interface CommandPaletteItem {
   id: string;
@@ -386,7 +379,7 @@ function AIToolPanelShell({
                         className=" w-full text-sm pr-4 py-1 rounded-r-xl outline-hidden bg-transparent"
                         value={sessionQuery}
                         onChange={(event) => setSessionQuery(event.target.value)}
-                        placeholder="Search"
+                        placeholder="搜索"
                         autoFocus
                       />
                     </div>
@@ -404,7 +397,7 @@ function AIToolPanelShell({
                   </button>
                   <div className="max-h-56 overflow-y-scroll gap-0.5 flex flex-col">
                     {visibleSessions.length === 0 ? (
-                      <div className="text-center text-xs text-gray-500 dark:text-gray-400 pt-4 pb-6">No chat found</div>
+                      <div className="text-center text-xs text-gray-500 dark:text-gray-400 pt-4 pb-6">未找到对话</div>
                     ) : null}
                     {visibleSessions.map((session) => (
                       <button
@@ -456,10 +449,12 @@ function WorkbenchPageContent() {
   const navigate = useNavigate();
   const dndManager = useDragDropManager();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [resourcePickerState, setResourcePickerState] = useState<ResourcePickerState | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
+  const [workbenchNameDialogOpen, setWorkbenchNameDialogOpen] = useState(false);
+  const [workbenchNameDialogError, setWorkbenchNameDialogError] = useState<string | null>(null);
+  const [savingWorkbenchName, setSavingWorkbenchName] = useState(false);
   const [isSidebarPinned, setIsSidebarPinned] = useState(false);
   const [isAddSourcesOpen, setIsAddSourcesOpen] = useState(false);
   const [liveContextVersion, setLiveContextVersion] = useState(0);
@@ -468,6 +463,7 @@ function WorkbenchPageContent() {
     templateId: null,
     requestId: 0
   });
+  const [workspaceTreeFiles, setWorkspaceTreeFiles] = useState<FileSystemObject[]>([]);
   const liveContextLastEmitAtRef = useRef<Record<string, number>>({});
   const [workbenchPlans, setWorkbenchPlans] = useState<any[]>([]);
   const [documentStateByResourceId, setDocumentStateByResourceId] = useState<
@@ -496,7 +492,6 @@ function WorkbenchPageContent() {
     updateWorkbenchState,
     activateEditor,
     closeEditor,
-    bindResourceToEditor,
     saveNow,
     reset
   } = useWorkbenchStore();
@@ -652,6 +647,21 @@ function WorkbenchPageContent() {
         console.error('Failed to load workbench resources:', loadError);
       });
   }, [workbench?.id, setResources]);
+
+  const refreshWorkspaceTreeFiles = useCallback(async () => {
+    if (!workbench?.workspaceId) return;
+    try {
+      const tree = await fileSystemApi.getTree(workbench.workspaceId);
+      setWorkspaceTreeFiles(tree);
+    } catch (loadError) {
+      console.error('Failed to load workspace file tree:', loadError);
+      setWorkspaceTreeFiles([]);
+    }
+  }, [workbench?.workspaceId]);
+
+  useEffect(() => {
+    void refreshWorkspaceTreeFiles();
+  }, [refreshWorkspaceTreeFiles]);
 
   const reloadWorkbenchPlans = useCallback(async () => {
     if (!workbench?.workspaceId || !workbench.id) return;
@@ -1444,6 +1454,43 @@ function WorkbenchPageContent() {
     };
   };
 
+  const canReplaceEditorWithResource = (editor: EditorState) =>
+    !editor.resourceId && ['resource', 'notes', 'code', 'video'].includes(editor.type);
+
+  const replaceEditorWithResource = (
+    editorId: string,
+    resource: ResourceReference,
+    currentState = useWorkbenchStore.getState().state
+  ) => {
+    if (!currentState) return false;
+
+    const targetEditor = currentState.editors.find((editor) => editor.id === editorId);
+    if (!targetEditor || !canReplaceEditorWithResource(targetEditor)) return false;
+
+    updateWorkbenchState({
+      editors: currentState.editors.map((editor) =>
+        editor.id === editorId
+          ? {
+              ...editor,
+              type: getEditorTypeForResource(resource),
+              title: resource.name,
+              resourceId: resource.id,
+              resourcePath: resource.path,
+              viewState: {
+                ...editor.viewState,
+                blocksuiteSnapshot: null,
+                blocksuiteSourceContent: null,
+                ...createEditorInitialViewState(resource)
+              }
+            }
+          : editor
+      ),
+      activeEditorId: editorId
+    });
+    activateEditor(editorId);
+    return true;
+  };
+
   const commitOpenResource = (
     resource: ResourceReference,
     options: OpenResourceOptions
@@ -1457,11 +1504,61 @@ function WorkbenchPageContent() {
       return;
     }
 
-    if (options.kind === 'tab' && options.bindEditorId) {
-      bindResourceToEditor(options.bindEditorId, resource);
-      updateEditorViewState(options.bindEditorId, createEditorInitialViewState(resource));
-      activateEditor(options.bindEditorId);
-      setResourcePickerState(null);
+    if (options.kind === 'tab' && options.replaceEditorId) {
+      if (replaceEditorWithResource(options.replaceEditorId, resource, currentState)) return;
+    }
+
+    if (options.kind === 'tab' && !options.paneId) {
+      const activeEditor = currentState.activeEditorId
+        ? currentState.editors.find((editor) => editor.id === currentState.activeEditorId)
+        : null;
+
+      if (activeEditor && replaceEditorWithResource(activeEditor.id, resource, currentState)) {
+        return;
+      }
+    }
+
+    if (options.kind === 'tab' && options.paneId) {
+      const baseLayout = getResolvedLayout(
+        currentState.editorLayout,
+        currentState.editors.map((editor) => editor.id),
+        currentState.activeEditorId
+      );
+      const targetLeaf = baseLayout ? findLeafById(baseLayout, options.paneId) : null;
+      const activePaneEditorId = targetLeaf?.activeEditorId ?? targetLeaf?.editorIds[0] ?? null;
+      const activePaneEditor = activePaneEditorId
+        ? currentState.editors.find((editor) => editor.id === activePaneEditorId)
+        : null;
+
+      if (activePaneEditor && replaceEditorWithResource(activePaneEditor.id, resource, currentState)) {
+        return;
+      }
+    }
+
+    if (options.kind === 'split' && options.placement === 'center' && options.paneId) {
+      const baseLayout = getResolvedLayout(
+        currentState.editorLayout,
+        currentState.editors.map((editor) => editor.id),
+        currentState.activeEditorId
+      );
+      const targetLeaf = baseLayout ? findLeafById(baseLayout, options.paneId) : null;
+      const activePaneEditorId = targetLeaf?.activeEditorId ?? targetLeaf?.editorIds[0] ?? null;
+      const activePaneEditor = activePaneEditorId
+        ? currentState.editors.find((editor) => editor.id === activePaneEditorId)
+        : null;
+
+      if (activePaneEditor && replaceEditorWithResource(activePaneEditor.id, resource, currentState)) {
+        return;
+      }
+    }
+
+    if (options.kind === 'split' && options.placement === 'center') {
+      addEditor(
+        getEditorTypeForResource(resource),
+        resource,
+        createEditorInitialViewState(resource),
+        options.paneId
+      );
       return;
     }
 
@@ -1601,6 +1698,7 @@ function WorkbenchPageContent() {
     if (!workbench?.id) return;
     const groups = await workbenchApi.getResourceGroups(workbench.id);
     setResources([...groups.sources, ...groups.files, ...groups.generated]);
+    await refreshWorkspaceTreeFiles();
   };
 
   const uploadResourcesToTarget = async (selectedFiles: File[]) => {
@@ -2230,15 +2328,28 @@ function WorkbenchPageContent() {
 
   const handleRename = async () => {
     if (!workbench) return;
+    setWorkbenchNameDialogError(null);
+    setWorkbenchNameDialogOpen(true);
+  };
 
-    const nextTitle = prompt('Workbench title', workbench.title);
-    if (!nextTitle || nextTitle.trim() === workbench.title) return;
+  const submitWorkbenchRename = async (title: string) => {
+    if (!workbench) return;
+    if (title === workbench.title) {
+      setWorkbenchNameDialogOpen(false);
+      return;
+    }
 
+    setSavingWorkbenchName(true);
+    setWorkbenchNameDialogError(null);
     try {
-      const updated = await workbenchApi.update(workbench.id, { title: nextTitle.trim() });
+      const updated = await workbenchApi.update(workbench.id, { title });
       setWorkbenchMeta({ title: updated.title, description: updated.description });
+      setWorkbenchNameDialogOpen(false);
     } catch (renameError) {
       console.error('Failed to rename workbench:', renameError);
+      setWorkbenchNameDialogError(renameError instanceof Error ? renameError.message : 'Failed to rename workbench.');
+    } finally {
+      setSavingWorkbenchName(false);
     }
   };
 
@@ -2266,13 +2377,13 @@ function WorkbenchPageContent() {
     return (
       <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-[#fbfbfa] p-8">
         <div className="workspace-card-in max-w-md rounded-3xl border border-[#e5e5e1] bg-white p-6 text-center shadow-sm">
-          <h2 className="text-lg font-semibold text-[#25272b]">Unable to load workbench</h2>
+          <h2 className="text-lg font-semibold text-[#25272b]">无法加载 workbench</h2>
           <p className="mt-2 text-sm text-[#777a80]">{error}</p>
           <button
             onClick={() => navigate(-1)}
             className="mt-4 rounded-full border border-[#e5e5e1] bg-white px-4 py-2 text-sm font-medium text-[#34373c] transition-all duration-200 hover:bg-[#f6f6f4] active:scale-95"
           >
-            Go Back
+            返回
           </button>
         </div>
       </div>
@@ -2339,7 +2450,7 @@ function WorkbenchPageContent() {
                 autoFocus
                 value={commandQuery}
                 onChange={(event) => setCommandQuery(event.target.value)}
-                placeholder="Type a command"
+                placeholder="输入命令"
                 className="h-8 flex-1 border-0 bg-transparent text-sm text-[#202124] outline-none placeholder:text-[#a6a8ab]"
               />
               <span className="rounded-lg border border-[#e5e5e1] bg-[#f6f6f4] px-2 py-1 text-[10px] uppercase tracking-wide text-[#96999d]">
@@ -2348,7 +2459,7 @@ function WorkbenchPageContent() {
             </div>
             <div className="max-h-[420px] overflow-y-auto py-2">
               {filteredCommandItems.length === 0 ? (
-                <div className="px-5 py-6 text-sm text-[#777a80]">No commands found.</div>
+                <div className="px-5 py-6 text-sm text-[#777a80]">未找到命令。</div>
               ) : (
                 filteredCommandItems.map((item) => {
                   const Icon = item.icon;
@@ -2384,6 +2495,7 @@ function WorkbenchPageContent() {
         <WorkbenchSidebar
           editors={state.editors}
           resources={resourceOptions}
+          workspaceFiles={workspaceTreeFiles}
           plans={workbenchPlans}
           currentWorkbenchId={workbench.id}
           activeEditorId={state.activeEditorId}
@@ -2392,15 +2504,11 @@ function WorkbenchPageContent() {
           onToggleSidebar={() => setIsSidebarPinned((value) => !value)}
           onActivateEditor={activateEditor}
           onResourceOpen={handleOpenResourceReference}
+          onWorkspaceFileOpen={handleOpenResourceInWorkbench}
           onNewChat={handleCreateAiPanel}
           onNewNote={() => void handleCreateNote()}
-          onNewPlan={handleCreatePlan}
           onOpenAIStudio={handleCreateStudioPanel}
           onUploadResources={handleUploadResources}
-          onSearch={() => {
-            setCommandQuery('');
-            setIsCommandPaletteOpen(true);
-          }}
           onResourceDuplicate={(resource) => void handleDuplicateResource(resource)}
           onResourceDelete={(resource) => void handleDeleteResource(resource)}
           onResourceReorder={(orderedIds) => void handleReorderResources(orderedIds)}
@@ -2422,15 +2530,7 @@ function WorkbenchPageContent() {
             documentSaveStateByResourceId={documentSaveStateByResourceId}
             onActivateEditor={(editorId, paneId) => activateEditor(editorId, paneId)}
             onCloseEditor={closeEditor}
-            onBindResource={(editorId, anchorRect) =>
-              setResourcePickerState({
-                mode: 'replace',
-                editorId,
-                anchorRect: anchorRect
-                  ? { left: anchorRect.left, top: anchorRect.top, bottom: anchorRect.bottom, width: anchorRect.width }
-                  : null
-              })
-            }
+            onBindResource={() => undefined}
             onChangeDocumentContent={handleChangeDocumentContent}
             onSaveDocumentContent={(resourceId, content, options) =>
               void saveDocumentContent(resourceId, { force: true, contentOverride: content, ...options })
@@ -2445,15 +2545,7 @@ function WorkbenchPageContent() {
             }
             onDropEditorTab={handleDropEditorTab}
             onDropResourceToPane={handleDropResourceToPane}
-            onAddEditor={(paneId, anchorRect) =>
-              setResourcePickerState({
-                mode: 'add-tab',
-                paneId: paneId ?? state.activeEditorPaneId ?? null,
-                anchorRect: anchorRect
-                  ? { left: anchorRect.left, top: anchorRect.top, bottom: anchorRect.bottom, width: anchorRect.width }
-                  : null
-              })
-            }
+            onAddEditor={(paneId) => addEditor('resource', undefined, {}, paneId ?? state.activeEditorPaneId ?? null)}
             onClosePane={(paneId) => {
               const targetLeaf = findLeafById(state.editorLayout, paneId);
               if (!targetLeaf) return;
@@ -2507,23 +2599,6 @@ function WorkbenchPageContent() {
         )}
       </div>
 
-      <ResourcePickerDialog
-        open={Boolean(resourcePickerState)}
-        resources={resourceOptions}
-        anchorRect={resourcePickerState?.anchorRect ?? null}
-        onClose={() => setResourcePickerState(null)}
-        onSelect={(resource) => {
-          if (resourcePickerState?.mode === 'replace' && resourcePickerState.editorId) {
-            requestOpenResource(resource, { kind: 'tab', bindEditorId: resourcePickerState.editorId });
-            return;
-          }
-
-          if (resourcePickerState?.mode === 'add-tab') {
-            requestOpenResource(resource, { kind: 'tab', paneId: resourcePickerState.paneId ?? undefined });
-          }
-        }}
-      />
-
       <AddSourcesDialog
         isOpen={isAddSourcesOpen}
         onClose={() => setIsAddSourcesOpen(false)}
@@ -2539,6 +2614,21 @@ function WorkbenchPageContent() {
         theme={theme}
         onClose={() => setIsSettingsOpen(false)}
         onThemeChange={setTheme}
+      />
+
+      <WorkbenchNameDialog
+        isOpen={workbenchNameDialogOpen}
+        mode="rename"
+        initialTitle={workbench.title}
+        loading={savingWorkbenchName}
+        error={workbenchNameDialogError}
+        onClose={() => {
+          if (!savingWorkbenchName) {
+            setWorkbenchNameDialogOpen(false);
+            setWorkbenchNameDialogError(null);
+          }
+        }}
+        onSubmit={(title) => void submitWorkbenchRename(title)}
       />
     </div>
   );

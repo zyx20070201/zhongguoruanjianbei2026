@@ -12,7 +12,7 @@ interface AIAssistantPanelProps {
 export default function AIAssistantPanel({ panel, onClose, onRemove }: AIAssistantPanelProps) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([
-    { role: 'assistant', content: 'Hi! I am scoped to this workbench. I can help you understand the resources, summarize your notes, or explain code.' }
+    { role: 'assistant', content: '你好！我会围绕当前 workbench 提供帮助，可以帮你理解资料、总结笔记或解释代码。' }
   ]);
 
   const handleSend = () => {
@@ -25,7 +25,7 @@ export default function AIAssistantPanel({ panel, onClose, onRemove }: AIAssista
     setTimeout(() => {
       setMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: 'I understand you are asking about the current workbench context. As an AI assistant, I can analyze the files referenced in your other panels to help you with this task.' 
+        content: '我理解你正在询问当前 workbench 的上下文。我可以分析其他面板中的文件，帮助你完成这个任务。' 
       }]);
     }, 1000);
   };
@@ -35,13 +35,13 @@ export default function AIAssistantPanel({ panel, onClose, onRemove }: AIAssista
       <div className="panel-header bg-gradient-to-r from-purple-50 to-indigo-50 px-3 py-2 border-b border-purple-100 flex justify-between items-center cursor-move select-none">
         <div className="flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-purple-600" />
-          <span className="font-bold text-xs text-purple-900">AI Assistant</span>
+          <span className="font-bold text-xs text-purple-900">AI 助手</span>
           <span className="text-[10px] text-purple-600 bg-purple-100/50 px-1.5 py-0.5 rounded border border-purple-200">
-            Scoped to Workbench
+            当前 workbench
           </span>
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={onRemove} className="text-[10px] text-purple-600 hover:underline mr-2">Remove</button>
+          <button onClick={onRemove} className="text-[10px] text-purple-600 hover:underline mr-2">移除</button>
           <button onClick={onClose} className="p-1 text-purple-400 hover:text-purple-600 hover:bg-purple-100 rounded transition-colors">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
@@ -54,7 +54,7 @@ export default function AIAssistantPanel({ panel, onClose, onRemove }: AIAssista
             <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-xs shadow-sm ${
               msg.role === 'user' ? 'bg-gray-200 text-gray-600 font-bold' : 'bg-gradient-to-br from-purple-500 to-indigo-600 text-white'
             }`}>
-              {msg.role === 'user' ? 'ME' : <Sparkles className="w-3 h-3" />}
+              {msg.role === 'user' ? '我' : <Sparkles className="w-3 h-3" />}
             </div>
             <div className={`rounded-2xl p-3 text-sm shadow-sm ${
               msg.role === 'user' 
@@ -69,14 +69,14 @@ export default function AIAssistantPanel({ panel, onClose, onRemove }: AIAssista
 
       <div className="p-3 border-t border-gray-100 bg-white">
         <div className="flex flex-wrap gap-1.5 mb-2">
-          <button onClick={() => setInput('Explain the current resource')} className="px-2 py-1 text-[10px] border border-gray-200 rounded-full hover:bg-gray-50 text-gray-600 flex items-center gap-1">
-            <BookOpen className="w-3 h-3" /> Explain Resource
+          <button onClick={() => setInput('解释当前资源')} className="px-2 py-1 text-[10px] border border-gray-200 rounded-full hover:bg-gray-50 text-gray-600 flex items-center gap-1">
+            <BookOpen className="w-3 h-3" /> 解释资源
           </button>
-          <button onClick={() => setInput('Summarize my notes')} className="px-2 py-1 text-[10px] border border-gray-200 rounded-full hover:bg-gray-50 text-gray-600 flex items-center gap-1">
-            <FileText className="w-3 h-3" /> Summarize Notes
+          <button onClick={() => setInput('总结我的笔记')} className="px-2 py-1 text-[10px] border border-gray-200 rounded-full hover:bg-gray-50 text-gray-600 flex items-center gap-1">
+            <FileText className="w-3 h-3" /> 总结笔记
           </button>
-          <button onClick={() => setInput('Help with this code')} className="px-2 py-1 text-[10px] border border-gray-200 rounded-full hover:bg-gray-50 text-gray-600 flex items-center gap-1">
-            <Code className="w-3 h-3" /> Help with Code
+          <button onClick={() => setInput('帮助我理解这段代码')} className="px-2 py-1 text-[10px] border border-gray-200 rounded-full hover:bg-gray-50 text-gray-600 flex items-center gap-1">
+            <Code className="w-3 h-3" /> 代码帮助
           </button>
         </div>
         
@@ -86,7 +86,7 @@ export default function AIAssistantPanel({ panel, onClose, onRemove }: AIAssista
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
             className="w-full max-h-32 min-h-[40px] py-2.5 pl-3 pr-10 text-sm outline-none resize-none bg-transparent"
-            placeholder="Ask AI about this task..."
+            placeholder="向 AI 询问这个任务..."
             rows={1}
           />
           <button 
