@@ -42,6 +42,7 @@ import { targetKnowledgeStructureService } from '../services/targetKnowledgeStru
 import { knowledgeGapAnalysisService } from '../services/knowledgeGapAnalysisService';
 import { workspaceFileIndexService } from '../services/workspaceFileIndexService';
 import { workspaceAgentRuntime } from '../services/workspaceAgent/workspaceAgentRuntime';
+import { workspaceAgentV2Runtime } from '../services/workspaceAgentV2/runtime';
 import { workspaceTerminalChatService } from '../services/workspaceTerminalChatService';
 import { planGovernanceService } from '../services/planning/planGovernanceService';
 import prisma from '../config/db';
@@ -51,8 +52,10 @@ registerLearningCapabilities();
 
 const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Learning request failed');
 
-const terminalMode = (value: unknown): 'chat' | 'agentic' =>
-  value === 'chat' ? 'chat' : 'agentic';
+type TerminalMode = 'chat' | 'agentic' | 'new_agentic';
+
+const terminalMode = (value: unknown): TerminalMode =>
+  value === 'chat' || value === 'new_agentic' ? value : 'agentic';
 
 const selectedSourceIds = (value: unknown) =>
   Array.isArray(value)
@@ -86,7 +89,24 @@ const chatFiles = (value: unknown) =>
 const latestTerminalUserText = (messages: any[]) =>
   [...(messages || [])].reverse().find((message) => message?.role === 'user' && String(message?.content || '').trim())?.content || '';
 
-const terminalAssistantMessage = (result: any, mode: 'chat' | 'agentic') => ({
+const terminalModeForApproval = async (input: {
+  workspaceId: string;
+  sessionId?: string | null;
+  explicitMode?: unknown;
+}): Promise<TerminalMode> => {
+  if (input.explicitMode === 'new_agentic') return 'new_agentic';
+  if (input.explicitMode === 'chat') return 'chat';
+  if (input.sessionId) {
+    const session = await prisma.conversationSession.findFirst({
+      where: { id: input.sessionId, workspaceId: input.workspaceId },
+      select: { source: true, metadataJson: true }
+    }).catch(() => null);
+    if (session?.source === 'terminal_v2' || session?.metadataJson?.includes('"mode":"new_agentic"')) return 'new_agentic';
+  }
+  return 'agentic';
+};
+
+const terminalAssistantMessage = (result: any, mode: TerminalMode) => ({
   role: 'assistant' as const,
   content: String(result?.reply || ''),
   mode,
@@ -113,7 +133,7 @@ const persistTerminalConversation = async (input: {
   workbenchId?: string | null;
   sessionId?: string | null;
   checkpointThreadId?: string | null;
-  mode: 'chat' | 'agentic';
+  mode: TerminalMode;
   messages: any[];
   result: any;
   selectedSources?: Array<{ fileId: string; mode: 'focused' | 'full_context' }>;
@@ -133,7 +153,7 @@ const persistTerminalConversation = async (input: {
     userId: workspace.userId,
     sessionId,
     title: String(latestTerminalUserText(input.messages)).slice(0, 80),
-    source: input.mode === 'chat' ? 'terminal_chat' : 'terminal',
+    source: input.mode === 'chat' ? 'terminal_chat' : input.mode === 'new_agentic' ? 'terminal_v2' : 'terminal',
     messages: replaceOrAppendAssistant(input.messages, assistant),
     sessionMetadata: {
       mode: input.mode,
@@ -176,7 +196,15 @@ router.post('/terminal/chat', async (req: Request, res: Response) => {
           selectedSourceIds: selectedSourceIds(req.body?.selectedSourceIds),
           chatFiles: normalizedChatFiles
         })
-      : await workspaceAgentRuntime.run({ ...commonInput, chatFiles: normalizedChatFiles });
+      : mode === 'new_agentic'
+        ? await workspaceAgentV2Runtime.run({
+            ...commonInput,
+            checkpointThreadId: typeof req.body?.checkpointThreadId === 'string' ? req.body.checkpointThreadId : null,
+            selectedSources: normalizedSelectedSources,
+            selectedSourceIds: selectedSourceIds(req.body?.selectedSourceIds),
+            chatFiles: normalizedChatFiles
+          })
+        : await workspaceAgentRuntime.run({ ...commonInput, chatFiles: normalizedChatFiles });
     await persistTerminalConversation({
       workspaceId,
       workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
@@ -200,15 +228,15 @@ router.post('/terminal/chat', async (req: Request, res: Response) => {
         assistantText: result.reply,
         repeatedQuestion: /还是|再说|没懂|不懂|换个说法|again|still/i.test(String(latestUserMessage))
       },
-      source: { component: mode === 'chat' ? 'learning_terminal_chat' : 'learning_terminal' },
+      source: { component: mode === 'chat' ? 'learning_terminal_chat' : mode === 'new_agentic' ? 'learning_terminal_v2' : 'learning_terminal' },
       confidence: 0.62
     }).catch((error) => console.warn('Learning event collection chat_turn failed:', error));
     await learnerStateAnalyzer.analyzeChat({
       workspaceId,
       messages,
       answer: result.reply,
-      taskType: mode === 'chat' ? 'workspace_terminal_chat' : 'workspace_agent_terminal',
-      sourceId: mode === 'chat' ? 'learning_terminal_chat' : 'learning_terminal'
+      taskType: mode === 'chat' ? 'workspace_terminal_chat' : mode === 'new_agentic' ? 'workspace_agent_terminal_v2' : 'workspace_agent_terminal',
+      sourceId: mode === 'chat' ? 'learning_terminal_chat' : mode === 'new_agentic' ? 'learning_terminal_v2' : 'learning_terminal'
     }).catch((error) => console.warn('LearnerStateAnalyzer terminal chat failed:', error));
     return res.json(result);
   } catch (error) {
@@ -269,6 +297,32 @@ router.post('/terminal/chat/stream', async (req: Request, res: Response) => {
         chatFiles: normalizedChatFiles
       });
       send('final', { type: 'final', node: 'WorkspaceChat', result: finalResult });
+    } else if (mode === 'new_agentic') {
+      for await (const item of workspaceAgentV2Runtime.streamRun({
+        workspaceId,
+        workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+        sessionId: typeof sessionId === 'string' ? sessionId : null,
+        checkpointThreadId: typeof checkpointThreadId === 'string' ? checkpointThreadId : null,
+        messages,
+        selectedSources: normalizedSelectedSources,
+        selectedSourceIds: selectedSourceIds(req.body?.selectedSourceIds),
+        chatFiles: normalizedChatFiles
+      })) {
+        if ((item.type === 'final' || item.type === 'approval_required') && item.result) {
+          await persistTerminalConversation({
+            workspaceId,
+            workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+            sessionId: typeof sessionId === 'string' ? sessionId : null,
+            checkpointThreadId: typeof checkpointThreadId === 'string' ? checkpointThreadId : null,
+            mode,
+            messages,
+            result: item.result,
+            selectedSources: normalizedSelectedSources,
+            chatFiles: normalizedChatFiles
+          });
+        }
+        send(item.type, item);
+      }
     } else {
       for await (const item of workspaceAgentRuntime.streamRun({
         workspaceId,
@@ -314,22 +368,27 @@ router.post('/terminal/approval', async (req: Request, res: Response) => {
   }
 
   try {
-    const result = await workspaceAgentRuntime.resumeApproval(
-      {
-        workspaceId,
-        workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
-        sessionId: typeof sessionId === 'string' ? sessionId : null,
-        checkpointThreadId: typeof checkpointThreadId === 'string' ? checkpointThreadId : null,
-        messages: Array.isArray(messages) ? messages : []
-      },
-      decision
-    );
+    const approvalMode = await terminalModeForApproval({
+      workspaceId,
+      sessionId: typeof sessionId === 'string' ? sessionId : null,
+      explicitMode: req.body?.mode
+    });
+    const commonInput = {
+      workspaceId,
+      workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
+      sessionId: typeof sessionId === 'string' ? sessionId : null,
+      checkpointThreadId: typeof checkpointThreadId === 'string' ? checkpointThreadId : null,
+      messages: Array.isArray(messages) ? messages : []
+    };
+    const result = approvalMode === 'new_agentic'
+      ? await workspaceAgentV2Runtime.resumeApproval(commonInput, decision)
+      : await workspaceAgentRuntime.resumeApproval(commonInput, decision);
     await persistTerminalConversation({
       workspaceId,
       workbenchId: typeof workbenchId === 'string' ? workbenchId : null,
       sessionId: typeof sessionId === 'string' ? sessionId : null,
       checkpointThreadId: typeof checkpointThreadId === 'string' ? checkpointThreadId : null,
-      mode: 'agentic',
+      mode: approvalMode === 'new_agentic' ? 'new_agentic' : 'agentic',
       messages: Array.isArray(messages) ? messages : [],
       result
     });

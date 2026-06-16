@@ -16,6 +16,7 @@ type SourceMode = 'discover' | 'files' | 'website' | 'text';
 
 interface AddSourcesDialogProps {
   isOpen: boolean;
+  targetLabel?: string;
   onClose: () => void;
   onUploadFiles: (files: File[]) => Promise<void>;
   onAddWebsite: (input: { title: string; url: string }) => Promise<void>;
@@ -82,6 +83,7 @@ const formatFileSize = (size: number) => {
 
 export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
   isOpen,
+  targetLabel,
   onClose,
   onUploadFiles,
   onAddWebsite,
@@ -253,7 +255,10 @@ export const AddSourcesDialog: React.FC<AddSourcesDialogProps> = ({
         <div className="flex max-h-[calc(100vh-7rem)] flex-col overflow-y-auto px-5 pb-4 text-gray-900 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <div className="flex flex-col w-full">
             <div className="my-2">
-              <div className="mb-2 text-xs text-gray-500">Knowledge</div>
+              <div className="mb-2 flex items-center justify-between gap-3 text-xs text-gray-500">
+                <span>Knowledge</span>
+                {targetLabel ? <span className="min-w-0 truncate rounded-lg bg-gray-50 px-2 py-1 text-gray-600">{targetLabel}</span> : null}
+              </div>
               <div className="flex flex-wrap flex-row text-sm gap-1">
                 {modeItems.map((item) => {
                   const isActive = mode === item.id;

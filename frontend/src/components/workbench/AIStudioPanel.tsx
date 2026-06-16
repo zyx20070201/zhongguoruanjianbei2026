@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  ClipboardCheck,
   Download,
   Dumbbell,
   Code,
@@ -19,10 +18,8 @@ import {
   GraduationCap,
   Loader2,
   Maximize2,
-  Minimize2,
   MoreHorizontal,
   Network,
-  Orbit,
   Play,
   Presentation,
   RefreshCw,
@@ -31,23 +28,24 @@ import {
   Sparkles,
   X,
   Pause,
-  ZoomIn,
-  ZoomOut
 } from 'lucide-react';
-import { ComponentType, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { ComponentType, ReactNode, Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { Graph } from '@antv/x6';
+import { convertToExcalidrawElements } from '@excalidraw/excalidraw';
+import DOMPurify from 'dompurify';
+import * as echarts from 'echarts';
 import ELK, { ElkNode } from 'elkjs/lib/elk.bundled.js';
+import { marked } from 'marked';
 import mermaid from 'mermaid';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
-import ForceGraph3D, { ForceGraphMethods, GraphData, LinkObject, NodeObject } from 'react-force-graph-3d';
 import MindElixir, { MindElixirData, MindElixirInstance, NodeObj } from 'mind-elixir';
 import 'mind-elixir/style.css';
-import SpriteText from 'three-spritetext';
+import Reveal, { type RevealApi } from 'reveal.js';
 import {
   aiApi,
-  AiCodeLabRunResult,
+  AiCodeLabTestRunResult,
   AiChatContext,
   AiChatMessage,
   AiContextMode,
@@ -73,11 +71,18 @@ import { fileSystemApi } from '../../services/fileSystemApi';
 import { audioNoteApi, AudioNoteAnalysis, AudioNoteProvider } from '../../services/audioNoteApi';
 import { EditorState, FileSystemObject, ResourceReference } from '../../types';
 import MarkdownPreview from './MarkdownPreview';
+import OpenWebUIMarkdownPreview from './OpenWebUIMarkdownPreview';
 import MotionCanvasStage from './MotionCanvasStage';
+import { VisualCodeLessonViewer, type VisualCodeLessonPayload } from './VisualCodeSandbox';
 import type {AlgorithmPresentationScene, PresentationObject} from './motionCanvasPresentation';
 import { OWDocumentPageIcon, OWEllipsisHorizontalIcon, OWSearchIcon } from '../common/openWebUIIcons';
+import '@excalidraw/excalidraw/index.css';
 import 'reveal.js/reveal.css';
 import 'reveal.js/theme/white.css';
+
+const ExcalidrawCanvas = lazy(() =>
+  import('@excalidraw/excalidraw').then((module) => ({ default: module.Excalidraw }))
+);
 
 interface AIStudioPanelProps {
   editor: EditorState;
@@ -277,6 +282,12 @@ interface ConceptGraphLink {
 interface ConceptGraphPayload {
   nodes: ConceptGraphNode[];
   links: ConceptGraphLink[];
+}
+
+interface CourseKnowledgeGraphPayload {
+  nodes?: Array<Record<string, any>>;
+  edges?: Array<Record<string, any>>;
+  sources?: Array<Record<string, any>>;
 }
 
 type TeachingDomain = 'sequence' | 'graph' | 'table' | 'state_machine' | 'formula' | 'hybrid';
@@ -501,17 +512,278 @@ interface VisualLessonPayload {
   slides: VisualLessonSlide[];
 }
 
-interface VisualCodeLessonPayload {
-  schemaVersion: 'visual_code_lesson.v1';
-  title: string;
-  summary: string;
-  sourceIds?: string[];
-  contentMarkdown: string;
+interface LightVisualLessonTimelineStep {
+  kind: 'text' | 'visual';
+  content: string;
+  visualIndex?: number;
 }
 
-type VisualCodePart =
-  | { type: 'text'; content: string }
-  | { type: 'react' | 'html'; code: string };
+interface LightVisualLessonVisualBlock {
+  type: 'diagram' | 'chart' | 'table' | 'formula' | 'code' | 'image_hint' | 'sketch';
+  content: string;
+}
+
+interface LightVisualLessonSlide {
+  header: string;
+  description: string;
+  timeline?: LightVisualLessonTimelineStep[];
+  visuals?: LightVisualLessonVisualBlock[];
+}
+
+interface LightVisualLessonPayload {
+  title: string;
+  markdownDraft?: string;
+  slides: LightVisualLessonSlide[];
+}
+
+const escapeLightVisualPdfHtml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const lightVisualMarkdownToPrintHtml = (content: string) =>
+  DOMPurify.sanitize(marked.parse(content || '', { async: false }) as string);
+
+const buildLightVisualLessonPrintHtml = (lesson: LightVisualLessonPayload) => {
+  const title = escapeLightVisualPdfHtml(lesson.title || 'Light Visual Lesson');
+  const slides = lesson.slides.map((slide, index) => {
+    const visuals = slide.visuals || [];
+    const hasVisuals = visuals.length > 0;
+    const descriptionLength = slide.description.trim().length;
+    const densityClass = descriptionLength > 1200 ? 'density-tight' : descriptionLength > 700 ? 'density-compact' : 'density-normal';
+    const descriptionClass = hasVisuals ? 'description' : `description description-columns ${densityClass}`;
+    const visualHtml = visuals.map((visual, visualIndex) => `
+      <section class="visual-block">
+        <div class="visual-label">${escapeLightVisualPdfHtml(visual.type)} ${visualIndex + 1}</div>
+        <pre>${escapeLightVisualPdfHtml(visual.content)}</pre>
+      </section>
+    `).join('');
+    return `
+      <section class="pdf-slide ${densityClass}">
+        <div class="slide-index">Slide ${index + 1}/${lesson.slides.length}</div>
+        <h1>${escapeLightVisualPdfHtml(slide.header)}</h1>
+        <main class="${hasVisuals ? 'with-visuals' : ''}">
+          <article class="${descriptionClass}">${lightVisualMarkdownToPrintHtml(slide.description)}</article>
+          ${hasVisuals ? `<aside class="visuals">${visualHtml}</aside>` : ''}
+        </main>
+      </section>
+    `;
+  }).join('');
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>${title}</title>
+    <style>
+      @page {
+        size: landscape;
+        margin: 12mm;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #ffffff;
+        color: #202124;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .pdf-slide {
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        width: 100%;
+        min-height: calc(100vh - 24mm);
+        padding: 0 4px 18px;
+        page-break-after: always;
+        break-after: page;
+        break-inside: auto;
+        overflow: visible;
+        background: #ffffff;
+      }
+      .pdf-slide:last-child {
+        page-break-after: auto;
+        break-after: auto;
+      }
+      .slide-index {
+        margin-bottom: 8px;
+        color: #64748b;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      h1 {
+        align-self: start;
+        margin: 0;
+        color: #202124;
+        font-size: 34px;
+        line-height: 1.18;
+        font-weight: 720;
+        letter-spacing: 0;
+      }
+      main {
+        display: grid;
+        min-height: 0;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 26px;
+      }
+      main.with-visuals {
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 32%);
+      }
+      .description {
+        min-height: 0;
+        overflow: visible;
+        font-size: 20px;
+        line-height: 1.55;
+      }
+      .description-columns {
+        column-gap: 28px;
+        column-fill: balance;
+      }
+      .density-normal.description-columns {
+        column-count: 2;
+      }
+      .density-compact.description-columns {
+        column-count: 2;
+        font-size: 18px;
+        line-height: 1.48;
+      }
+      .density-tight.description-columns {
+        column-count: 2;
+        font-size: 16px;
+        line-height: 1.42;
+      }
+      .description > :first-child {
+        margin-top: 0;
+      }
+      .description > :last-child {
+        margin-bottom: 0;
+      }
+      .description p,
+      .description ul,
+      .description ol,
+      .description blockquote,
+      .description pre {
+        margin: 0 0 14px;
+      }
+      .description ul,
+      .description ol {
+        padding-left: 1.25em;
+      }
+      .description li + li {
+        margin-top: 6px;
+      }
+      .description code {
+        border-radius: 5px;
+        background: #f1f5f9;
+        padding: 0.08em 0.28em;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 0.92em;
+      }
+      .description pre {
+        break-inside: avoid;
+        overflow: visible;
+        border-radius: 8px;
+        background: #f8fafc;
+        padding: 12px 14px;
+        font-size: 15px;
+        line-height: 1.48;
+      }
+      .visuals {
+        min-height: 0;
+        overflow: visible;
+      }
+      .visual-block {
+        margin: 0 0 14px;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 12px;
+        background: #ffffff;
+      }
+      .visual-label {
+        margin-bottom: 8px;
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .visual-block pre {
+        margin: 0;
+        overflow: visible;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: #334155;
+        font-size: 13px;
+        line-height: 1.48;
+        font-family: "SFMono-Regular", Consolas, monospace;
+      }
+      @media screen {
+        body {
+          padding: 24px 20px;
+          background: #f4f5f7;
+        }
+        .pdf-slide {
+          max-width: 1280px;
+          margin: 0 auto 24px;
+          padding: 0 20px 22px;
+          box-shadow: 0 18px 50px rgba(15, 23, 42, 0.12);
+        }
+      }
+      @media print {
+        .pdf-slide {
+          width: auto;
+          min-height: 0;
+        }
+        .description-columns {
+          column-gap: 22px;
+        }
+      }
+    </style>
+  </head>
+  <body>${slides}</body>
+</html>`;
+};
+
+const exportLightVisualLessonToPdf = (lesson: LightVisualLessonPayload) => {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    window.alert('浏览器阻止了导出窗口，请允许弹窗后再试。');
+    return;
+  }
+  printWindow.opener = null;
+  printWindow.document.open();
+  printWindow.document.write(buildLightVisualLessonPrintHtml(lesson));
+  printWindow.document.close();
+  window.setTimeout(() => {
+    printWindow.focus();
+    printWindow.print();
+  }, 350);
+};
+
+const splitLightLessonDescription = (description: string, timelineLength: number) => {
+  const text = description.trim();
+  if (!text) return [];
+  const targetCount = Math.max(1, Math.min(timelineLength || 1, 8));
+  if (targetCount <= 1) return [text];
+  const blocks = text
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  if (blocks.length >= targetCount) return blocks;
+
+  const sentences = text
+    .split(/(?<=[。！？!?])\s+|\n+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  if (sentences.length >= targetCount) return sentences;
+
+  return blocks.length ? blocks : [text];
+};
 
 interface VisualExplainerSection {
   id: string;
@@ -626,6 +898,32 @@ const studioGoalCatalog: AiStudioGoalInfo[] = [
   { id: 'visualize', zh: 'Visualize', en: 'Visualize', description: 'Generate slides, video scripts, animations, and infographics.' },
   { id: 'plan', zh: 'Plan', en: 'Plan', description: 'Create study plans, daily tasks, and review reports.' },
 ];
+
+const studioPromptGuideByGoal: Record<AiStudioGoalCategory, string> = {
+  understand: '例如：把选中的资料整理成适合期末复习的结构化笔记，保留关键定义、公式、例题、易错点和可继续追问的问题。',
+  map: '例如：围绕“数据库事务”生成知识图谱，突出核心概念、前置依赖、概念层级、易混关系和复习路径。',
+  practice: '例如：基于选中资料生成 10 道中等难度练习题，覆盖选择题、简答题和应用题，并给出答案解析和对应知识点。',
+  review: '例如：把资料拆成主动回忆卡片，正面只放一个明确问题，背面给出精炼答案、记忆提示和来源依据。',
+  lab: '例如：围绕 SQL 查询优化设计一个代码实验，包含任务背景、初始代码、测试用例、调试提示和参考答案。',
+  visualize: '例如：生成一个交互式动画讲解，用可执行可视化展示算法状态变化、关键步骤、用户可操作控件和逐步解释。',
+  plan: '例如：根据当前资料生成 7 天学习计划，每天包含学习目标、阅读任务、练习任务、复盘问题和完成标准。'
+};
+
+const studioPromptGuideForTemplate = (template: AiStudioTemplate) => {
+  if (template.id === 'resource_compare') {
+    return '例如：比较这些资料的主题覆盖、观点差异、结构差异、互补信息和冲突点，最后给出适合复习的整合建议。';
+  }
+  if (template.id === 'mind_map') {
+    return '例如：生成一张层级清晰的思维导图，从总主题展开到核心概念、关键公式、典型例题和易错点。';
+  }
+  if (template.id === 'knowledge_graph') {
+    return '例如：生成知识图谱，标出概念之间的前置、包含、因果、对比和易混关系，并给出学习顺序。';
+  }
+  if (template.id === 'hyperframes_video') {
+    return '例如：把选中的资料生成 60 秒教学短视频，前 10 秒提出问题，中间用动画解释关键概念，最后用一个检查问题收束。';
+  }
+  return template.goal ? studioPromptGuideByGoal[template.goal] : 'Write your model prompt content here';
+};
 
 const coreStudioTemplates: AiStudioTemplate[] = [
   {
@@ -802,6 +1100,22 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     tags: ['code', 'lab', 'hands-on']
   },
   {
+    id: 'presenton_pptx',
+    version: '1.0.0',
+    goal: 'visualize',
+    title: 'Presenton PPTX',
+    shortTitle: 'Presenton PPT',
+    description: '调用 Presenton 生成真实 PPTX 文件。',
+    generator: 'multimodal',
+    renderer: 'slides',
+    format: 'md',
+    filename: 'visualize-presenton-pptx.md',
+    outputLabel: 'Presenton PPTX',
+    recommendedUse: '需要真实 PPTX 文件，并希望使用 Presenton 的生成和模板能力时使用。',
+    legacyResourceType: 'slide_deck',
+    tags: ['presenton', 'pptx', 'slides']
+  },
+  {
     id: 'slide_deck',
     version: '1.0.0',
     goal: 'visualize',
@@ -818,6 +1132,22 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     tags: ['pptx', 'PptxGenJS', 'slides']
   },
   {
+    id: 'light_visual_lesson',
+    version: '1.0.0',
+    goal: 'visualize',
+    title: 'Light Visual Lesson',
+    shortTitle: 'Teacher Slides',
+    description: '用选中文件和要求生成像教师 PPT 一样逐页展开的轻量讲解。',
+    generator: 'multimodal',
+    renderer: 'light_visual_lesson',
+    format: 'json',
+    filename: 'visualize-light-visual-lesson.json',
+    outputLabel: '轻量可视化讲解',
+    recommendedUse: '需要稳定的 slide + timeline 讲解，而不是复杂交互应用时使用。',
+    legacyResourceType: 'light_visual_lesson',
+    tags: ['teacher-slides', 'timeline', 'source-grounded']
+  },
+  {
     id: 'visual_explainer',
     version: '1.0.0',
     goal: 'visualize',
@@ -832,6 +1162,22 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     recommendedUse: '适合把知识点、算法、数据库、组成原理或系统流程转成可交互动画讲解。',
     legacyResourceType: 'visual_explainer',
     tags: ['visual-explainer', 'react-viz', 'animation']
+  },
+  {
+    id: 'react_chat_visual',
+    version: '1.0.0',
+    goal: 'visualize',
+    title: 'React-Chat Visual',
+    shortTitle: 'React-Chat',
+    description: '直接使用自由回答 + REACT_VIZ/HTML_VIZ 生成交互可视化。',
+    generator: 'multimodal',
+    renderer: 'visual_explainer',
+    format: 'md',
+    filename: 'visualize-react-chat-visual.md',
+    outputLabel: 'React-Chat 自由可视化',
+    recommendedUse: '想要接近 React-Chat 原生生成方式时使用。',
+    legacyResourceType: 'visual_explainer',
+    tags: ['react-chat', 'react-viz', 'html-viz', 'freeform']
   },
   {
     id: 'video_script',
@@ -864,6 +1210,22 @@ const coreStudioTemplates: AiStudioTemplate[] = [
     recommendedUse: '适合排序过程、函数变化、物理运动、几何关系和参数实验。',
     legacyResourceType: 'report',
     tags: ['p5.js', 'interactive', 'simulation']
+  },
+  {
+    id: 'hyperframes_video',
+    version: '1.0.0',
+    goal: 'visualize',
+    title: 'HyperFrames Video',
+    shortTitle: 'HyperFrames',
+    description: '生成 HyperFrames HTML composition，并渲染为 MP4 视频。',
+    generator: 'multimodal',
+    renderer: 'hyperframes_composition',
+    format: 'md',
+    filename: 'visualize-hyperframes-video.html',
+    outputLabel: 'HyperFrames 视频',
+    recommendedUse: '适合把选中资源和提示词直接转成可交付教学短视频。',
+    legacyResourceType: 'visual_explainer',
+    tags: ['HyperFrames', 'HeyGen', 'MP4']
   },
   {
     id: 'algorithm_animation',
@@ -923,7 +1285,11 @@ const visibleStudioTemplateIds = new Set([
   'custom_practice',
   'flashcards',
   'code_lab',
-  'visual_explainer'
+  'presenton_pptx',
+  'light_visual_lesson',
+  'visual_explainer',
+  'react_chat_visual',
+  'hyperframes_video'
 ]);
 
 const visibleStudioGoalIds = new Set<AiStudioGoalCategory>([
@@ -978,14 +1344,18 @@ const templateResourceType = (template?: AiStudioTemplate | null): AiStudioResou
   if (template?.renderer === 'flashcards') return 'flashcards';
   if (template?.renderer === 'mermaid') return 'mind_map';
   if (template?.renderer === 'slides') return 'slide_deck';
+  if (template?.renderer === 'light_visual_lesson' || template?.id === 'light_visual_lesson') return 'light_visual_lesson';
   if (template?.renderer === 'visual_explainer') return 'visual_explainer';
+  if (template?.renderer === 'hyperframes_composition') return 'visual_explainer';
   if (template?.renderer === 'code_lab' || template?.generator === 'code_lab' || template?.id === 'code_lab' || template?.id === 'debug_task') return 'code_lab';
   return 'report';
 };
 
-const visualExplainerDefaultPrompt = '生成 AVL 树的动画讲解：支持插入、删除、查询，并逐步展示平衡因子和旋转过程。';
+const visualExplainerDefaultPrompt = '生成一个交互式动画讲解：用可执行可视化展示核心概念、关键步骤和状态变化。';
+const lightVisualLessonDefaultPrompt = '生成一套像教师课堂 PPT 一样的轻量可视化讲解：先讲清楚内容，再按 slide 和 timeline 逐步展开。';
 
 const fallbackVisualExplainerPromptExamples = [
+  '生成一个交互式动画讲解：用可执行可视化展示核心概念、关键步骤和状态变化。',
   '生成 AVL 树的动画讲解：支持插入、删除、查询，并逐步展示平衡因子和 LL/LR/RR/RL 旋转。',
   '用动画讲解二分查找：数组如何缩小范围，left/right/mid 怎么变化。',
   '用动画讲解 SQL LEFT JOIN：左表、右表如何按条件匹配，未匹配行为什么保留 NULL。'
@@ -1080,7 +1450,11 @@ const defaultTemplateModalState = (template: AiStudioTemplate): StudioModalState
   ...defaultModalState(templateResourceType(template)),
   templateId: template.id,
   goal: template.goal,
-  topic: template.renderer === 'visual_explainer' ? visualExplainerDefaultPrompt : ''
+  topic: template.id === 'light_visual_lesson'
+    ? lightVisualLessonDefaultPrompt
+    : template.renderer === 'visual_explainer'
+      ? visualExplainerDefaultPrompt
+      : ''
 });
 
 const defaultModalState = (resourceType: AiStudioResourceType): StudioModalState => ({
@@ -1091,6 +1465,7 @@ const defaultModalState = (resourceType: AiStudioResourceType): StudioModalState
 
 const resultTitle = (type: AiStudioResourceType) => {
   if (type === 'slide_deck') return 'Slide Deck';
+  if (type === 'light_visual_lesson') return 'Light Visual Lesson';
   if (type === 'visual_explainer') return 'Visual Explainer';
   if (type === 'mind_map') return 'Mind Map';
   if (type === 'flashcards') return 'Flashcards';
@@ -1250,8 +1625,16 @@ const firstSanitizedTitle = (values: Array<string | null | undefined>, fallback:
   return fallback;
 };
 
-const studioResultTypeLabel = (result: StudioResult) =>
-  isResourceNotesResult(result) ? resourceNotesDisplayTitle(result) : resultTitle(result.resourceType);
+const studioResultTypeLabel = (result: StudioResult) => {
+  if (
+    result.delivery?.kind === 'hyperframes' ||
+    result.renderer === 'hyperframes_composition' ||
+    result.template?.id === 'hyperframes_video'
+  ) {
+    return 'HyperFrames Video';
+  }
+  return isResourceNotesResult(result) ? resourceNotesDisplayTitle(result) : resultTitle(result.resourceType);
+};
 
 const studioResultHeaderTitle = (result: StudioResult, quizMeta?: { title: string } | null) => {
   if (isResourceNotesResult(result)) return noteTitleForResult(result);
@@ -1375,6 +1758,7 @@ const templateOptionsFor = (modal: StudioModalState) => ({
 const iconForResult = (result: Pick<StudioResult, 'goal' | 'resourceType'>) => {
   if (result.goal) return goalIconMap[result.goal] || Sparkles;
   if (result.resourceType === 'slide_deck') return Presentation;
+  if (result.resourceType === 'light_visual_lesson') return Presentation;
   if (result.resourceType === 'visual_explainer') return Play;
   if (result.resourceType === 'mind_map') return Network;
   if (result.resourceType === 'flashcards') return Repeat2;
@@ -1385,6 +1769,7 @@ const iconForResult = (result: Pick<StudioResult, 'goal' | 'resourceType'>) => {
 const colorsForResult = (result: Pick<StudioResult, 'goal' | 'resourceType'>) => {
   if (result.goal) return goalColorMap[result.goal] || { icon: 'text-[#4f5665]', bg: 'bg-[#f8fafc]', border: 'border-[#edf0f5]' };
   if (result.resourceType === 'slide_deck') return goalColorMap.visualize;
+  if (result.resourceType === 'light_visual_lesson') return goalColorMap.visualize;
   if (result.resourceType === 'visual_explainer') return goalColorMap.visualize;
   if (result.resourceType === 'mind_map') return goalColorMap.map;
   if (result.resourceType === 'flashcards') return goalColorMap.review;
@@ -2534,9 +2919,7 @@ function StudioGenerationForm({
   resources,
   loadingResources,
   onGenerate,
-  generating,
-  onCancel,
-  compact = false
+  generating
 }: {
   template: AiStudioTemplate;
   templateOptions?: AiStudioTemplate[];
@@ -2547,29 +2930,12 @@ function StudioGenerationForm({
   loadingResources: boolean;
   onGenerate: () => void;
   generating: boolean;
-  onCancel?: () => void;
-  compact?: boolean;
 }) {
-  const resourceNotes = isResourceNotesTemplate(template.id);
-  const resourceCompare = isResourceCompareTemplate(template.id);
   const visualExplainer = template.renderer === 'visual_explainer';
-  const requirementLabel = visualExplainer ? '讲解任务' : resourceNotes ? 'Prompt' : resourceCompare ? 'Prompt' : 'Prompt';
-  const canGenerate = resourceNotes || resourceCompare ? state.selectedResourceIds.length > 0 || state.topic.trim().length > 0 : state.topic.trim().length > 0;
-  const primaryLabel = visualExplainer ? '生成动画讲解' : resourceNotes ? 'Convert to Notes' : resourceCompare ? 'Compare Resources' : 'Generate';
+  const primaryLabel = 'Generate';
   const selectOptions = templateOptions?.length ? templateOptions : [template];
-  const effectiveSelectedResourceIds = visualExplainer
-    ? effectiveVisualResourceIds(state.selectedResourceIds, resources, template.renderer)
-    : state.selectedResourceIds;
-  const visualPromptExamples = useMemo(
-    () => visualExplainer ? buildVisualExplainerPromptExamples(resources, effectiveSelectedResourceIds) : [],
-    [resources, effectiveSelectedResourceIds, visualExplainer]
-  );
-  const visualDefaultPrompt = visualPromptExamples[0] || visualExplainerDefaultPrompt;
-  const promptPlaceholder = visualExplainer
-    ? visualDefaultPrompt
-    : 'Write your model prompt content here';
+  const promptPlaceholder = studioPromptGuideForTemplate(template);
   const [sourceSelectionTouched, setSourceSelectionTouched] = useState(false);
-  const [visualSuggestionThinking, setVisualSuggestionThinking] = useState(false);
   const handleResourceSelectionChange = (selectedResourceIds: string[]) => {
     setSourceSelectionTouched(true);
     setState({ selectedResourceIds });
@@ -2579,21 +2945,6 @@ function StudioGenerationForm({
     if (!visualExplainer || loadingResources || sourceSelectionTouched || state.selectedResourceIds.length || resources.length !== 1) return;
     setState({ selectedResourceIds: [resources[0].id] });
   }, [loadingResources, resources, setState, sourceSelectionTouched, state.selectedResourceIds.length, visualExplainer]);
-
-  useEffect(() => {
-    if (!visualExplainer || loadingResources) {
-      setVisualSuggestionThinking(false);
-      return;
-    }
-    setVisualSuggestionThinking(true);
-    const timer = window.setTimeout(() => setVisualSuggestionThinking(false), 1100);
-    return () => window.clearTimeout(timer);
-  }, [
-    visualExplainer,
-    loadingResources,
-    resources.map((resource) => resource.id).join('|'),
-    effectiveSelectedResourceIds.join('|')
-  ]);
 
   return (
     <form
@@ -2614,69 +2965,25 @@ function StudioGenerationForm({
         disabled={!onTemplateChange || selectOptions.length <= 1}
       />
 
-      <div className={compact ? 'my-2.5' : 'my-2.5'}>
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <div className="text-xs text-gray-500">{requirementLabel}</div>
-          {visualExplainer ? (
-            <button
-              type="button"
-              onClick={() => setState({ topic: visualDefaultPrompt })}
-              className="text-xs font-semibold text-[#2563eb] hover:text-[#174ea6]"
-            >
-              恢复默认
-            </button>
-          ) : null}
+      <hr className="my-2.5 w-full border-gray-50 dark:border-gray-850/30" />
+
+      <div className="my-1">
+        <div className="mb-2 text-xs text-gray-500">
+          Prompt
         </div>
         <textarea
           value={state.topic}
           onChange={(event) => setState({ topic: event.target.value })}
-          rows={compact ? 6 : 6}
-          className="w-full resize-none rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-sm leading-6 text-[#202124] outline-none transition focus:border-[#2563eb] focus:ring-2 focus:ring-[#dbeafe]"
+          rows={3}
+          className="min-h-[76px] w-full resize-none bg-transparent text-sm leading-6 text-black outline-hidden placeholder:text-gray-300 dark:text-gray-100 dark:placeholder:text-gray-700"
           placeholder={promptPlaceholder}
         />
-        {visualExplainer ? (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {visualSuggestionThinking ? (
-              <div className="flex w-full items-center gap-3 rounded-xl border border-[#dbeafe] bg-[#f8fbff] px-3 py-2 text-xs text-[#2563eb]">
-                <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#dbeafe]">
-                  <Sparkles className="h-4 w-4 animate-pulse" />
-                  <span className="absolute inset-0 rounded-full border border-[#93c5fd] animate-ping" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="font-semibold">AI 正在阅读资料并提炼可视化任务</div>
-                  <div className="mt-0.5 text-[#64748b]">分析文件主题、关键概念和适合做成动画的步骤</div>
-                </div>
-                <span className="inline-flex items-center gap-0.5">
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb] [animation-delay:120ms]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#2563eb] [animation-delay:240ms]" />
-                </span>
-              </div>
-            ) : (
-              visualPromptExamples.map((example) => (
-                <button
-                  key={example}
-                  type="button"
-                  onClick={() => setState({ topic: example })}
-                  className="rounded-full border border-[#dfe3ea] bg-white px-3 py-1.5 text-xs font-medium text-[#343a46] transition hover:border-[#2563eb] hover:bg-[#f8fbff] hover:text-[#174ea6]"
-                >
-                  {example}
-                </button>
-              ))
-            )}
-          </div>
-        ) : null}
       </div>
 
-      <div className={compact ? 'my-2' : 'my-2'}>
+      <div className="my-2">
         <div className="flex w-full justify-between">
-          <div className=" mb-2 text-xs text-gray-500">{visualExplainer ? '参考资料（可选）' : 'Knowledge'}</div>
           <div className=" mb-2 text-xs text-gray-500">
-            {state.selectedResourceIds.length
-              ? `${state.selectedResourceIds.length} selected`
-              : visualExplainer
-                ? '未选择资料时按任务生成'
-                : ''}
+            Knowledge
           </div>
         </div>
         <StudioSourcePicker
@@ -2689,20 +2996,10 @@ function StudioGenerationForm({
       </div>
 
       <div className="flex justify-end gap-1.5 pt-3 text-sm font-medium">
-        {onCancel ? (
-          <button
-            disabled={generating}
-            onClick={onCancel}
-            className="rounded-full px-3.5 py-1.5 text-sm font-medium transition hover:bg-black/5 dark:hover:bg-white/5"
-            type="button"
-          >
-            Cancel
-          </button>
-        ) : null}
         <button
-          disabled={generating || !canGenerate}
+          disabled={generating}
           className={`flex flex-row items-center space-x-1 rounded-full bg-black px-3.5 py-1.5 text-sm font-medium text-white transition hover:bg-gray-950 dark:bg-white dark:text-black dark:hover:bg-gray-100 ${
-            generating || !canGenerate ? ' cursor-not-allowed opacity-50' : ''
+            generating ? ' cursor-not-allowed' : ''
           }`}
           type="submit"
         >
@@ -2720,6 +3017,9 @@ function StudioGenerationForm({
 
 function StudioGenerateDetailModal({
   template,
+  title,
+  templateOptions,
+  onTemplateChange,
   state,
   setState,
   resources,
@@ -2729,6 +3029,9 @@ function StudioGenerateDetailModal({
   generating
 }: {
   template: AiStudioTemplate;
+  title?: string;
+  templateOptions?: AiStudioTemplate[];
+  onTemplateChange?: (template: AiStudioTemplate) => void;
   state: StudioModalState;
   setState: (patch: Partial<StudioModalState>) => void;
   resources: StudioSelectableResource[];
@@ -2737,14 +3040,24 @@ function StudioGenerateDetailModal({
   onGenerate: () => void;
   generating: boolean;
 }) {
-  const title = template.shortTitle || template.title;
+  const modalTitle = title || template.shortTitle || template.title;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/20 p-3">
-      <div className="w-full max-w-3xl overflow-visible rounded-[2rem] bg-white text-black shadow-[0_24px_80px_rgba(0,0,0,0.18)] dark:bg-gray-900 dark:text-white">
+    <div
+      className="modal fixed bottom-0 left-0 right-0 top-0 z-[9999] flex h-screen max-h-[100dvh] w-full justify-center overflow-y-auto overscroll-contain bg-black/30 p-3 animate-[openwebui-fade_10ms_ease-out] dark:bg-black/60"
+      onMouseDown={onClose}
+    >
+      <style>
+        {`@keyframes openwebui-fade { from { opacity: 0; } to { opacity: 1; } }
+          @keyframes openwebui-scale-up { from { transform: scale(0.985); opacity: 0; } to { transform: scale(1); opacity: 1; } }`}
+      </style>
+      <div
+        className="m-auto mx-2 min-h-fit w-[42rem] max-w-full overflow-visible rounded-4xl border border-white bg-white/95 text-black shadow-3xl backdrop-blur-sm animate-[openwebui-scale-up_100ms_ease-out_forwards] dark:border-gray-850 dark:bg-gray-900/95 dark:text-white"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <div className=" flex justify-between dark:text-gray-300 px-5 pt-4 pb-1">
           <div className=" text-lg font-medium self-center">
-            {title}
+            {modalTitle}
           </div>
           <button
             onClick={onClose}
@@ -2756,18 +3069,112 @@ function StudioGenerateDetailModal({
         </div>
 
         <div className="flex flex-col md:flex-row w-full px-5 pb-4 md:space-x-4 dark:text-gray-200">
-          <StudioGenerationForm
-            template={template}
-            state={state}
-            setState={setState}
-            resources={resources}
-            loadingResources={loadingResources}
-            onCancel={onClose}
-            onGenerate={onGenerate}
-            generating={generating}
-          />
+          <div className="flex w-full flex-col sm:flex-row sm:justify-center sm:space-x-6">
+            <StudioGenerationForm
+              template={template}
+              templateOptions={templateOptions}
+              onTemplateChange={onTemplateChange}
+              state={state}
+              setState={setState}
+              resources={resources}
+              loadingResources={loadingResources}
+              onGenerate={onGenerate}
+              generating={generating}
+            />
+          </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function exportStudioResult(result: StudioResult) {
+  const payload = {
+    id: result.id,
+    title: resultDisplayTitle(result),
+    name: result.name,
+    resourceType: result.resourceType,
+    goal: result.goal,
+    createdAt: result.createdAt,
+    runId: result.runId,
+    metadata: result.metadata || {},
+    content: result.content
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  const safeName = resultDisplayTitle(result).replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80) || 'ai-studio-generation';
+  anchor.href = url;
+  anchor.download = `${safeName}.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function StudioResultActionsMenu({
+  result,
+  onDelete
+}: {
+  result: StudioResult;
+  onDelete: (result: StudioResult) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [open]);
+
+  return (
+    <div ref={menuRef} className="relative flex items-center">
+      <button
+        type="button"
+        className="rounded-full p-1 transition hover:bg-gray-100 dark:hover:bg-gray-850"
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((value) => !value);
+        }}
+        aria-label="Generation options"
+      >
+        <MoreHorizontal className="size-3.5" />
+      </button>
+
+      {open ? (
+        <div className="absolute right-0 top-8 z-[9999999] min-w-[140px] rounded-2xl border border-gray-100 bg-white p-1 text-black shadow-lg dark:border-gray-800 dark:bg-gray-850 dark:text-white">
+          <button
+            type="button"
+            className="flex w-full select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm transition hover:bg-gray-50 dark:hover:bg-gray-800"
+            onClick={(event) => {
+              event.stopPropagation();
+              exportStudioResult(result);
+              setOpen(false);
+            }}
+          >
+            <Download className="size-3.5" />
+            Export
+          </button>
+          <button
+            type="button"
+            className="flex w-full select-none items-center gap-2 rounded-xl px-3 py-1.5 text-sm transition hover:bg-gray-50 dark:hover:bg-gray-800"
+            onClick={(event) => {
+              event.stopPropagation();
+              setOpen(false);
+              onDelete(result);
+            }}
+          >
+            <X className="size-3.5" />
+            Delete
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2777,16 +3184,8 @@ function StudioHome({
   templates,
   artifacts,
   results,
-  selectedGoal,
-  setSelectedGoal,
-  practiceDraft,
-  setPracticeDraft,
-  studioResources,
-  loadingResources,
-  generating,
   onOpenRecorder,
-  onGenerateFromState,
-  onSubmitPractice,
+  onOpenGenerateModal,
   onOpenResult,
   onDeleteResult
 }: {
@@ -2794,262 +3193,79 @@ function StudioHome({
   templates: AiStudioTemplate[];
   artifacts: AiStudioArtifactSummary[];
   results: StudioResult[];
-  selectedGoal: AiStudioGoalCategory | null;
-  setSelectedGoal: (goal: AiStudioGoalCategory | null) => void;
-  practiceDraft: {
-    sourceIds: string[];
-    prompt: string;
-    templateId: string;
-    questionAmount: PracticeQuestionAmount;
-    difficulty: PracticeDifficulty;
-  };
-  setPracticeDraft: React.Dispatch<React.SetStateAction<{
-    open: boolean;
-    sourceIds: string[];
-    prompt: string;
-    templateId: string;
-    questionAmount: PracticeQuestionAmount;
-    difficulty: PracticeDifficulty;
-  }>>;
-  studioResources: StudioSelectableResource[];
-  loadingResources: boolean;
-  generating: boolean;
   onOpenRecorder: () => void;
-  onGenerateFromState: (state: StudioModalState) => void;
-  onSubmitPractice: () => void;
+  onOpenGenerateModal: (template: AiStudioTemplate) => void;
   onOpenResult: (id: string) => void;
   onDeleteResult: (result: StudioResult) => void;
 }) {
   const effectiveTemplates = templates.length ? templates : visibleStudioTemplates(coreStudioTemplates);
   const goalCatalog = mergeGoalCatalog(goals);
-  const selectedGoalInfo = selectedGoal ? goalCatalog.find((goal) => goal.id === selectedGoal) || null : null;
-  const selectedGoalTemplates = selectedGoal ? effectiveTemplates.filter((template) => template.goal === selectedGoal) : [];
-  const preferredSelectedGoalTemplate = selectedGoal === 'visualize'
-    ? selectedGoalTemplates.find((template) => template.id === 'visual_explainer') || selectedGoalTemplates[0] || null
-    : selectedGoalTemplates[0] || null;
-  const hasSelectedGoalTemplates = selectedGoalTemplates.length > 0;
-  const [inlineModal, setInlineModal] = useState<StudioModalState | null>(null);
-  const activeInlineTemplate =
-    inlineModal?.templateId
-      ? selectedGoalTemplates.find((template) => template.id === inlineModal.templateId) || selectedGoalTemplates[0] || null
-      : preferredSelectedGoalTemplate;
-  const selectedQuestionAmount =
-    practiceQuestionAmountOptions.find((option) => option.id === practiceDraft.questionAmount) || practiceQuestionAmountOptions[1];
-  const selectedDifficulty =
-    practiceDifficultyOptions.find((option) => option.id === practiceDraft.difficulty) || practiceDifficultyOptions[1];
-
-  useEffect(() => {
-    if (!selectedGoal || selectedGoal === 'practice') {
-      setInlineModal(null);
-      return;
-    }
-    const firstTemplate = preferredSelectedGoalTemplate;
-    if (!firstTemplate) {
-      setInlineModal(null);
-      return;
-    }
-    setInlineModal((current) => {
-      if (current?.templateId && selectedGoalTemplates.some((template) => template.id === current.templateId)) return current;
-      return defaultTemplateModalState(firstTemplate);
-    });
-  }, [selectedGoal, selectedGoalTemplates.map((template) => template.id).join('|'), preferredSelectedGoalTemplate?.id]);
+  const openGoalModal = (goalId: AiStudioGoalCategory) => {
+    const goalTemplates = effectiveTemplates.filter((template) => template.goal === goalId);
+    const template = goalId === 'visualize'
+      ? goalTemplates.find((item) => item.id === 'presenton_pptx') || goalTemplates[0]
+      : goalTemplates[0];
+    if (template) onOpenGenerateModal(template);
+  };
 
   return (
     <div className="min-h-0 flex-1 overflow-auto bg-white p-4">
-      {selectedGoal === 'practice' ? (
-        <>
-          <section className="sticky top-0 z-20 -mx-4 border-b border-[#eef0f4] bg-white px-5 pb-3 pt-1">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">AI Studio</div>
-                <h3 className="mt-1 truncate text-xl font-semibold tracking-normal text-[#202124]">Generate practice</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedGoal(null)}
-                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc]"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                返回
-              </button>
-            </div>
-          </section>
+      <section className="flex flex-col gap-1 px-1">
+        <div className="mb-1.5 flex items-center justify-between">
+          <div className="flex items-center gap-2 px-0.5 text-xl font-medium text-[#202124]">
+            <div>Choose a module</div>
+            <div className="text-lg font-medium text-gray-500">{goalCatalog.length + 1}</div>
+          </div>
+        </div>
 
-          <section className="mt-5 px-1">
-            <OpenWebUISelect
-              label="Resource Type"
-              valueLabel="Practice"
-              options={[{ id: 'custom_practice', label: 'Practice' }]}
-              onSelect={() => undefined}
-              disabled
-            />
+        <div className="rounded-3xl border border-gray-100/30 bg-white py-2">
+          <div className="my-2 grid grid-cols-1 gap-2 px-3 lg:grid-cols-2">
+            <button
+              type="button"
+              onClick={onOpenRecorder}
+              className="flex min-h-[58px] w-full cursor-pointer items-center justify-between gap-3 rounded-2xl px-3 py-2.5 text-left transition hover:bg-gray-50"
+            >
+              <span className="flex min-w-0 flex-1 items-center gap-3.5">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
+                  <Mic className="size-4" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-[#202124]">Lecture Recording</span>
+                </span>
+              </span>
+              <span className="flex w-fit shrink-0 items-center rounded-xl p-1.5 text-sm text-gray-700 transition hover:bg-black/5">
+                <ChevronRight className="size-5" />
+              </span>
+            </button>
 
-            <div className="my-2.5">
-              <div className="mb-2 text-xs text-gray-500">Prompt</div>
-              <textarea
-                value={practiceDraft.prompt}
-                onChange={(event) => setPracticeDraft((current) => ({ ...current, prompt: event.target.value }))}
-                rows={6}
-                className=" text-sm w-full bg-transparent outline-hidden resize-none"
-                placeholder="Write your model prompt content here"
-              />
-            </div>
-
-            <div className="my-2">
-              <div className="flex w-full justify-between">
-                <div className=" mb-2 text-xs text-gray-500">Knowledge</div>
-                <div className=" mb-2 text-xs text-gray-500">
-                  {practiceDraft.sourceIds.length ? `${practiceDraft.sourceIds.length} selected` : ''}
-                </div>
-              </div>
-              <StudioSourcePicker
-                selectedIds={practiceDraft.sourceIds}
-                onChange={(sourceIds) => setPracticeDraft((current) => ({ ...current, sourceIds }))}
-                resources={studioResources}
-                loadingResources={loadingResources}
-              />
-            </div>
-
-            <div className="my-2.5 grid gap-4 md:grid-cols-2">
-              <OpenWebUISelect
-                label="Number of questions"
-                valueLabel={selectedQuestionAmount.label}
-                options={practiceQuestionAmountOptions.map((option) => ({ id: option.id, label: option.label }))}
-                onSelect={(id) => setPracticeDraft((current) => ({ ...current, questionAmount: id as PracticeQuestionAmount }))}
-              />
-              <OpenWebUISelect
-                label="Level of difficulty"
-                valueLabel={selectedDifficulty.label}
-                options={practiceDifficultyOptions.map((option) => ({ id: option.id, label: option.label }))}
-                onSelect={(id) => setPracticeDraft((current) => ({ ...current, difficulty: id as PracticeDifficulty }))}
-              />
-            </div>
-
-            <div className="flex justify-end pt-3 text-sm font-medium gap-1.5">
-              <button
-                onClick={onSubmitPractice}
-                disabled={generating || !practiceDraft.prompt.trim()}
-                className={`px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-950 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full flex flex-row space-x-1 items-center ${
-                  generating || !practiceDraft.prompt.trim() ? ' cursor-not-allowed opacity-50' : ''
-                }`}
-              >
-                <span>Generate</span>
-                {generating ? (
-                  <div className="ml-2 self-center">
-                    <Loader2 className="size-4 animate-spin" />
-                  </div>
-                ) : null}
-              </button>
-            </div>
-          </section>
-        </>
-      ) : !selectedGoal ? (
-        <>
-          <section className="flex flex-col gap-1 px-1">
-            <div className="mb-1.5 flex items-center justify-between">
-              <div className="flex items-center gap-2 px-0.5 text-xl font-medium text-[#202124]">
-                <div>Choose a module</div>
-                <div className="text-lg font-medium text-gray-500">{goalCatalog.length + 1}</div>
-              </div>
-            </div>
-
-            <div className="rounded-3xl border border-gray-100/30 bg-white py-2">
-              <div className="my-2 grid grid-cols-1 gap-2 px-3 lg:grid-cols-2">
+            {goalCatalog.map((goal) => {
+              const Icon = goalIconMap[goal.id] || Sparkles;
+              return (
                 <button
+                  key={goal.id}
                   type="button"
-                  onClick={onOpenRecorder}
+                  onClick={() => openGoalModal(goal.id)}
                   className="flex min-h-[58px] w-full cursor-pointer items-center justify-between gap-3 rounded-2xl px-3 py-2.5 text-left transition hover:bg-gray-50"
                 >
-                      <span className="flex min-w-0 flex-1 items-center gap-3.5">
-                        <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
-                          <Mic className="size-4" />
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium text-[#202124]">Lecture Recording</span>
-                        </span>
-                      </span>
+                  <span className="flex min-w-0 flex-1 items-center gap-3.5">
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
+                      <Icon className="size-4" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-[#202124]">{goal.en}</span>
+                    </span>
+                  </span>
                   <span className="flex w-fit shrink-0 items-center rounded-xl p-1.5 text-sm text-gray-700 transition hover:bg-black/5">
                     <ChevronRight className="size-5" />
                   </span>
                 </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
 
-                {goalCatalog.map((goal) => {
-                  const Icon = goalIconMap[goal.id] || Sparkles;
-                  return (
-                    <button
-                      key={goal.id}
-                      type="button"
-                      onClick={() => setSelectedGoal(goal.id)}
-                      className="flex min-h-[58px] w-full cursor-pointer items-center justify-between gap-3 rounded-2xl px-3 py-2.5 text-left transition hover:bg-gray-50"
-                    >
-                      <span className="flex min-w-0 flex-1 items-center gap-3.5">
-                        <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
-                          <Icon className="size-4" />
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium text-[#202124]">{goal.en}</span>
-                        </span>
-                      </span>
-                      <span className="flex w-fit shrink-0 items-center rounded-xl p-1.5 text-sm text-gray-700 transition hover:bg-black/5">
-                        <ChevronRight className="size-5" />
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </section>
-        </>
-      ) : (
-        <>
-          <section className="sticky top-0 z-20 -mx-4 border-b border-[#eef0f4] bg-white px-5 pb-3 pt-1">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">AI Studio</div>
-                <h3 className="mt-1 truncate text-xl font-semibold tracking-normal text-[#202124]">{selectedGoalInfo?.en}</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedGoal(null)}
-                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc]"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                返回
-              </button>
-            </div>
-          </section>
-
-          {hasSelectedGoalTemplates ? (
-            <section className="mt-5 px-1">
-              {activeInlineTemplate && inlineModal ? (
-                <StudioGenerationForm
-                  template={activeInlineTemplate}
-                  templateOptions={selectedGoalTemplates}
-                  onTemplateChange={(template) => setInlineModal((current) => ({
-                    ...(current?.templateId === template.id ? current : defaultTemplateModalState(template)),
-                    templateId: template.id,
-                    goal: template.goal,
-                    resourceType: templateResourceType(template)
-                  }))}
-                  state={inlineModal}
-                  setState={(patch) => setInlineModal((current) => (current ? { ...current, ...patch } : current))}
-                  resources={studioResources}
-                  loadingResources={loadingResources}
-                  onGenerate={() => onGenerateFromState(inlineModal)}
-                  generating={generating}
-                  compact
-                />
-              ) : null}
-            </section>
-          ) : (
-            <section className="mt-4 rounded-lg border border-dashed border-[#dfe3ea] bg-white p-5 text-sm leading-6 text-[#667085]">
-              当前目标暂时没有加载到可生成模板。可以返回 AI Studio 重新进入，或稍后刷新模板列表。
-            </section>
-          )}
-        </>
-      )}
-
-      {!selectedGoal && results.length > 0 && (
+      {results.length > 0 && (
         <section className="mt-5 flex flex-col gap-1 px-1">
           <div className="mb-1.5 flex items-center justify-between">
             <div className="flex items-center gap-2 px-0.5 text-xl font-medium text-[#202124]">
@@ -3059,58 +3275,59 @@ function StudioHome({
           </div>
 
           <div className="rounded-3xl border border-gray-100/30 bg-white py-2">
-            <div className="my-2 flex flex-col gap-2 px-3">
+            <div className="my-2 grid grid-cols-1 gap-2 px-3 lg:grid-cols-2">
             {results.map((result) => {
               const Icon = iconForResult(result);
               const resultMeta = resultMetaLabel(result);
               return (
                 <div
                   key={result.id}
-                  className="flex min-h-[70px] w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-left transition hover:bg-gray-50"
+                  className="flex w-full cursor-pointer space-x-4 rounded-2xl px-3 py-2.5 text-left transition hover:bg-gray-50 dark:hover:bg-gray-850/50"
+                  onClick={() => onOpenResult(result.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onOpenResult(result.id);
+                    }
+                  }}
                 >
-                  <button
-                    type="button"
-                    onClick={() => onOpenResult(result.id)}
-                    className="flex min-w-0 flex-1 items-center gap-4 rounded-2xl px-0 py-0 text-left"
-                    title="Open generation"
-                  >
-                    <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
-                      <Icon className="size-4" />
-                    </span>
-                    <span className="min-w-0 flex-1 self-center">
-                      <span className="flex items-center justify-between gap-2 -my-1 h-8">
-                        <span className="min-w-0">
-                          <span className="rounded-lg bg-green-500/20 px-[5px] text-xs font-medium uppercase text-green-700">
-                            {result.goal || result.resourceType}
+                  <div className="w-full">
+                    <div className="self-center flex-1 justify-between">
+                      <div className="-my-1 flex h-8 items-center justify-between">
+                        <div className="flex w-full items-center justify-between gap-2">
+                          <div>
+                            <span className="rounded-lg bg-green-500/20 px-[5px] text-xs font-medium uppercase text-green-700">
+                              {result.goal || result.resourceType}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex self-center">
+                            <StudioResultActionsMenu result={result} onDelete={onDeleteResult} />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-1 px-1.5">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
+                            <Icon className="size-4" />
                           </span>
-                        </span>
-                      </span>
-                      <span className="flex min-h-6 items-center gap-3 px-1.5 pr-0">
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-[#202124]">
-                          {resultDisplayTitle(result)}
-                        </span>
-                        <span className="hidden shrink-0 truncate text-xs text-gray-500 sm:block">
-                          {resultMeta || result.name}
-                        </span>
-                      </span>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onOpenResult(result.id)}
-                    className="flex w-fit shrink-0 items-center self-center rounded-xl px-2 py-1.5 text-xs font-semibold text-[#2563eb] transition hover:bg-[#eff6ff]"
-                    title="Open generation"
-                  >
-                    Open
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDeleteResult(result)}
-                    className="flex w-fit shrink-0 items-center self-center rounded-xl px-2 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
-                    title="Delete generation"
-                  >
-                    Delete
-                  </button>
+                          <div className="line-clamp-1 text-sm font-medium capitalize text-[#202124]">
+                            {resultDisplayTitle(result)}
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-2">
+                          <div className="hidden line-clamp-1 text-xs text-gray-500 sm:block">
+                            {resultMeta || result.name}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               );
             })}
@@ -3422,7 +3639,7 @@ function FlashcardDeckViewer({
   return (
     <div className="flex min-h-[520px] flex-col bg-white">
       <div className="flex flex-1 flex-col items-center justify-center px-4 py-5">
-        <div className="grid w-full max-w-5xl grid-cols-[repeat(auto-fit,minmax(min(280px,100%),1fr))] gap-4">
+        <div className="w-full max-w-3xl">
           <div className="flex min-h-[360px] flex-col rounded-2xl border border-[#e5e7eb] bg-white p-5 text-[#202124] shadow-[0_10px_30px_rgba(32,33,36,0.08)]">
             <div className="flex items-center justify-between gap-3 text-xs text-[#777a80]">
               <span>{index + 1} / {cards.length}</span>
@@ -3448,24 +3665,11 @@ function FlashcardDeckViewer({
               </button>
             </div>
           </div>
-
-          <aside className="bg-white p-4">
-            <div className="text-xs font-semibold uppercase tracking-wide text-[#96999d]">Sources</div>
-            <div className="mt-3 space-y-3">
-              {(card.sourceRefs || []).slice(0, 3).map((ref, refIndex) => (
-                <div key={`${ref.sourceId || ref.title || refIndex}`} className="border-b border-[#eeeeeb] pb-3 last:border-b-0">
-                  <div className="text-xs font-semibold text-[#202124]">{ref.sourceId || ref.title || ref.fileName || `Source ${refIndex + 1}`}</div>
-                  {ref.snippet && <div className="mt-1 line-clamp-4 text-xs leading-5 text-[#6f7277]">{ref.snippet}</div>}
-                </div>
-              ))}
-              {!card.sourceRefs?.length && <div className="text-sm text-[#777a80]">No card-level source refs.</div>}
+          {explanation && (
+            <div className="mt-4 rounded-xl bg-[#f6f7fb] p-4 text-sm leading-6 text-[#1e3a8a]">
+              {explanation}
             </div>
-            {explanation && (
-              <div className="mt-4 text-sm leading-6 text-[#1e3a8a]">
-                {explanation}
-              </div>
-            )}
-          </aside>
+          )}
         </div>
 
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
@@ -3618,6 +3822,155 @@ const conceptGraphFromMermaid = (mermaid: string): ConceptGraphPayload => {
   return { nodes, links };
 };
 
+const courseKnowledgeGraphToConceptGraph = (graph: CourseKnowledgeGraphPayload | null | undefined): ConceptGraphPayload => {
+  const rawNodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const nodes = rawNodes
+    .map((node, index): ConceptGraphNode => ({
+      id: String(node.id || node.conceptId || `kg-${index + 1}`),
+      label: String(node.title || node.label || node.name || `Concept ${index + 1}`).trim(),
+      group: String(node.category || node.group || node.source || 'concept'),
+      importance: Number.isFinite(Number(node.activationScore))
+        ? Math.max(0.25, Math.min(1, Number(node.activationScore)))
+        : 0.7,
+      summary: String(node.description || node.summary || ''),
+      sourceRefs: Array.isArray(node.sourceIds)
+        ? node.sourceIds.map((ref: unknown) => String(ref)).filter(Boolean)
+        : Array.isArray(node.sources)
+          ? node.sources.map((source: any) => String(source?.name || source?.id || '')).filter(Boolean)
+          : []
+    }))
+    .filter((node) => node.id && node.label);
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const links = (Array.isArray(graph?.edges) ? graph.edges : [])
+    .map((edge): ConceptGraphLink => ({
+      source: String(edge.from || edge.source || edge.fromConceptId || ''),
+      target: String(edge.to || edge.target || edge.toConceptId || ''),
+      label: String(edge.relationType || edge.label || edge.type || ''),
+      type: String(edge.relationType || edge.type || 'relation'),
+      weight: Number.isFinite(Number(edge.weight)) ? Number(edge.weight) : 0.6
+    }))
+    .filter((link) => nodeIds.has(link.source) && nodeIds.has(link.target) && link.source !== link.target);
+  return { nodes, links };
+};
+
+const courseKnowledgeGraphCoversSourceIds = (graph: CourseKnowledgeGraphPayload | null | undefined, sourceIds: string[]) => {
+  if (!sourceIds.length) return true;
+  const covered = new Set<string>();
+  (Array.isArray(graph?.sources) ? graph.sources : []).forEach((source) => {
+    if (source?.id) covered.add(String(source.id));
+  });
+  (Array.isArray(graph?.nodes) ? graph.nodes : []).forEach((node) => {
+    if (Array.isArray(node.sourceIds)) {
+      node.sourceIds.forEach((sourceId: unknown) => {
+        if (sourceId) covered.add(String(sourceId));
+      });
+    }
+    if (Array.isArray(node.sources)) {
+      node.sources.forEach((source: any) => {
+        if (source?.id) covered.add(String(source.id));
+      });
+    }
+  });
+  return sourceIds.every((sourceId) => covered.has(sourceId));
+};
+
+const shouldRebuildCourseKnowledgeGraph = (
+  graph: CourseKnowledgeGraphPayload | null | undefined,
+  converted: ConceptGraphPayload,
+  sourceIds: string[]
+) => !converted.nodes.length || !courseKnowledgeGraphCoversSourceIds(graph, sourceIds);
+
+function CourseKnowledgeSubgraphViewer({
+  result,
+  workspaceId,
+  workbenchId
+}: {
+  result: StudioResult;
+  workspaceId: string;
+  workbenchId?: string;
+}) {
+  const sourceIds = useMemo(() => studioSelectedResourceIdsForResult(result), [result.id, result.metadata]);
+  const [graph, setGraph] = useState<ConceptGraphPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadSubgraph = async () => {
+      setLoading(true);
+      setRebuilding(false);
+      setError(null);
+      try {
+        const first = await learningApi.getKnowledgeGraph(workspaceId, {
+          limit: 120,
+          sourceIds: sourceIds.length ? sourceIds : undefined
+        });
+        let rawGraph = first?.graph as CourseKnowledgeGraphPayload | undefined;
+        let converted = courseKnowledgeGraphToConceptGraph(rawGraph);
+        if (shouldRebuildCourseKnowledgeGraph(rawGraph, converted, sourceIds)) {
+          setRebuilding(true);
+          await learningApi.buildCourseKnowledgeGraph({
+            workspaceId,
+            workbenchId,
+            includeWorkspaceResources: true,
+            reindex: true,
+            validate: true,
+            graphLimit: 160
+          });
+          const refreshed = await learningApi.getKnowledgeGraph(workspaceId, {
+            limit: 120,
+            sourceIds: sourceIds.length ? sourceIds : undefined
+          });
+          rawGraph = refreshed?.graph as CourseKnowledgeGraphPayload | undefined;
+          converted = courseKnowledgeGraphToConceptGraph(rawGraph);
+        }
+        if (!cancelled) setGraph(converted);
+      } catch (loadError: any) {
+        if (!cancelled) setError(loadError?.response?.data?.error || loadError?.message || 'Unable to load workspace knowledge graph');
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setRebuilding(false);
+        }
+      }
+    };
+    void loadSubgraph();
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceIds.join('|'), workbenchId, workspaceId]);
+
+  if (loading || rebuilding) {
+    return (
+      <div className="flex min-h-[520px] items-center justify-center bg-white text-sm text-[#5f6368]">
+        <div className="inline-flex items-center gap-2">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          {rebuilding ? 'Building workspace knowledge graph...' : 'Loading workspace knowledge graph...'}
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-2xl p-6 text-sm text-red-600">
+        {error}
+      </div>
+    );
+  }
+
+  if (!graph?.nodes.length) {
+    return (
+      <div className="mx-auto max-w-2xl p-6 text-sm leading-6 text-[#5f6368]">
+        No workspace knowledge graph nodes were found for the selected resources.
+      </div>
+    );
+  }
+
+  return <ConceptGraph2DViewer result={result} graph={graph} modeLabel="Knowledge Graph" />;
+}
+
 const mindElixirDataFromMermaid = (mermaid: string): MindElixirData => {
   const stack: Array<{ depth: number; node: NodeObj }> = [];
   let root: NodeObj | null = null;
@@ -3754,10 +4107,6 @@ function MindElixirTreeViewer({
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <button className="rounded-full bg-[#202124] px-3 py-2 text-xs font-semibold text-white">2D Mindmap</button>
-          <button onClick={() => onModeChange('2d-graph')} className="rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">2D Graph</button>
-          <button onClick={() => onModeChange('3d')} className="inline-flex items-center gap-2 rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">
-            <Orbit className="h-4 w-4" /> 3D
-          </button>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => mindRef.current?.scaleFit()} className="inline-flex items-center gap-2 rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">
@@ -3779,11 +4128,11 @@ function MindElixirTreeViewer({
 function ConceptGraph2DViewer({
   result,
   graph,
-  onModeChange
+  modeLabel = 'Knowledge Graph'
 }: {
   result: StudioResult;
   graph: ConceptGraphPayload;
-  onModeChange: (mode: '2d-tree' | '2d-graph' | '3d') => void;
+  modeLabel?: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const minimapRef = useRef<HTMLDivElement | null>(null);
@@ -3942,11 +4291,7 @@ function ConceptGraph2DViewer({
       <div className="flex min-h-0 flex-col">
         <div className="flex flex-wrap items-center justify-between gap-3 bg-white px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
-            <button onClick={() => onModeChange('2d-tree')} className="rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">2D Mindmap</button>
-            <button className="rounded-full bg-[#202124] px-3 py-2 text-xs font-semibold text-white">2D Graph</button>
-            <button onClick={() => onModeChange('3d')} className="inline-flex items-center gap-2 rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">
-              <Orbit className="h-4 w-4" /> 3D
-            </button>
+            <button className="rounded-full bg-[#202124] px-3 py-2 text-xs font-semibold text-white">{modeLabel}</button>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => graphRef.current?.zoomToFit({ padding: 32, maxScale: 1.2 })} className="inline-flex items-center gap-2 rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">
@@ -3989,423 +4334,24 @@ function ConceptGraph2DViewer({
   );
 }
 
-function ConceptSpaceViewer({
+function MindMapViewer({
   result,
-  mermaid,
-  onModeChange
+  workspaceId,
+  workbenchId
 }: {
   result: StudioResult;
-  mermaid: string;
-  onModeChange: (mode: '2d-tree' | '2d-graph' | '3d' | 'mermaid') => void;
+  workspaceId: string;
+  workbenchId?: string;
 }) {
-  const graphRef = useRef<ForceGraphMethods<NodeObject<ConceptGraphNode>, LinkObject<ConceptGraphNode, ConceptGraphLink>> | undefined>(undefined);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [size, setSize] = useState({ width: 960, height: 620 });
-  const graph = useMemo(() => extractConceptGraph(result.content) || conceptGraphFromMermaid(mermaid), [result.content, mermaid]);
-  const [selectedNode, setSelectedNode] = useState<ConceptGraphNode | null>(graph.nodes[0] || null);
-  const [selectedLink, setSelectedLink] = useState<ConceptGraphLink | null>(null);
-
-  useEffect(() => {
-    const element = wrapRef.current;
-    if (!element) return;
-    const resize = () => setSize({ width: Math.max(520, element.clientWidth), height: Math.max(520, element.clientHeight) });
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    setSelectedNode(graph.nodes[0] || null);
-    setSelectedLink(null);
-  }, [graph]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => graphRef.current?.zoomToFit(900, 80), 500);
-    return () => window.clearTimeout(timer);
-  }, [graph]);
-
-  const graphData = useMemo<GraphData<NodeObject<ConceptGraphNode>, LinkObject<ConceptGraphNode, ConceptGraphLink>>>(
-    () => ({
-      nodes: graph.nodes.map((node) => ({ ...node })),
-      links: graph.links.map((link) => ({ ...link }))
-    }),
-    [graph]
-  );
-
-  const exportJson = () => {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(graph, null, 2)], { type: 'application/json' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${result.name.replace(/\.[^.]+$/, '') || 'concept-space'}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const focusNode = (node: ConceptGraphNode) => {
-    setSelectedNode(node);
-    setSelectedLink(null);
-    const distance = 120;
-    const nodeObject = node as NodeObject<ConceptGraphNode>;
-    const distRatio = 1 + distance / Math.hypot(nodeObject.x || 1, nodeObject.y || 1, nodeObject.z || 1);
-    graphRef.current?.cameraPosition(
-      { x: (nodeObject.x || 0) * distRatio, y: (nodeObject.y || 0) * distRatio, z: (nodeObject.z || 0) * distRatio },
-      { x: nodeObject.x || 0, y: nodeObject.y || 0, z: nodeObject.z || 0 },
-      800
-    );
-  };
-
-  return (
-    <div className="grid h-full min-h-[620px] bg-[#080b10] text-white">
-      <div className="flex min-h-0 flex-col">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#0c1118]/95 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <button onClick={() => onModeChange('2d-tree')} className="rounded-full border border-white/15 px-3 py-2 text-xs font-medium text-white/75 hover:bg-white/10">
-              2D Mindmap
-            </button>
-            <button onClick={() => onModeChange('2d-graph')} className="rounded-full border border-white/15 px-3 py-2 text-xs font-medium text-white/75 hover:bg-white/10">
-              2D Graph
-            </button>
-            <button className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-xs font-semibold text-[#111827]">
-              <Orbit className="h-4 w-4" /> 3D Concept Space
-            </button>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => graphRef.current?.zoomToFit(900, 80)} className="inline-flex items-center gap-2 rounded-full border border-white/15 px-3 py-2 text-xs font-medium text-white/75 hover:bg-white/10">
-              <Maximize2 className="h-4 w-4" /> Center
-            </button>
-            <button onClick={exportJson} className="inline-flex items-center gap-2 rounded-full border border-white/15 px-3 py-2 text-xs font-medium text-white/75 hover:bg-white/10">
-              <Download className="h-4 w-4" /> JSON
-            </button>
-          </div>
-        </div>
-        <div ref={wrapRef} className="relative min-h-0 flex-1 overflow-hidden">
-          <div className="pointer-events-none absolute left-4 top-4 z-10 rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs text-white/60 backdrop-blur">
-            Drag nodes to reshape the space. Scroll to zoom, drag background to orbit.
-          </div>
-          <ForceGraph3D
-            ref={graphRef}
-            graphData={graphData}
-            width={size.width}
-            height={size.height}
-            backgroundColor="#080b10"
-            showNavInfo={false}
-            nodeId="id"
-            nodeLabel={(node) => `${node.label}${node.summary ? `\n${node.summary}` : ''}`}
-            nodeVal={(node) => 5 + (Number(node.importance) || 0.5) * 10}
-            nodeColor={(node) => colorForGroup(node.group)}
-            nodeOpacity={0.92}
-            nodeResolution={24}
-            nodeThreeObject={(node) => {
-              const sprite = new SpriteText(String(node.label || ''));
-              sprite.color = colorForGroup(node.group);
-              sprite.textHeight = 4.5;
-              sprite.backgroundColor = 'rgba(8, 11, 16, 0.62)';
-              sprite.padding = 2;
-              sprite.borderRadius = 4;
-              return sprite;
-            }}
-            linkLabel={(link) => link.label || link.type || ''}
-            linkColor={(link) => colorForGroup(link.type || 'association')}
-            linkWidth={(link) => 0.5 + (Number(link.weight) || 0.5) * 1.8}
-            linkOpacity={0.38}
-            linkDirectionalParticles={(link) => (Number(link.weight) || 0.5) > 0.65 ? 3 : 1}
-            linkDirectionalParticleWidth={(link) => 1 + (Number(link.weight) || 0.5) * 1.8}
-            linkDirectionalParticleSpeed={0.006}
-            enableNodeDrag
-            enableNavigationControls
-            cooldownTicks={120}
-            d3VelocityDecay={0.28}
-            onNodeClick={(node) => focusNode(node as ConceptGraphNode)}
-            onNodeDragEnd={(node) => {
-              node.fx = node.x;
-              node.fy = node.y;
-              node.fz = node.z;
-              setSelectedNode(node as ConceptGraphNode);
-              setSelectedLink(null);
-            }}
-            onLinkClick={(link) => {
-              setSelectedLink(link as ConceptGraphLink);
-              setSelectedNode(null);
-            }}
-          />
-        </div>
-      </div>
-      <aside className="flex min-h-0 flex-col border-t border-white/10 bg-[#0c1118]">
-        <div className="border-b border-white/10 px-4 py-3">
-          <div className="text-sm font-semibold text-white">Inspector</div>
-          <div className="mt-1 text-xs text-white/50">{graph.nodes.length} nodes · {graph.links.length} links</div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto p-4">
-          {selectedNode ? (
-            <div>
-              <div className="text-lg font-semibold text-white">{selectedNode.label}</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <span className="rounded-full border border-white/10 px-2 py-1 text-xs text-white/65">{selectedNode.group || 'concept'}</span>
-                <span className="rounded-full border border-white/10 px-2 py-1 text-xs text-white/65">importance {Math.round((selectedNode.importance || 0.5) * 100)}%</span>
-              </div>
-              <p className="mt-4 text-sm leading-6 text-white/72">{selectedNode.summary || 'No summary provided.'}</p>
-              {selectedNode.sourceRefs?.length ? (
-                <div className="mt-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-white/38">Sources</div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {selectedNode.sourceRefs.map((ref) => (
-                      <span key={ref} className="rounded-full bg-white/10 px-2 py-1 text-xs text-white/75">{ref}</span>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : selectedLink ? (
-            <div>
-              <div className="text-lg font-semibold text-white">{selectedLink.label || selectedLink.type || 'Relationship'}</div>
-              <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] p-3 text-sm leading-6 text-white/72">
-                <div>Source: {String(selectedLink.source)}</div>
-                <div>Target: {String(selectedLink.target)}</div>
-                <div>Type: {selectedLink.type || 'association'}</div>
-                <div>Weight: {selectedLink.weight ?? 0.5}</div>
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 text-sm leading-6 text-white/62">
-              Click a node or link to inspect it.
-            </div>
-          )}
-          <div className="mt-6">
-            <div className="text-xs font-semibold uppercase tracking-wide text-white/38">Clusters</div>
-            <div className="mt-3 space-y-2">
-              {Array.from(new Set(graph.nodes.map((node) => node.group || 'concept'))).map((group) => (
-                <div key={group} className="flex items-center gap-2 text-xs text-white/65">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: colorForGroup(group) }} />
-                  {group}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </aside>
-    </div>
-  );
+  if (resultTemplateId(result) === 'knowledge_graph') {
+    return <CourseKnowledgeSubgraphViewer result={result} workspaceId={workspaceId} workbenchId={workbenchId} />;
+  }
+  return <MindMapMindElixirResultViewer result={result} />;
 }
 
-function MindMapViewer({ result }: { result: StudioResult }) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const svgHostRef = useRef<HTMLDivElement | null>(null);
+function MindMapMindElixirResultViewer({ result }: { result: StudioResult }) {
   const mermaid = useMemo(() => extractMermaidMindmap(result.content), [result.content]);
-  const rawLines = useMemo(() => getMindmapRawLines(mermaid), [mermaid]);
-  const conceptGraph = useMemo(() => extractConceptGraph(result.content) || conceptGraphFromMermaid(mermaid), [result.content, mermaid]);
-  const [viewMode, setViewMode] = useState<'2d-tree' | '2d-graph' | '3d' | 'mermaid'>('2d-tree');
-  const [zoom, setZoom] = useState(1);
-  const [selectedNode, setSelectedNode] = useState<{ label: string; source: string } | null>(null);
-  const [showRaw, setShowRaw] = useState(false);
-  const [renderError, setRenderError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const renderMindmap = async () => {
-      if (!svgHostRef.current) return;
-      setRenderError(null);
-      try {
-        const mermaidModule = (await import('mermaid')).default;
-        mermaidModule.initialize({
-          startOnLoad: false,
-          securityLevel: 'loose',
-          theme: 'base',
-          themeVariables: {
-            background: '#fbfbfa',
-            primaryColor: '#ffffff',
-            primaryBorderColor: '#d8d8d2',
-            primaryTextColor: '#202124',
-            lineColor: '#b8babf',
-            tertiaryColor: '#f6f7fb'
-          },
-          mindmap: {
-            padding: 18,
-            useMaxWidth: false
-          }
-        });
-        const renderId = `studio-mindmap-${result.id.replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now()}`;
-        await (mermaidModule as any).parse?.(mermaid);
-        const { svg } = await mermaidModule.render(renderId, mermaid);
-        cleanupMermaidRenderArtifacts(renderId);
-        if (cancelled || !svgHostRef.current) return;
-        svgHostRef.current.innerHTML = svg;
-        const svgEl = svgHostRef.current.querySelector('svg');
-        if (svgEl) {
-          svgEl.removeAttribute('height');
-          svgEl.style.width = '100%';
-          svgEl.style.height = '100%';
-          svgEl.style.maxWidth = 'none';
-        }
-      } catch (error: any) {
-        cleanupMermaidRenderArtifacts(`studio-mindmap-${result.id.replace(/[^a-zA-Z0-9_-]/g, '')}`);
-        if (!cancelled) setRenderError(error?.message || 'Unable to render mind map');
-      }
-    };
-    void renderMindmap();
-    return () => {
-      cancelled = true;
-      cleanupMermaidRenderArtifacts(`studio-mindmap-${result.id.replace(/[^a-zA-Z0-9_-]/g, '')}`);
-    };
-  }, [mermaid, result.id]);
-
-  useEffect(() => {
-    const host = svgHostRef.current;
-    if (!host) return;
-    const handleClick = (event: MouseEvent) => {
-      const target = event.target as Element | null;
-      const textNode = target?.closest('text, foreignObject, span, div');
-      const label = normalizeMindmapNodeText(textNode?.textContent || '');
-      if (!label) return;
-      const rawLine = rawLines.find((line) => line.label === label || line.label.includes(label) || label.includes(line.label));
-      setSelectedNode({
-        label,
-        source: rawLine?.source.trim() || label
-      });
-    };
-    host.addEventListener('click', handleClick);
-    return () => host.removeEventListener('click', handleClick);
-  }, [rawLines]);
-
-  const updateZoom = (nextZoom: number) => setZoom(Math.min(1.8, Math.max(0.55, Number(nextZoom.toFixed(2)))));
-
-  const centerView = () => {
-    updateZoom(1);
-    if (containerRef.current) {
-      containerRef.current.scrollTo({
-        top: Math.max(0, (containerRef.current.scrollHeight - containerRef.current.clientHeight) / 2),
-        left: Math.max(0, (containerRef.current.scrollWidth - containerRef.current.clientWidth) / 2),
-        behavior: 'smooth'
-      });
-    }
-  };
-
-  const downloadText = (filename: string, text: string, type: string) => {
-    const url = URL.createObjectURL(new Blob([text], { type }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const exportSvg = () => {
-    const svg = svgHostRef.current?.querySelector('svg');
-    if (!svg) return;
-    downloadText(`${result.name.replace(/\.[^.]+$/, '') || 'mindmap'}.svg`, svg.outerHTML, 'image/svg+xml;charset=utf-8');
-  };
-
-  const exportPng = () => {
-    const svg = svgHostRef.current?.querySelector('svg');
-    if (!svg) return;
-    const svgText = svg.outerHTML;
-    const img = new Image();
-    const svgUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }));
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      const width = Math.max(1200, img.naturalWidth || 1200);
-      const height = Math.max(720, img.naturalHeight || 720);
-      canvas.width = width * 2;
-      canvas.height = height * 2;
-      const context = canvas.getContext('2d');
-      if (!context) return;
-      context.fillStyle = '#fbfbfa';
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(img, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(svgUrl);
-      canvas.toBlob((blob) => {
-        if (!blob) return;
-        const pngUrl = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = pngUrl;
-        link.download = `${result.name.replace(/\.[^.]+$/, '') || 'mindmap'}.png`;
-        link.click();
-        URL.revokeObjectURL(pngUrl);
-      }, 'image/png');
-    };
-    img.src = svgUrl;
-  };
-
-  if (viewMode === '3d') {
-    return <ConceptSpaceViewer result={result} mermaid={mermaid} onModeChange={setViewMode} />;
-  }
-
-  if (viewMode === '2d-tree') {
-    return <MindElixirTreeViewer result={result} mermaid={mermaid} onModeChange={setViewMode} />;
-  }
-
-  if (viewMode === '2d-graph') {
-    return <ConceptGraph2DViewer result={result} graph={conceptGraph} onModeChange={setViewMode} />;
-  }
-
-  return (
-    <div className="flex h-full min-h-[560px] flex-col bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-white px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <button onClick={() => setViewMode('2d-tree')} className="rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">2D Mindmap</button>
-          <button onClick={() => setViewMode('2d-graph')} className="rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">2D Graph</button>
-          <button onClick={() => setViewMode('3d')} className="inline-flex items-center gap-2 rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">
-            <Orbit className="h-4 w-4" /> 3D
-          </button>
-          <button className="rounded-full bg-[#202124] px-3 py-2 text-xs font-semibold text-white">Mermaid</button>
-          <button onClick={() => updateZoom(zoom - 0.1)} className="rounded-full border border-[#e5e5e1] p-2 text-[#34373c] hover:bg-[#f6f7fb]" title="Zoom out">
-            <ZoomOut className="h-4 w-4" />
-          </button>
-          <div className="min-w-[54px] text-center text-xs font-medium text-[#5f6368]">{Math.round(zoom * 100)}%</div>
-          <button onClick={() => updateZoom(zoom + 0.1)} className="rounded-full border border-[#e5e5e1] p-2 text-[#34373c] hover:bg-[#f6f7fb]" title="Zoom in">
-            <ZoomIn className="h-4 w-4" />
-          </button>
-          <button onClick={centerView} className="inline-flex items-center gap-2 rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">
-            <Maximize2 className="h-4 w-4" /> Center
-          </button>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={exportSvg} className="inline-flex items-center gap-2 rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]">
-            <Download className="h-4 w-4" /> SVG
-          </button>
-          <button onClick={exportPng} className="inline-flex items-center gap-2 rounded-full bg-[#202124] px-3 py-2 text-xs font-medium text-white hover:bg-[#34373c]">
-            <Download className="h-4 w-4" /> PNG
-          </button>
-        </div>
-      </div>
-      <div className="grid min-h-0 flex-1">
-        <div ref={containerRef} className="min-h-0 overflow-auto bg-white">
-          <div
-            className="flex min-h-full min-w-[920px] items-center justify-center p-8 transition-transform duration-150"
-            style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
-          >
-            {renderError ? (
-              <div className="max-w-xl border-y border-[#ead7d7] bg-white p-5 text-sm text-[#8a1f1f]">{renderError}</div>
-            ) : (
-              <div ref={svgHostRef} className="mindmap-render min-h-[520px] w-[1040px] cursor-pointer text-[#202124]" />
-            )}
-          </div>
-        </div>
-        <aside className="flex min-h-0 flex-col border-t border-[#eeeeeb] bg-white">
-          <div className="border-b border-[#eeeeeb] px-4 py-3">
-            <div className="text-sm font-semibold text-[#202124]">Node source</div>
-            <div className="mt-1 text-xs text-[#777a80]">{selectedNode ? selectedNode.label : 'No node selected'}</div>
-          </div>
-          <div className="min-h-0 flex-1 overflow-auto p-4">
-            <pre className="whitespace-pre-wrap rounded-xl bg-[#f6f7fb] p-3 text-xs leading-relaxed text-[#34373c]">
-              {selectedNode?.source || 'Click any rendered mindmap node to inspect the source line.'}
-            </pre>
-            <button
-              onClick={() => setShowRaw((value) => !value)}
-              className="mt-4 w-full rounded-full border border-[#e5e5e1] px-3 py-2 text-xs font-medium text-[#34373c] hover:bg-[#f6f7fb]"
-            >
-              {showRaw ? 'Hide Raw Mermaid' : 'Show Raw Mermaid'}
-            </button>
-            {showRaw ? (
-              <pre className="mt-3 max-h-[360px] overflow-auto whitespace-pre-wrap rounded-xl border border-[#eeeeeb] bg-white p-3 text-xs leading-relaxed text-[#5f6368]">
-                {mermaid}
-              </pre>
-            ) : null}
-          </div>
-        </aside>
-      </div>
-    </div>
-  );
+  return <MindElixirTreeViewer result={result} mermaid={mermaid} onModeChange={() => undefined} />;
 }
 
 function DataTableViewer({ result }: { result: StudioResult }) {
@@ -4537,6 +4483,92 @@ const extractVisualLessonPayload = (result: StudioResult): VisualLessonPayload |
   return null;
 };
 
+const normalizeLightVisualLessonPayload = (value: unknown, fallbackTitle: string): LightVisualLessonPayload | null => {
+  const payload = isObjectRecord(value) ? value : null;
+  const rawSlides = Array.isArray(payload?.slides) ? payload.slides : [];
+  if (!rawSlides.length) return null;
+  const nestedDescription = rawSlides.length === 1
+    ? String((rawSlides[0] as any)?.description || (rawSlides[0] as any)?.content || '').trim()
+    : '';
+  if (nestedDescription.startsWith('{') && nestedDescription.includes('"slides"')) {
+    try {
+      const nested = JSON.parse(nestedDescription);
+      if (Array.isArray(nested?.slides) && nested.slides.length) {
+        const normalized = normalizeLightVisualLessonPayload(nested, fallbackTitle);
+        if (normalized) return normalized;
+      }
+    } catch {
+      // Keep the original payload if the description is not valid JSON.
+    }
+  }
+  const slides = rawSlides.map((slide: any, index): LightVisualLessonSlide => {
+    const description = String(slide?.description || '').trim();
+    const timeline = Array.isArray(slide?.timeline)
+      ? slide.timeline.map((step: any): LightVisualLessonTimelineStep | null => {
+          const content = String(step?.content || '').trim();
+          if (!content) return null;
+          return {
+            kind: step?.kind === 'visual' ? 'visual' : 'text',
+            content,
+            visualIndex: Number.isInteger(step?.visualIndex) ? step.visualIndex : undefined
+          };
+        }).filter((step: LightVisualLessonTimelineStep | null): step is LightVisualLessonTimelineStep => Boolean(step))
+      : [];
+    const visuals = Array.isArray(slide?.visuals)
+      ? slide.visuals.map((visual: any): LightVisualLessonVisualBlock | null => {
+          const content = String(visual?.content || '').trim();
+          if (!content) return null;
+          const type = ['diagram', 'chart', 'table', 'formula', 'code', 'image_hint', 'sketch'].includes(String(visual?.type))
+            ? visual.type
+            : 'diagram';
+          return { type, content };
+        }).filter((visual: LightVisualLessonVisualBlock | null): visual is LightVisualLessonVisualBlock => Boolean(visual))
+      : [];
+    return {
+      header: String(slide?.header || `Slide ${index + 1}`).trim(),
+      description,
+      timeline: timeline.length ? timeline : description ? [{ kind: 'text', content: description }] : [],
+      visuals
+    };
+  }).filter((slide) => slide.header || slide.description);
+  if (!slides.length) return null;
+  return {
+    title: String(payload?.title || fallbackTitle || 'Light Visual Lesson').trim(),
+    markdownDraft: typeof payload?.markdownDraft === 'string' ? payload.markdownDraft : undefined,
+    slides
+  };
+};
+
+const extractLightVisualLessonPayloadFromText = (text: string, fallbackTitle: string): LightVisualLessonPayload | null => {
+  if (!text.trim()) return null;
+  try {
+    const parsed = JSON.parse(text);
+    const fromRoot = normalizeLightVisualLessonPayload(parsed, fallbackTitle);
+    if (fromRoot) return fromRoot;
+    if (isObjectRecord(parsed?.payload)) {
+      return normalizeLightVisualLessonPayload(parsed.payload, fallbackTitle);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+};
+
+const extractLightVisualLessonPayload = (result: StudioResult): LightVisualLessonPayload | null => {
+  const deliveryPreview = result.delivery?.previewContent;
+  const fromDeliveryPreview = typeof deliveryPreview === 'string'
+    ? extractLightVisualLessonPayloadFromText(deliveryPreview, result.name)
+    : null;
+  if (fromDeliveryPreview) return fromDeliveryPreview;
+  const structured = isObjectRecord(result.structured) ? result.structured : null;
+  const payload = isObjectRecord(structured?.payload) ? structured.payload : null;
+  const fromStructured = normalizeLightVisualLessonPayload(payload, result.name);
+  if (fromStructured) return fromStructured;
+  const fromContent = extractLightVisualLessonPayloadFromText(result.content, result.name);
+  if (fromContent) return fromContent;
+  return null;
+};
+
 const extractVisualCodeLessonPayload = (result: StudioResult): VisualCodeLessonPayload | null => {
   const structured = isObjectRecord(result.structured) ? result.structured : null;
   const payload = isObjectRecord(structured?.payload) ? structured.payload : null;
@@ -4565,77 +4597,6 @@ const extractVisualCodeLessonPayload = (result: StudioResult): VisualCodeLessonP
     };
   }
   return null;
-};
-
-const parseVisualCodeMarkdown = (content: string): VisualCodePart[] => {
-  const parts: VisualCodePart[] = [];
-  const regex = /~~~(HTML_VIZ|REACT_VIZ)\s*\n([\s\S]*?)~~~/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(content)) !== null) {
-    const text = content.slice(lastIndex, match.index).trim();
-    if (text) parts.push({ type: 'text', content: text });
-    const code = match[2]?.trim();
-    if (code) parts.push({ type: match[1] === 'HTML_VIZ' ? 'html' : 'react', code });
-    lastIndex = match.index + match[0].length;
-  }
-
-  const tail = content.slice(lastIndex).trim();
-  if (tail) {
-    const truncated = tail.match(/^~~~(HTML_VIZ|REACT_VIZ)\s*\n([\s\S]+)/);
-    if (truncated) {
-      parts.push({ type: 'text', content: '> 可视化代码块可能被模型截断，下面会尝试渲染已返回的部分。' });
-      const code = truncated[2]?.trim();
-      if (code) parts.push({ type: truncated[1] === 'HTML_VIZ' ? 'html' : 'react', code });
-    } else {
-      parts.push({ type: 'text', content: tail });
-    }
-  }
-
-  return parts.length ? parts : [{ type: 'text', content }];
-};
-
-const unsafeVisualizationPattern = /(localStorage|sessionStorage|document\.cookie|window\.parent|parent\.document|\btop\b|\bopener\b|fetch\s*\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon|eval\s*\(|new\s+Function|import\s*\(|<script\b[^>]*\bsrc\s*=|<link\b[^>]*\bhref\s*=)/i;
-
-const buildReactVisualizationSandboxHtml = (code: string) => {
-  const encodedCode = JSON.stringify(code);
-  return [
-    '<!DOCTYPE html><html><head><meta charset="UTF-8">',
-    '<meta name="viewport" content="width=device-width,initial-scale=1">',
-    '<script src="https://cdn.tailwindcss.com"></script>',
-    '<style>*{box-sizing:border-box}body{margin:0;background:#fff;color:#202124;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}#root{min-height:180px}.sandbox-error{margin:12px;padding:14px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;color:#991b1b;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}.sandbox-loading{display:flex;min-height:220px;align-items:center;justify-content:center;gap:10px;color:#64748b;font-size:13px}.spinner{width:18px;height:18px;border:2px solid #e2e8f0;border-top-color:#2563eb;border-radius:999px;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}</style>',
-    '</head><body><div id="root"><div class="sandbox-loading"><div class="spinner"></div><span>加载可视化运行环境...</span></div></div>',
-    '<script>',
-    'const scripts=[',
-    '{url:"https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js",name:"React",required:true},',
-    '{url:"https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js",name:"ReactDOM",required:true},',
-    '{url:"https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js",name:"Babel",required:true},',
-    '{url:"https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js",name:"Recharts",required:false}',
-    '];',
-    'function height(){const h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight,260);parent.postMessage({type:"visual-code-height",height:Math.min(h+16,900)},"*")}',
-    'function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}',
-    'function fail(msg){document.getElementById("root").innerHTML="<div class=sandbox-error>"+esc(msg)+"</div>";height()}',
-    'function load(i){if(i>=scripts.length){run();return}const item=scripts[i];const el=document.createElement("script");el.src=item.url;el.onload=()=>load(i+1);el.onerror=()=>item.required?fail("依赖加载失败: "+item.name):load(i+1);document.head.appendChild(el)}',
-    'function run(){try{',
-    'const registry={react:Object.assign({},React,{default:React}),"react-dom":Object.assign({default:ReactDOM},ReactDOM),"react-dom/client":Object.assign({default:ReactDOM},ReactDOM)};',
-    'if(typeof Recharts!=="undefined")registry.recharts=Object.assign({default:Recharts},Recharts);',
-    'function require(name){if(registry[name])return registry[name];throw new Error("不支持导入模块: "+name)}',
-    'const source=' + encodedCode + ';',
-    'const compiled=Babel.transform(source,{presets:["react"],plugins:["transform-modules-commonjs"],filename:"visual.jsx"}).code;',
-    'const module={exports:{}};const exports=module.exports;',
-    'new Function("require","module","exports","React","ReactDOM",compiled)(require,module,exports,React,ReactDOM);',
-    'const Component=module.exports.default||module.exports;',
-    'if(typeof Component!=="function")throw new Error("REACT_VIZ 必须 export default 导出函数组件");',
-    'const root=document.getElementById("root");',
-    'if(ReactDOM.createRoot)ReactDOM.createRoot(root).render(React.createElement(Component));else ReactDOM.render(React.createElement(Component),root);',
-    'setTimeout(height,80);setTimeout(height,500);setTimeout(height,1500);',
-    '}catch(error){fail("渲染错误:\\n"+(error&&error.message?error.message:String(error)))}}',
-    'window.onerror=(message)=>{fail("运行时错误:\\n"+message)};',
-    'setTimeout(()=>{if(document.querySelector(".sandbox-loading"))fail("可视化加载超时")},15000);',
-    'load(0);',
-    '</script></body></html>'
-  ].join('\n');
 };
 
 const cueForPrimitive = (step: ProcessStepIR, primitiveId: string) =>
@@ -6962,6 +6923,480 @@ function VisualLessonModelView({
   );
 }
 
+type LightVisualRendererKind = 'mermaid' | 'echarts' | 'excalidraw';
+
+const parseJsonObject = (value: string): Record<string, any> | null => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  const raw = fenced || trimmed;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        const parsed = JSON.parse(raw.slice(start, end + 1));
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+};
+
+const stripCodeFence = (value: string, lang?: string) => {
+  const pattern = lang ? new RegExp(`\`\`\`${lang}\\s*([\\s\\S]*?)\`\`\``, 'i') : /```[a-z0-9_-]*\s*([\s\S]*?)```/i;
+  return value.match(pattern)?.[1]?.trim() || value.trim();
+};
+
+const lightVisualLines = (content: string) =>
+  content
+    .split(/\n+|[。；;.!?！？]\s*/)
+    .map((line) => line.replace(/^[-*\d.、\s]+/, '').trim())
+    .filter(Boolean)
+    .slice(0, 6);
+
+const mermaidFromLightVisual = (visual: LightVisualLessonVisualBlock) => {
+  const content = stripCodeFence(visual.content, 'mermaid');
+  if (/^(flowchart|graph|sequenceDiagram|stateDiagram|classDiagram|erDiagram|mindmap|timeline|pie)\b/i.test(content)) {
+    return content;
+  }
+  const lines = lightVisualLines(content);
+  const safeLabel = (value: string) => cleanRevealText(value, 56).replace(/[|"[\]{}]/g, '');
+  return [
+    'flowchart TD',
+    `  n0["${safeLabel(lines[0] || '核心图解')}"]`,
+    ...(lines.slice(1).map((line, index) => [
+      `  n${index + 1}["${safeLabel(line)}"]`,
+      `  n${index} --> n${index + 1}`
+    ]).flat())
+  ].join('\n');
+};
+
+const echartsOptionFromLightVisual = (visual: LightVisualLessonVisualBlock): echarts.EChartsOption => {
+  const parsed = parseJsonObject(visual.content);
+  if (parsed?.series || parsed?.dataset || parsed?.xAxis || parsed?.yAxis) return parsed as echarts.EChartsOption;
+  const lines = lightVisualLines(visual.content);
+  const values = lines.map((line, index) => {
+    const number = Number(line.match(/-?\d+(?:\.\d+)?/)?.[0]);
+    return {
+      name: cleanRevealText(line.replace(/-?\d+(?:\.\d+)?/g, ''), 24) || `Item ${index + 1}`,
+      value: Number.isFinite(number) ? number : index + 1
+    };
+  });
+  const data = values.length ? values : [{ name: 'Point', value: 1 }];
+  return {
+    tooltip: {},
+    grid: { left: 36, right: 16, top: 28, bottom: 32 },
+    xAxis: { type: 'category', data: data.map((item) => item.name), axisLabel: { interval: 0, rotate: data.length > 3 ? 20 : 0 } },
+    yAxis: { type: 'value' },
+    series: [{ type: 'bar', data: data.map((item) => item.value), itemStyle: { color: '#2563eb' } }]
+  };
+};
+
+function LightVisualMermaidRenderer({ visual }: { visual: LightVisualLessonVisualBlock }) {
+  const source = useMemo(() => mermaidFromLightVisual(visual), [visual]);
+  const [svg, setSvg] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const diagramId = `light-visual-mermaid-${Math.random().toString(36).slice(2)}`;
+    mermaid.initialize({ startOnLoad: false, theme: 'base', securityLevel: 'strict' });
+    (mermaid as any).parse?.(source)
+      .then(() => mermaid.render(diagramId, source))
+      .then((result: any) => {
+        cleanupMermaidRenderArtifacts(diagramId);
+        if (!cancelled) setSvg(result.svg || '');
+      })
+      .catch(() => {
+        cleanupMermaidRenderArtifacts(diagramId);
+        if (!cancelled) setError('Mermaid diagram could not be rendered.');
+      });
+    return () => {
+      cancelled = true;
+      cleanupMermaidRenderArtifacts(diagramId);
+    };
+  }, [source]);
+
+  if (error) return <OpenWebUIMarkdownPreview content={visual.content} />;
+  return svg ? (
+    <div className="flex h-full min-h-[220px] items-center justify-center overflow-auto" dangerouslySetInnerHTML={{ __html: svg }} />
+  ) : (
+    <div className="flex h-full min-h-[220px] items-center justify-center text-sm text-[#94a3b8]">Rendering Mermaid...</div>
+  );
+}
+
+function LightVisualEChartsRenderer({ visual }: { visual: LightVisualLessonVisualBlock }) {
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const option = useMemo(() => echartsOptionFromLightVisual(visual), [visual]);
+
+  useEffect(() => {
+    const element = chartRef.current;
+    if (!element) return;
+    const chart = echarts.init(element, undefined, { renderer: 'svg' });
+    chart.setOption(option);
+    const resize = () => chart.resize();
+    window.addEventListener('resize', resize);
+    return () => {
+      window.removeEventListener('resize', resize);
+      chart.dispose();
+    };
+  }, [option]);
+
+  return <div ref={chartRef} className="h-full min-h-[240px] w-full" />;
+}
+
+const excalidrawSceneFromLightVisual = (visual: LightVisualLessonVisualBlock) => {
+  const parsed = parseJsonObject(visual.content);
+  if (Array.isArray(parsed?.elements)) return parsed.elements;
+  const lines = lightVisualLines(visual.content);
+  const items = lines.length ? lines : [visual.content || '图解'];
+  const skeletons: any[] = [
+    {
+      type: 'rectangle',
+      x: 10,
+      y: 10,
+      width: 460,
+      height: 250,
+      strokeColor: '#94a3b8',
+      backgroundColor: 'transparent',
+      roughness: 1
+    }
+  ];
+  items.slice(0, 4).forEach((line, index) => {
+    skeletons.push({
+      type: 'rectangle',
+      x: 42 + index * 92,
+      y: 82,
+      width: 76,
+      height: 54,
+      strokeColor: '#2563eb',
+      backgroundColor: index % 2 ? '#fef3c7' : '#dbeafe',
+      roughness: 1
+    });
+    skeletons.push({
+      type: 'text',
+      x: 46 + index * 92,
+      y: 148,
+      width: 84,
+      height: 36,
+      text: cleanRevealText(line, 20),
+      fontSize: 13,
+      strokeColor: '#202124'
+    });
+  });
+  return convertToExcalidrawElements(skeletons, { regenerateIds: true });
+};
+
+function LightVisualExcalidrawRenderer({ visual }: { visual: LightVisualLessonVisualBlock }) {
+  const elements = useMemo(() => excalidrawSceneFromLightVisual(visual), [visual]);
+  const initialData = useMemo(() => ({
+    elements,
+    appState: {
+      viewBackgroundColor: '#ffffff',
+      viewModeEnabled: true,
+      zenModeEnabled: true,
+      scrollX: 40,
+      scrollY: 40,
+      zoom: { value: 0.88 }
+    }
+  }), [elements]);
+
+  return (
+    <div className="h-full min-h-[260px] overflow-hidden rounded-md bg-white">
+      <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[#94a3b8]">Rendering Excalidraw...</div>}>
+        <ExcalidrawCanvas
+          initialData={initialData as any}
+          viewModeEnabled
+          zenModeEnabled
+          UIOptions={{ canvasActions: { loadScene: false, saveToActiveFile: false, export: false, toggleTheme: false }, tools: { image: false } } as any}
+          detectScroll={false}
+          handleKeyboardGlobally={false}
+        />
+      </Suspense>
+    </div>
+  );
+}
+
+const lightVisualRendererRegistry: Array<{
+  id: LightVisualRendererKind;
+  label: string;
+  canRender: (visual: LightVisualLessonVisualBlock) => boolean;
+  Component: ComponentType<{ visual: LightVisualLessonVisualBlock }>;
+}> = [
+  {
+    id: 'echarts',
+    label: 'ECharts',
+    canRender: (visual) => visual.type === 'chart' || visual.type === 'table' || Boolean(parseJsonObject(visual.content)?.series),
+    Component: LightVisualEChartsRenderer
+  },
+  {
+    id: 'excalidraw',
+    label: 'Excalidraw',
+    canRender: (visual) => visual.type === 'sketch' || visual.type === 'image_hint',
+    Component: LightVisualExcalidrawRenderer
+  },
+  {
+    id: 'mermaid',
+    label: 'Mermaid',
+    canRender: () => true,
+    Component: LightVisualMermaidRenderer
+  }
+];
+
+function LightVisualLessonVisualPanel({ visuals }: { visuals: LightVisualLessonVisualBlock[] }) {
+  if (!visuals.length) {
+    return null;
+  }
+  return (
+    <div className="h-full min-h-[260px] space-y-4">
+      {visuals.map((visual, visualIndex) => {
+        const renderer = lightVisualRendererRegistry.find((entry) => entry.canRender(visual)) || lightVisualRendererRegistry[lightVisualRendererRegistry.length - 1];
+        const Renderer = renderer.Component;
+        return (
+          <div key={`${visual.type}-${visualIndex}`} className={visualIndex === 0 ? 'h-full min-h-[260px]' : 'fragment h-full min-h-[260px]'}>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#64748b]">
+              {renderer.label}
+            </div>
+            <div className="h-[calc(100%-1.5rem)] min-h-[230px] overflow-hidden">
+              <Renderer visual={visual} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function LightVisualLessonViewer({ result, onBack }: { result: StudioResult; onBack?: () => void }) {
+  const lesson = useMemo(() => extractLightVisualLessonPayload(result), [result]);
+  const slides = lesson?.slides?.length ? lesson.slides : [];
+  const revealRootRef = useRef<HTMLDivElement | null>(null);
+  const revealDeckRef = useRef<RevealApi | null>(null);
+  const [isRevealReady, setIsRevealReady] = useState(false);
+  const [isLessonPlaying, setIsLessonPlaying] = useState(false);
+
+  useEffect(() => {
+    const root = revealRootRef.current;
+    if (!root || !slides.length) return;
+
+    let cancelled = false;
+    let initialized = false;
+    setIsRevealReady(false);
+    setIsLessonPlaying(false);
+    const deck = new Reveal(root, {
+      embedded: true,
+      controls: true,
+      progress: true,
+      history: false,
+      center: false,
+      hash: false,
+      respondToHashChanges: false,
+      transition: 'slide',
+      backgroundTransition: 'fade',
+      width: 1280,
+      height: 720,
+      margin: 0.06,
+      minScale: 0.2,
+      maxScale: 1.4
+    });
+
+    const destroyDeck = () => {
+      if (!initialized) return;
+      try {
+        deck.destroy();
+      } catch {
+        // Reveal may throw while React is tearing down an instance before it fully bound events.
+      }
+    };
+
+    deck.initialize()
+      .then(() => {
+        initialized = true;
+        if (cancelled) {
+          destroyDeck();
+          return;
+        }
+        revealDeckRef.current = deck;
+        setIsRevealReady(true);
+      })
+      .catch(() => {
+        if (revealDeckRef.current === deck) {
+          revealDeckRef.current = null;
+        }
+        setIsRevealReady(false);
+      });
+
+    return () => {
+      cancelled = true;
+      if (revealDeckRef.current === deck) {
+        revealDeckRef.current = null;
+      }
+      setIsRevealReady(false);
+      setIsLessonPlaying(false);
+      destroyDeck();
+    };
+  }, [lesson?.title, slides.length]);
+
+  useEffect(() => {
+    try {
+      revealDeckRef.current?.sync();
+    } catch {
+      // Ignore sync calls that race with Reveal initialization or cleanup.
+    }
+  }, [lesson?.title, slides]);
+
+  useEffect(() => {
+    if (!isLessonPlaying) return;
+    const timer = window.setInterval(() => {
+      const deck = revealDeckRef.current;
+      if (!deck) {
+        setIsLessonPlaying(false);
+        return;
+      }
+      try {
+        const fragments = deck.availableFragments();
+        const routes = deck.availableRoutes({ includeFragments: true });
+        if (!fragments.next && !routes.right && !routes.down && deck.isLastSlide()) {
+          setIsLessonPlaying(false);
+          return;
+        }
+        deck.next();
+      } catch {
+        setIsLessonPlaying(false);
+      }
+    }, 1600);
+    return () => window.clearInterval(timer);
+  }, [isLessonPlaying]);
+
+  const navigateReveal = (direction: 'prev' | 'next') => {
+    const deck = revealDeckRef.current;
+    if (!deck) return;
+    setIsLessonPlaying(false);
+    try {
+      if (direction === 'prev') {
+        deck.prev();
+      } else {
+        deck.next();
+      }
+    } catch {
+      // Reveal navigation can race with initialization if the workbench is switching.
+    }
+  };
+
+  if (!lesson || !slides.length) {
+    return (
+      <div className="mx-auto max-w-4xl">
+        <OpenWebUIMarkdownPreview content={result.content} />
+      </div>
+    );
+  }
+
+  return (
+    <section className="flex h-full min-h-0 flex-col bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] px-5 py-4">
+        <div className="flex min-w-0 items-center gap-3">
+          {onBack ? (
+            <AIStudioBackLink onClick={onBack} className="shrink-0" />
+          ) : null}
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
+              Light Visual Lesson · Reveal.js
+            </div>
+            <h3 className="mt-1 truncate text-lg font-semibold text-[#202124]">{lesson.title}</h3>
+          </div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 bg-[#f4f5f7] p-4">
+        <div className="mb-3 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => navigateReveal('prev')}
+            disabled={!isRevealReady}
+            title="Previous step"
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] shadow-sm transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            上一步
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsLessonPlaying((playing) => !playing)}
+            disabled={!isRevealReady}
+            title={isLessonPlaying ? 'Pause' : 'Play'}
+            className="inline-flex h-9 items-center gap-2 rounded-md bg-[#202124] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#34373c] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isLessonPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            {isLessonPlaying ? '暂停' : '播放'}
+          </button>
+          <button
+            type="button"
+            onClick={() => navigateReveal('next')}
+            disabled={!isRevealReady}
+            title="Next step"
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] shadow-sm transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            下一步
+            <ChevronRight className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => exportLightVisualLessonToPdf(lesson)}
+            title="Export PDF"
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] shadow-sm transition hover:bg-[#f8fafc]"
+          >
+            <Download className="h-4 w-4" />
+            导出 PDF
+          </button>
+        </div>
+        <div
+          ref={revealRootRef}
+          className="reveal h-[calc(100%-48px)] min-h-[680px] overflow-hidden rounded-lg border border-[#dfe3ea] bg-white shadow-sm"
+        >
+          <div className="slides">
+            {slides.map((slide, slideIndex) => {
+              const visuals = slide.visuals || [];
+              const hasVisuals = visuals.length > 0;
+              const descriptionBlocks = splitLightLessonDescription(slide.description, slide.timeline?.length || 1);
+              return (
+                <section key={`${slide.header}-${slideIndex}`} data-auto-animate>
+                  <div className="mx-auto grid h-[720px] max-h-[720px] w-full max-w-[1240px] grid-rows-[2rem_5.5rem_minmax(0,1fr)] px-6 py-5 text-left">
+                    <div className="min-h-0 text-sm font-semibold uppercase tracking-wide text-[#64748b]">
+                      Slide {slideIndex + 1}/{slides.length}
+                    </div>
+                    <h2 className="m-0 flex min-h-0 items-start overflow-hidden text-left text-[2.1rem] font-semibold leading-tight text-[#202124]">
+                      {slide.header}
+                    </h2>
+                    <div className={`grid min-h-0 grid-cols-1 gap-8 ${hasVisuals ? 'lg:grid-cols-[minmax(0,1fr)_minmax(260px,30%)]' : ''}`}>
+                      <div className={`h-full min-h-0 overflow-y-auto overscroll-contain px-1 py-1 pr-4 text-left text-[1.02rem] leading-7 text-[#202124] ${hasVisuals ? '' : 'max-w-[1080px]'}`}>
+                        {descriptionBlocks.map((block, blockIndex) => (
+                          <div key={`${slideIndex}-${blockIndex}`} className={blockIndex === 0 ? undefined : 'fragment'}>
+                            <OpenWebUIMarkdownPreview content={block} />
+                          </div>
+                        ))}
+                      </div>
+                      {hasVisuals ? (
+                        <div className="h-full min-h-0 overflow-hidden bg-white px-1 py-1 text-left">
+                          <LightVisualLessonVisualPanel visuals={visuals} />
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function VisualExplainerViewer({ result, onBack }: { result: StudioResult; onBack?: () => void }) {
   const lesson = useMemo(() => extractVisualLessonPayload(result), [result]);
   const slides = lesson?.slides?.length ? lesson.slides : [];
@@ -7019,14 +7454,7 @@ function VisualExplainerViewer({ result, onBack }: { result: StudioResult; onBac
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] px-5 py-4">
         <div className="flex min-w-0 items-center gap-3">
           {onBack ? (
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc]"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              返回
-            </button>
+            <AIStudioBackLink onClick={onBack} className="shrink-0" />
           ) : null}
           <div className="min-w-0">
             <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
@@ -7146,178 +7574,24 @@ function VisualExplainerViewer({ result, onBack }: { result: StudioResult; onBac
   );
 }
 
-function VisualCodeSandbox({ part, index }: { part: Extract<VisualCodePart, { type: 'react' | 'html' }>; index: number }) {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [copied, setCopied] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const blocked = unsafeVisualizationPattern.test(part.code);
-  const label = part.type === 'react' ? 'React' : 'HTML';
-  const extension = part.type === 'react' ? 'jsx' : 'html';
-
-  const blobUrl = useMemo(() => {
-    if (blocked) return '';
-    const html = part.type === 'react' ? buildReactVisualizationSandboxHtml(part.code) : part.code;
-    return URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
-  }, [blocked, part.code, part.type]);
-
-  useEffect(() => {
-    return () => {
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-    };
-  }, [blobUrl]);
-
-  useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      const iframe = iframeRef.current;
-      if (!iframe || event.source !== iframe.contentWindow) return;
-      if (event.data?.type === 'visual-code-height' && typeof event.data.height === 'number') {
-        if (isFullscreen) return;
-        iframe.style.height = `${Math.min(Math.max(event.data.height, 280), 900)}px`;
-      }
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [isFullscreen]);
-
-  useEffect(() => {
-    if (!isFullscreen) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [isFullscreen]);
-
-  const copySource = async () => {
-    try {
-      await navigator.clipboard?.writeText(part.code);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      setCopied(false);
-    }
-  };
-
-  const downloadSource = () => {
-    const blob = new Blob([part.code], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `visualization-${index + 1}.${extension}`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
-  };
-
+function AIStudioBackLink({
+  onClick,
+  className = ''
+}: {
+  onClick: () => void;
+  className?: string;
+}) {
   return (
-    <section
-      className={
-        isFullscreen
-          ? 'fixed inset-3 z-[10000] flex flex-col overflow-hidden rounded-lg border border-[#dfe3ea] bg-white shadow-2xl'
-          : 'overflow-hidden rounded-lg border border-[#dfe3ea] bg-white'
-      }
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex min-w-fit p-1.5 text-sm font-medium text-gray-900 transition select-none hover:text-gray-700 dark:text-gray-200 dark:hover:text-white ${className}`}
     >
-      <div className="flex items-center justify-between gap-3 border-b border-[#e5e7eb] bg-[#f8fafc] px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <Code className="h-4 w-4 text-[#2563eb]" />
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-[#202124]">可执行可视化 {index + 1}</div>
-            <div className="text-xs text-[#64748b]">{label} sandbox</div>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={copySource}
-            className="inline-flex h-8 items-center gap-1 rounded-md border border-[#dfe3ea] bg-white px-2 text-xs font-semibold text-[#343a46] hover:bg-[#f8fafc]"
-          >
-            <ClipboardCheck className="h-3.5 w-3.5" />
-            {copied ? '已复制' : '源码'}
-          </button>
-          <button
-            type="button"
-            onClick={downloadSource}
-            className="inline-flex h-8 items-center gap-1 rounded-md border border-[#dfe3ea] bg-white px-2 text-xs font-semibold text-[#343a46] hover:bg-[#f8fafc]"
-          >
-            <Download className="h-3.5 w-3.5" />
-            .{extension}
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsFullscreen((value) => !value)}
-            className="inline-flex h-8 items-center gap-1 rounded-md border border-[#dfe3ea] bg-white px-2 text-xs font-semibold text-[#343a46] hover:bg-[#f8fafc]"
-          >
-            {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-            {isFullscreen ? '退出全屏' : '全屏'}
-          </button>
-        </div>
-      </div>
-      {blocked ? (
-        <div className="m-4 rounded-lg border border-[#fecaca] bg-[#fef2f2] p-4 text-sm leading-6 text-[#991b1b]">
-          这个可视化代码块包含被禁用的浏览器能力，已阻止运行。请重新生成或查看源码后调整。
-        </div>
-      ) : (
-        <iframe
-          ref={iframeRef}
-          className={isFullscreen ? 'block w-full flex-1 border-0 bg-white' : 'block w-full border-0 bg-white'}
-          style={isFullscreen ? undefined : { height: 420 }}
-          sandbox="allow-scripts"
-          src={blobUrl}
-          title={`visual-code-${index + 1}`}
-        />
-      )}
-    </section>
+      <span className="whitespace-nowrap">&lt;AI Studio</span>
+    </button>
   );
 }
 
-function VisualCodeLessonViewer({ result, lesson, onBack }: { result: StudioResult; lesson: VisualCodeLessonPayload; onBack?: () => void }) {
-  const parts = useMemo(() => parseVisualCodeMarkdown(lesson.contentMarkdown || result.content), [lesson.contentMarkdown, result.content]);
-  let visualIndex = 0;
-
-  return (
-    <section className="min-w-0 bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] px-5 py-4">
-        <div className="flex min-w-0 items-center gap-3">
-          {onBack ? (
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc]"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              返回
-            </button>
-          ) : null}
-          <div className="min-w-0">
-            <div className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
-              Visual Code Lesson
-            </div>
-            <h3 className="mt-1 truncate text-lg font-semibold text-[#202124]">{lesson.title || result.name}</h3>
-          </div>
-        </div>
-      </div>
-      <div className="mx-auto flex max-w-6xl flex-col gap-5 px-5 py-5">
-        {lesson.summary ? (
-          <div className="rounded-lg border border-[#dfe3ea] bg-[#f8fafc] px-4 py-3 text-sm leading-6 text-[#475569]">
-            {lesson.summary}
-          </div>
-        ) : null}
-        {parts.map((part, index) => {
-          if (part.type === 'text') {
-            return (
-              <article key={`text-${index}`} className="rounded-lg border border-[#e5e7eb] bg-white px-5 py-4">
-                <MarkdownPreview content={part.content} variant="document" />
-              </article>
-            );
-          }
-          visualIndex += 1;
-          return <VisualCodeSandbox key={`${part.type}-${index}`} part={part} index={visualIndex - 1} />;
-        })}
-      </div>
-    </section>
-  );
-}
 
 const normalizeAnswer = (value: string) =>
   value
@@ -8451,11 +8725,213 @@ function GeneratedFileViewer({
 }) {
   const fileUrl = fileSystemApi.downloadUrl(workspaceId, result.id);
   const deliveryKind = result.delivery?.kind;
+  const [htmlContent, setHtmlContent] = useState('');
+  const [htmlError, setHtmlError] = useState('');
+  const [htmlLoading, setHtmlLoading] = useState(false);
+  const [frameKey, setFrameKey] = useState(0);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
 
-  if (deliveryKind === 'html' || /\.html?$/i.test(result.name)) {
+  const isHtmlDelivery = deliveryKind === 'html' || deliveryKind === 'hyperframes' || /\.html?$/i.test(result.name);
+  const withPreviewTimelineFallback = (content: string) => {
+    if (deliveryKind !== 'hyperframes') return content;
+    const fallback = `
+<script>
+(function () {
+  if (window.gsap && window.gsap.timeline) return;
+  function apply(el, prop, value) {
+    if (!el) return;
+    if (prop === 'opacity') el.style.opacity = String(value);
+    if (prop === 'visibility') el.style.visibility = String(value);
+    if (prop === 'width') el.style.width = String(value);
+    if (prop === 'scale') el.dataset.hfScale = String(value);
+    if (prop === 'x') el.dataset.hfX = String(value);
+    if (prop === 'y') el.dataset.hfY = String(value);
+    if (prop === 'rotation') el.dataset.hfRotation = String(value);
+    if (prop === 'scale' || prop === 'x' || prop === 'y' || prop === 'rotation') {
+      el.style.transform = 'translate(' + (el.dataset.hfX || '0') + 'px,' + (el.dataset.hfY || '0') + 'px) scale(' + (el.dataset.hfScale || '1') + ') rotate(' + (el.dataset.hfRotation || '0') + 'deg)';
+    }
+  }
+  function nodes(selector) { return Array.prototype.slice.call(document.querySelectorAll(selector)); }
+  window.gsap = { timeline: function () {
+    var operations = [], callbacks = {}, currentTime = 0, playing = false, raf = 0, startMs = 0;
+    function add(type, selector, fromVars, toVars, at) { operations.push({ type: type, selector: selector, fromVars: fromVars || {}, toVars: toVars || {}, at: Number(at || 0), duration: Number((toVars && toVars.duration) || 0) }); }
+    function duration() { return Math.max(30, Number(document.querySelector('[data-composition-duration], [data-duration]')?.getAttribute('data-duration') || 60)); }
+    function render(time) {
+      currentTime = Math.max(0, time);
+      operations.forEach(function (op) {
+        var local = currentTime - op.at;
+        if (local < 0) return;
+        var progress = op.duration <= 0 ? 1 : Math.max(0, Math.min(1, local / op.duration));
+        nodes(op.selector).forEach(function (el) {
+          Object.keys(op.toVars).forEach(function (prop) {
+            if (prop === 'duration' || prop === 'ease' || prop === 'stagger') return;
+            var fromValue = op.fromVars[prop], toValue = op.toVars[prop];
+            if (typeof fromValue === 'number' && typeof toValue === 'number') apply(el, prop, fromValue + (toValue - fromValue) * progress);
+            else if (progress >= 1) apply(el, prop, toValue);
+            else if (op.type === 'fromTo') apply(el, prop, fromValue);
+          });
+        });
+      });
+      if (callbacks.onUpdate) callbacks.onUpdate();
+    }
+    function tick(now) { if (!playing) return; render((now - startMs) / 1000); if (currentTime < duration()) raf = requestAnimationFrame(tick); else playing = false; }
+    return {
+      set: function (selector, vars, at) { add('set', selector, {}, vars, at); render(currentTime); return this; },
+      to: function (selector, vars, at) { add('to', selector, {}, vars, at); return this; },
+      fromTo: function (selector, fromVars, toVars, at) { add('fromTo', selector, fromVars, toVars, at); return this; },
+      eventCallback: function (name, callback) { callbacks[name] = callback; return this; },
+      time: function (value) { if (typeof value === 'number') { render(value); return this; } return currentTime; },
+      play: function () { playing = true; startMs = performance.now() - currentTime * 1000; cancelAnimationFrame(raf); raf = requestAnimationFrame(tick); return this; },
+      pause: function () { playing = false; cancelAnimationFrame(raf); return this; },
+      restart: function () { render(0); return this.play(); }
+    };
+  } };
+})();
+</script>`;
+    const previewFitStyle = `
+<style id="hyperframes-preview-fit-style">
+  html, body { width: 100%; height: 100%; }
+  body { position: relative; overflow: hidden; background: #f6f7f9; }
+  #root { transform-origin: top left; will-change: transform; }
+</style>`;
+    const previewFitScript = `
+<script id="hyperframes-preview-fit-script">
+(function () {
+  function fit() {
+    var root = document.getElementById('root');
+    if (!root) return;
+    var width = Number(root.getAttribute('data-width')) || root.offsetWidth || 1920;
+    var height = Number(root.getAttribute('data-height')) || root.offsetHeight || 1080;
+    var viewportWidth = window.innerWidth || document.documentElement.clientWidth || width;
+    var viewportHeight = window.innerHeight || document.documentElement.clientHeight || height;
+    var scale = Math.min(viewportWidth / width, viewportHeight / height);
+    if (!isFinite(scale) || scale <= 0) scale = 1;
+    root.style.position = 'absolute';
+    root.style.left = Math.max(0, (viewportWidth - width * scale) / 2) + 'px';
+    root.style.top = Math.max(0, (viewportHeight - height * scale) / 2) + 'px';
+    root.style.transform = 'scale(' + scale + ')';
+  }
+  window.addEventListener('resize', fit);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fit, { once: true });
+  } else {
+    fit();
+  }
+  window.addEventListener('load', fit);
+})();
+</script>`;
+    let next = content.replace(/<script\s+src=["']\.\/assets\/gsap\.min\.js["']\s*><\/script>/i, fallback);
+    if (!next.includes('hyperframes-preview-fit-style')) {
+      next = /<\/head>/i.test(next)
+        ? next.replace(/<\/head>/i, `${previewFitStyle}\n</head>`)
+        : `${previewFitStyle}\n${next}`;
+    }
+    if (!next.includes('hyperframes-preview-fit-script')) {
+      next = /<\/body>/i.test(next)
+        ? next.replace(/<\/body>/i, `${previewFitScript}\n</body>`)
+        : `${next}\n${previewFitScript}`;
+    }
+    return next;
+  };
+
+  useEffect(() => {
+    if (!isHtmlDelivery) return;
+    let cancelled = false;
+    const inlineHtml = result.delivery?.previewContent || result.content;
+    if (/<!doctype html|<html[\s>]/i.test(inlineHtml)) {
+      setHtmlContent(inlineHtml);
+      setHtmlError('');
+      setHtmlLoading(false);
+      return;
+    }
+    setHtmlLoading(true);
+    setHtmlError('');
+    void fileSystemApi
+      .getContent(workspaceId, result.id)
+      .then((payload) => {
+        if (!cancelled) setHtmlContent(payload.content || '');
+      })
+      .catch((error) => {
+        if (!cancelled) setHtmlError(error?.response?.data?.error || error?.message || 'Failed to load generated HTML.');
+      })
+      .finally(() => {
+        if (!cancelled) setHtmlLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isHtmlDelivery, result.content, result.delivery?.previewContent, result.id, workspaceId]);
+
+  if (isHtmlDelivery) {
+    const frameContent = withPreviewTimelineFallback(htmlContent || result.delivery?.previewContent || result.content);
+    const postToFrame = (action: string) => {
+      const win = frameRef.current?.contentWindow as any;
+      const timeline = win?.__timelines?.root;
+      if (timeline && typeof timeline[action] === 'function') {
+        timeline[action]();
+        return;
+      }
+      win?.postMessage({ type: 'hyperframes-control', action }, '*');
+    };
     return (
-      <div className="h-[min(760px,calc(100vh-180px))] overflow-hidden bg-white">
-        <iframe title={result.name} src={fileUrl} className="h-full w-full bg-white" />
+      <div className="flex h-[min(760px,calc(100vh-180px))] flex-col overflow-hidden bg-white">
+        <div className="flex items-center justify-end gap-2 border-b border-[#eef0f4] px-4 py-2">
+          <button
+            type="button"
+            onClick={() => postToFrame('play')}
+            className="rounded-full bg-[#202124] px-3 py-1.5 text-xs font-semibold text-white"
+          >
+            Play
+          </button>
+          <button
+            type="button"
+            onClick={() => postToFrame('pause')}
+            className="rounded-full bg-[#eef0f4] px-3 py-1.5 text-xs font-semibold text-[#202124]"
+          >
+            Pause
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const win = frameRef.current?.contentWindow as any;
+              if (win?.__timelines?.root?.restart) {
+                win.__timelines.root.restart();
+              } else {
+                setFrameKey((value) => value + 1);
+              }
+            }}
+            className="rounded-full bg-[#eef0f4] px-3 py-1.5 text-xs font-semibold text-[#202124]"
+          >
+            Replay
+          </button>
+        </div>
+        {htmlLoading ? (
+          <div className="flex h-full items-center justify-center gap-2 text-sm text-[#777a80]">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading generated HTML...
+          </div>
+        ) : htmlError ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-red-600">
+            <CircleAlert className="h-5 w-5" />
+            {htmlError}
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center bg-[#f6f7f9] p-4">
+            <div
+              className="aspect-video w-full max-w-full overflow-hidden rounded-[18px] border border-[#e5e7eb] bg-white shadow-[0_18px_48px_rgba(15,23,42,0.08)]"
+              style={{ width: 'min(100%, calc((100vh - 280px) * 16 / 9))' }}
+            >
+              <iframe
+                key={frameKey}
+                title={result.name}
+                srcDoc={frameContent}
+                ref={frameRef}
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                className="h-full w-full border-0 bg-white"
+              />
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -8627,128 +9103,260 @@ const monacoLanguageFor = (language: string) => {
   return normalized || 'javascript';
 };
 
-const extractFirstCodeBlock = (content: string) => {
-  const match = content.match(/```([a-zA-Z0-9_+#-]*)\s*([\s\S]*?)```/);
-  return {
-    language: monacoLanguageFor(match?.[1] || 'javascript'),
-    code: match?.[2]?.trim() || ''
+type CodeLabExample = {
+  input: string;
+  output: string;
+  explanation?: string;
+};
+
+type CodeLabCase = {
+  id: string;
+  name: string;
+  stdin: string;
+  expectedStdout: string;
+  explanation?: string;
+};
+
+type CodeLabModel = {
+  title: string;
+  problem: {
+    statementMarkdown: string;
+    examples: CodeLabExample[];
+    constraints: string[];
+  };
+  editor: {
+    language: string;
+    starterCode: string;
+  };
+  guide: {
+    hints: string[];
+    acceptanceCriteria: string[];
+  };
+  tests: {
+    cases: CodeLabCase[];
+  };
+  solution: {
+    approachMarkdown: string;
+    referenceCode?: string;
+    complexity?: string;
   };
 };
 
-const extractMarkdownSectionLines = (content: string, titles: string[]) => {
-  const escaped = titles.map((title) => title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const match = content.match(new RegExp(`##\\s*(?:${escaped})\\s*([\\s\\S]*?)(?:\\n##|$)`, 'i'));
-  return (match?.[1] || '')
-    .split('\n')
-    .map((line) => line.replace(/^\s*[-*\d.、)]+\s*/, '').trim())
-    .filter(Boolean)
-    .slice(0, 12);
-};
+const safeStringArray = (value: unknown, max = 8) =>
+  Array.isArray(value) ? value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, max) : [];
+
+const defaultCodeLabModel = (title: string): CodeLabModel => ({
+  title,
+  problem: {
+    statementMarkdown: '实现一个程序：从标准输入读取若干整数，输出它们的和。',
+    examples: [{ input: '1 2 3\n', output: '6', explanation: '1 + 2 + 3 = 6。' }],
+    constraints: ['输入只包含整数。', '输出一个整数并换行。']
+  },
+  editor: {
+    language: 'javascript',
+    starterCode: [
+      "const fs = require('fs');",
+      "const nums = fs.readFileSync(0, 'utf8').trim().split(/\\s+/).filter(Boolean).map(Number);",
+      '',
+      '// TODO: implement the solution.',
+      'console.log(nums.reduce((sum, value) => sum + value, 0));'
+    ].join('\n')
+  },
+  guide: {
+    hints: ['先把输入稳定解析成数字数组。'],
+    acceptanceCriteria: ['能通过全部公开测试用例。']
+  },
+  tests: {
+    cases: [
+      { id: 'case-1', name: '公开样例', stdin: '1 2 3\n', expectedStdout: '6' },
+      { id: 'case-2', name: '包含负数', stdin: '10 -2 5 -3\n', expectedStdout: '10' }
+    ]
+  },
+  solution: {
+    approachMarkdown: '按空白符切分标准输入，转换为数字后累加输出。',
+    complexity: 'Time O(n), space O(n).'
+  }
+});
+
+const codeLabMarkdownForProblem = (lab: CodeLabModel) =>
+  [
+    `# ${lab.title}`,
+    '',
+    lab.problem.statementMarkdown,
+    '',
+    lab.problem.examples.length ? '## 示例' : '',
+    ...lab.problem.examples.map((example, index) =>
+      [
+        `### 示例 ${index + 1}`,
+        '',
+        'Input:',
+        '```text',
+        example.input,
+        '```',
+        '',
+        'Output:',
+        '```text',
+        example.output,
+        '```',
+        example.explanation || ''
+      ].filter(Boolean).join('\n')
+    ),
+    '',
+    lab.problem.constraints.length ? '## 约束' : '',
+    lab.problem.constraints.map((item) => `- ${item}`).join('\n'),
+    '',
+    lab.guide.hints.length ? '## 提示' : '',
+    lab.guide.hints.map((item) => `- ${item}`).join('\n'),
+    '',
+    lab.guide.acceptanceCriteria.length ? '## 验收标准' : '',
+    lab.guide.acceptanceCriteria.map((item) => `- ${item}`).join('\n')
+  ].filter(Boolean).join('\n');
+
+const codeLabMarkdownForSolution = (lab: CodeLabModel) =>
+  [
+    `# ${lab.title} 题解`,
+    '',
+    lab.solution.approachMarkdown || '暂无题解。',
+    '',
+    lab.solution.complexity ? `## 复杂度\n${lab.solution.complexity}` : '',
+    '',
+    lab.solution.referenceCode ? ['## 参考代码', '```' + lab.editor.language, lab.solution.referenceCode, '```'].join('\n') : ''
+  ].filter(Boolean).join('\n');
 
 const buildCodeLabModel = (result: StudioResult) => {
   const structured = isObjectRecord(result.structured) ? result.structured : null;
   const payload = isObjectRecord(structured?.payload) ? structured.payload : null;
-  const markdownCode = extractFirstCodeBlock(result.content);
-  const language = monacoLanguageFor(String(payload?.language || markdownCode.language || 'javascript'));
-  const starterCode = String(payload?.starterCode || markdownCode.code || [
-    'function solve() {',
-    '  console.log("Hello, Code Lab");',
-    '}',
-    '',
-    'solve();'
-  ].join('\n'));
+  const fallback = defaultCodeLabModel(String(structured?.title || result.template?.title || resultTitle(result.resourceType)));
+  const problem = isObjectRecord(payload?.problem) ? payload.problem : {};
+  const editor = isObjectRecord(payload?.editor) ? payload.editor : {};
+  const guide = isObjectRecord(payload?.guide) ? payload.guide : {};
+  const tests = isObjectRecord(payload?.tests) ? payload.tests : {};
+  const solution = isObjectRecord(payload?.solution) ? payload.solution : {};
+  const examples = Array.isArray(problem.examples)
+    ? problem.examples.slice(0, 4).map((example: any) => ({
+        input: String(example?.input || ''),
+        output: String(example?.output || ''),
+        explanation: example?.explanation ? String(example.explanation) : undefined
+      })).filter((example) => example.input || example.output)
+    : [];
+  const cases = Array.isArray(tests.cases)
+    ? tests.cases.slice(0, 10).map((test: any, index: number) => ({
+        id: String(test?.id || `case-${index + 1}`),
+        name: String(test?.name || `Case ${index + 1}`),
+        stdin: String(test?.stdin || ''),
+        expectedStdout: String(test?.expectedStdout ?? ''),
+        explanation: test?.explanation ? String(test.explanation) : undefined
+      })).filter((test) => test.stdin || test.expectedStdout)
+    : [];
   return {
-    title: result.template?.title || resultTitle(result.resourceType),
-    objective: String(payload?.objective || result.content.match(/##\s*实验目标\s*([\s\S]*?)(?:\n##|$)/i)?.[1] || '').trim(),
-    steps: Array.isArray(payload?.steps) ? payload.steps.map(String) : extractMarkdownSectionLines(result.content, ['TODO', '实验步骤']),
-    tests: Array.isArray(payload?.tests) ? payload.tests.map(String) : extractMarkdownSectionLines(result.content, ['测试任务', '测试用例']),
-    debugHints: Array.isArray(payload?.debugHints) ? payload.debugHints.map(String) : extractMarkdownSectionLines(result.content, ['调试提示']),
-    language,
-    starterCode
+    title: fallback.title,
+    problem: {
+      statementMarkdown: String(problem.statementMarkdown || fallback.problem.statementMarkdown),
+      examples: examples.length ? examples : fallback.problem.examples,
+      constraints: safeStringArray(problem.constraints, 10).length ? safeStringArray(problem.constraints, 10) : fallback.problem.constraints
+    },
+    editor: {
+      language: monacoLanguageFor(String(editor.language || fallback.editor.language)),
+      starterCode: String(editor.starterCode || fallback.editor.starterCode)
+    },
+    guide: {
+      hints: safeStringArray(guide.hints, 8).length ? safeStringArray(guide.hints, 8) : fallback.guide.hints,
+      acceptanceCriteria: safeStringArray(guide.acceptanceCriteria, 8).length
+        ? safeStringArray(guide.acceptanceCriteria, 8)
+        : fallback.guide.acceptanceCriteria
+    },
+    tests: {
+      cases: cases.length ? cases : fallback.tests.cases
+    },
+    solution: {
+      approachMarkdown: String(solution.approachMarkdown || fallback.solution.approachMarkdown),
+      referenceCode: solution.referenceCode ? String(solution.referenceCode) : undefined,
+      complexity: solution.complexity ? String(solution.complexity) : fallback.solution.complexity
+    }
   };
 };
 
 function CodeLabWorkbench({ result }: { result: StudioResult }) {
   const lab = useMemo(() => buildCodeLabModel(result), [result.id, result.content, result.structured]);
-  const [language, setLanguage] = useState(lab.language);
-  const [code, setCode] = useState(lab.starterCode);
-  const [stdin, setStdin] = useState('');
-  const [runResult, setRunResult] = useState<AiCodeLabRunResult | null>(null);
+  const [language, setLanguage] = useState(lab.editor.language);
+  const [code, setCode] = useState(lab.editor.starterCode);
+  const [leftTab, setLeftTab] = useState<'problem' | 'solution'>('problem');
+  const [bottomTab, setBottomTab] = useState<'tests' | 'result'>('tests');
+  const [selectedCaseId, setSelectedCaseId] = useState(lab.tests.cases[0]?.id || '');
+  const [runResult, setRunResult] = useState<AiCodeLabTestRunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const problemMarkdown = useMemo(() => codeLabMarkdownForProblem(lab), [lab]);
+  const solutionMarkdown = useMemo(() => codeLabMarkdownForSolution(lab), [lab]);
+  const selectedCase = lab.tests.cases.find((test) => test.id === selectedCaseId) || lab.tests.cases[0];
+  const selectedResult = runResult?.results.find((item) => item.id === selectedCase?.id) || runResult?.results[0];
 
   useEffect(() => {
-    setLanguage(lab.language);
-    setCode(lab.starterCode);
-    setStdin('');
+    setLanguage(lab.editor.language);
+    setCode(lab.editor.starterCode);
+    setSelectedCaseId(lab.tests.cases[0]?.id || '');
     setRunResult(null);
     setRunError(null);
-  }, [lab.language, lab.starterCode, result.id]);
+    setBottomTab('tests');
+  }, [lab.editor.language, lab.editor.starterCode, lab.tests.cases, result.id]);
 
   const run = async () => {
     if (running) return;
     setRunning(true);
     setRunError(null);
+    setBottomTab('result');
     try {
-      setRunResult(await aiApi.runCodeLab({ language, sourceCode: code, stdin }));
+      setRunResult(await aiApi.runCodeLabTests({
+        language,
+        sourceCode: code,
+        cases: lab.tests.cases.map((test) => ({
+          id: test.id,
+          stdin: test.stdin,
+          expectedStdout: test.expectedStdout
+        }))
+      }));
     } catch (error: any) {
-      setRunError(error?.response?.data?.error || error?.message || 'Code execution failed');
+      setRunError(error?.response?.data?.error || error?.message || 'Code Lab tests failed');
       setRunResult(null);
     } finally {
       setRunning(false);
     }
   };
 
-  const outputText = [
-    runResult?.stdout ? `stdout\n${runResult.stdout}` : '',
-    runResult?.compileOutput ? `compile output\n${runResult.compileOutput}` : '',
-    runResult?.stderr ? `stderr\n${runResult.stderr}` : '',
-    runResult?.message ? `message\n${runResult.message}` : ''
-  ].filter(Boolean).join('\n\n');
+  const resultStatusClass =
+    runResult?.status === 'passed'
+      ? 'bg-emerald-50 text-emerald-700'
+      : runResult
+        ? 'bg-amber-50 text-amber-700'
+        : 'bg-[#eef0f4] text-[#667085]';
 
   return (
-    <div className="flex h-[calc(100vh-190px)] min-h-[720px] flex-col overflow-hidden bg-white">
-      <section className="max-h-[38%] overflow-auto border-b border-[#e5e7eb] bg-white p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
-              <Code className="h-4 w-4" /> Code Lab
-            </div>
-            <h3 className="mt-2 text-xl font-semibold text-[#202124]">{lab.title}</h3>
-            {lab.objective && <p className="mt-3 max-w-5xl text-sm leading-6 text-[#4f5665]">{lab.objective}</p>}
+    <div className="flex h-[calc(100vh-190px)] min-h-[720px] flex-col overflow-hidden bg-white lg:grid lg:grid-cols-[minmax(340px,42%)_minmax(0,1fr)]">
+      <aside className="flex min-h-0 flex-col border-r border-[#e5e7eb] bg-white">
+        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#e5e7eb] px-4">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">
+            <Code className="h-4 w-4" /> Code Lab
+          </div>
+          <div className="inline-flex rounded-md border border-[#dfe3ea] bg-[#f8fafc] p-0.5">
+            {(['problem', 'solution'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setLeftTab(tab)}
+                className={`h-8 rounded px-3 text-sm font-semibold transition ${leftTab === tab ? 'bg-white text-[#202124] shadow-sm' : 'text-[#667085] hover:text-[#202124]'}`}
+              >
+                {tab === 'problem' ? '题目' : '题解'}
+              </button>
+            ))}
           </div>
         </div>
-        <div className="mt-5 grid gap-4 lg:grid-cols-3">
-          {lab.steps.length > 0 && (
-            <section className="min-w-0">
-              <div className="flex items-center gap-2 text-sm font-semibold text-[#202124]"><ClipboardCheck className="h-4 w-4" /> Steps</div>
-              <ol className="mt-2 space-y-2 text-sm leading-6 text-[#4f5665]">
-                {lab.steps.map((step, index) => <li key={`${step}-${index}`}>{index + 1}. {step}</li>)}
-              </ol>
-            </section>
-          )}
-          {lab.tests.length > 0 && (
-            <section className="min-w-0">
-              <div className="text-sm font-semibold text-[#202124]">Tests</div>
-              <div className="mt-2 space-y-2">
-                {lab.tests.map((test, index) => (
-                  <div key={`${test}-${index}`} className="rounded-md border border-[#e5e7eb] bg-[#fbfcfd] px-3 py-2 text-sm leading-5 text-[#4f5665]">{test}</div>
-                ))}
-              </div>
-            </section>
-          )}
-          {lab.debugHints.length > 0 && (
-            <section className="min-w-0">
-              <div className="flex items-center gap-2 text-sm font-semibold text-[#202124]"><CircleAlert className="h-4 w-4" /> Hints</div>
-              <ul className="mt-2 space-y-2 text-sm leading-6 text-[#4f5665]">
-                {lab.debugHints.map((hint, index) => <li key={`${hint}-${index}`}>- {hint}</li>)}
-              </ul>
-            </section>
-          )}
+        <div className="min-h-0 flex-1 overflow-auto">
+          <MarkdownPreview content={leftTab === 'problem' ? problemMarkdown : solutionMarkdown} variant="message" />
         </div>
-      </section>
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-white">
-        <div className="flex items-center justify-between gap-3 border-b border-[#e5e7eb] bg-[#fbfcfd] px-4 py-3">
+      </aside>
+
+      <main className="flex min-h-0 min-w-0 flex-col bg-white">
+        <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-[#e5e7eb] bg-[#fbfcfd] px-4">
           <select
             value={language}
             onChange={(event) => setLanguage(event.target.value)}
@@ -8761,13 +9369,13 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
           <button
             type="button"
             onClick={() => void run()}
-            disabled={running}
+            disabled={running || lab.tests.cases.length === 0}
             className="inline-flex h-9 items-center gap-2 rounded-md bg-[#202124] px-4 text-sm font-semibold text-white transition hover:bg-[#3c4043] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Run
           </button>
         </div>
-        <div className="min-h-[420px] flex-1">
+        <div className="min-h-[360px] flex-[3]">
           <Editor
             height="100%"
             language={monacoLanguageFor(language)}
@@ -8785,35 +9393,93 @@ function CodeLabWorkbench({ result }: { result: StudioResult }) {
             }}
           />
         </div>
-        <div className="grid h-48 grid-cols-[minmax(240px,30%)_minmax(0,1fr)] border-t border-[#e5e7eb]">
-          <label className="flex min-h-0 flex-col border-r border-[#e5e7eb] bg-white">
-            <span className="border-b border-[#e5e7eb] px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">stdin</span>
-            <textarea
-              value={stdin}
-              onChange={(event) => setStdin(event.target.value)}
-              className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-sm text-[#202124] outline-none"
-              spellCheck={false}
-            />
-          </label>
-          <div className="min-h-0 overflow-auto bg-white">
-            <div className="flex items-center justify-between border-b border-[#e5e7eb] px-3 py-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-[#7b8190]">output</span>
-              {runResult && (
-                <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${runResult.status.success ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                  {runResult.status.description}
-                </span>
+        <section className="flex min-h-[260px] flex-[2] flex-col border-t border-[#e5e7eb] bg-white">
+          <div className="flex h-11 shrink-0 items-center justify-between border-b border-[#e5e7eb] px-4">
+            <div className="flex items-center gap-1">
+              {(['tests', 'result'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setBottomTab(tab)}
+                  className={`h-8 rounded px-3 text-sm font-semibold transition ${bottomTab === tab ? 'bg-[#eef0f4] text-[#202124]' : 'text-[#667085] hover:text-[#202124]'}`}
+                >
+                  {tab === 'tests' ? 'Testcase' : 'Result'}
+                </button>
+              ))}
+            </div>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${resultStatusClass}`}>
+              {runResult ? `${runResult.passedCount}/${runResult.totalCount} ${runResult.status}` : `${lab.tests.cases.length} cases`}
+            </span>
+          </div>
+          <div className="grid min-h-0 flex-1 grid-cols-[minmax(160px,28%)_minmax(0,1fr)]">
+            <div className="min-h-0 overflow-auto border-r border-[#e5e7eb] bg-[#fbfcfd] p-2">
+              {lab.tests.cases.map((test, index) => {
+                const resultForCase = runResult?.results.find((item) => item.id === test.id);
+                return (
+                  <button
+                    key={test.id}
+                    type="button"
+                    onClick={() => setSelectedCaseId(test.id)}
+                    className={`mb-1 flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition ${selectedCase?.id === test.id ? 'bg-white text-[#202124] shadow-sm ring-1 ring-[#dfe3ea]' : 'text-[#667085] hover:bg-white hover:text-[#202124]'}`}
+                  >
+                    <span className="truncate">{test.name || `Case ${index + 1}`}</span>
+                    {resultForCase ? (
+                      resultForCase.passed
+                        ? <Check className="h-4 w-4 shrink-0 text-emerald-600" />
+                        : <CircleAlert className="h-4 w-4 shrink-0 text-amber-600" />
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="min-h-0 overflow-auto p-4">
+              {bottomTab === 'tests' ? (
+                selectedCase ? (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Input</div>
+                      <pre className="min-h-[72px] whitespace-pre-wrap rounded-md border border-[#e5e7eb] bg-[#fbfcfd] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedCase.stdin}</pre>
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Expected Output</div>
+                      <pre className="min-h-[72px] whitespace-pre-wrap rounded-md border border-[#e5e7eb] bg-[#fbfcfd] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedCase.expectedStdout}</pre>
+                    </div>
+                    {selectedCase.explanation && <p className="text-sm leading-6 text-[#667085]">{selectedCase.explanation}</p>}
+                  </div>
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-[#667085]">No test cases.</div>
+                )
+              ) : (
+                <div className="space-y-4">
+                  {runError && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-800">{runError}</div>
+                  )}
+                  {!runError && !runResult && (
+                    <div className="flex h-40 items-center justify-center text-sm text-[#667085]">Run code to see testcase results.</div>
+                  )}
+                  {selectedResult && (
+                    <>
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${selectedResult.passed ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                          {selectedResult.passed ? 'Accepted' : selectedResult.status.description}
+                        </span>
+                        <span className="text-xs text-[#7b8190]">time {selectedResult.time || '-'}s · memory {selectedResult.memory ?? '-'} KB</span>
+                      </div>
+                      <div>
+                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Your Output</div>
+                        <pre className="min-h-[72px] whitespace-pre-wrap rounded-md border border-[#e5e7eb] bg-[#fbfcfd] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedResult.stdout || selectedResult.stderr || selectedResult.compileOutput || selectedResult.message || '(empty)'}</pre>
+                      </div>
+                      <div>
+                        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[#7b8190]">Expected Output</div>
+                        <pre className="min-h-[72px] whitespace-pre-wrap rounded-md border border-[#e5e7eb] bg-[#fbfcfd] p-3 font-mono text-sm leading-6 text-[#202124]">{selectedResult.expectedStdout || '(empty)'}</pre>
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
             </div>
-            <pre className="whitespace-pre-wrap p-3 font-mono text-sm leading-6 text-[#202124]">
-              {runError || outputText || 'Run code to see stdout, stderr, compile output, time, and memory.'}
-            </pre>
-            {runResult && (
-              <div className="border-t border-[#e5e7eb] px-3 py-2 text-xs text-[#7b8190]">
-                time {runResult.time || '-'}s · memory {runResult.memory ?? '-'} KB · provider {runResult.provider}
-              </div>
-            )}
           </div>
-        </div>
+        </section>
       </main>
     </div>
   );
@@ -8845,6 +9511,7 @@ function ResultView({
   const sourceCount = studioResultSourceCount(result, quizMeta);
   const headerMeta = `${studioResultTypeLabel(result)} · Based on ${sourceCount} sources`;
   const hasGeneratedFileViewer = Boolean(result.delivery && result.delivery.kind !== 'markdown');
+  const lightVisualLesson = extractLightVisualLessonPayload(result);
   const teachingVisualization = extractTeachingVisualizationPayload(result);
   const visualCodeLesson = extractVisualCodeLessonPayload(result);
   const visualLesson = extractVisualLessonPayload(result);
@@ -8871,7 +9538,7 @@ function ResultView({
     window.location.assign(url.toString());
   };
 
-  const openOrCreateResourceNote = async () => {
+  const convertOrOpenResourceNote = async () => {
     if (!resourceNotes || openingNote) return;
     if (resourceNote) {
       openResourceNote(resourceNote);
@@ -8887,9 +9554,8 @@ function ResultView({
         title: noteTitle
       });
       setResourceNote(created);
-      openResourceNote(created);
     } catch (createError: any) {
-      setResourceNoteError(createError?.response?.data?.error || createError?.message || 'Failed to open note');
+      setResourceNoteError(createError?.response?.data?.error || createError?.message || 'Failed to convert note');
     } finally {
       setOpeningNote(false);
     }
@@ -8899,14 +9565,7 @@ function ResultView({
     <div className="flex h-full min-h-0 flex-col bg-white">
       <div className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-[#eef0f4] bg-white px-6 pb-3 pt-5">
         <div className="min-w-0">
-          <button
-            type="button"
-            onClick={onBack}
-            className="mb-2 inline-flex h-9 items-center gap-2 rounded-lg border border-[#dfe3ea] bg-white px-3 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc]"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            返回 AI Studio
-          </button>
+          <AIStudioBackLink onClick={onBack} className="-ml-1.5 mb-2" />
           <h2 className="truncate text-[22px] font-semibold text-[#202124]">{headerTitle}</h2>
           <div className="mt-0.5 text-xs text-[#777a80]">
             {headerMeta}
@@ -8916,22 +9575,14 @@ function ResultView({
           {resourceNotes && (
             <button
               type="button"
-              onClick={() => void openOrCreateResourceNote()}
+              onClick={() => void convertOrOpenResourceNote()}
               disabled={openingNote}
               className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[#dfe3ea] px-4 py-2 text-sm font-semibold text-[#343a46] transition hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {openingNote && <Loader2 className="h-4 w-4 animate-spin" />}
-              Open Note
+              {resourceNote ? 'Open Note' : 'Convert to BlockSuite Note'}
             </button>
           )}
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-[#202124] px-4 text-sm font-semibold text-white transition hover:bg-[#34373c]"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            返回原界面
-          </button>
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
@@ -8943,10 +9594,12 @@ function ResultView({
             sourceLabel={headerTitle}
           >
             <div className="min-w-0">
-              {visualCodeLesson ? (
-                <VisualCodeLessonViewer result={result} lesson={visualCodeLesson} onBack={onBack} />
+              {lightVisualLesson ? (
+                <LightVisualLessonViewer result={result} />
+              ) : visualCodeLesson ? (
+                <VisualCodeLessonViewer result={result} lesson={visualCodeLesson} />
               ) : visualLesson ? (
-                <VisualExplainerViewer result={result} onBack={onBack} />
+                <VisualExplainerViewer result={result} />
               ) : teachingVisualization ? (
                 <TeachingVisualizationViewer result={result} />
               ) : hasGeneratedFileViewer ? (
@@ -8961,7 +9614,7 @@ function ResultView({
               ) : result.resourceType === 'slide_deck' ? (
                 <SlideViewer result={result} />
               ) : result.resourceType === 'mind_map' ? (
-                <MindMapViewer result={result} />
+                <MindMapViewer result={result} workspaceId={workspaceId} workbenchId={workbenchId} />
               ) : result.resourceType === 'data_table' ? (
                 <DataTableViewer result={result} />
               ) : result.resourceType === 'code_lab' ? (
@@ -9040,7 +9693,6 @@ export default function AIStudioPanel({
   const [artifacts, setArtifacts] = useState<AiStudioArtifactSummary[]>([]);
   const [studioResources, setStudioResources] = useState<StudioSelectableResource[]>([]);
   const [loadingResources, setLoadingResources] = useState(false);
-  const [selectedGoal, setSelectedGoal] = useState<AiStudioGoalCategory | null>(null);
   const [loadingStudio, setLoadingStudio] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState<StudioGenerationProgressState | null>(null);
@@ -9218,12 +9870,6 @@ export default function AIStudioPanel({
   }, [workspaceId, effectiveWorkbenchId, sharedWorkbenchResourceKey]);
 
   useEffect(() => {
-    if (selectedGoal === 'practice') {
-      void refreshStudioResources();
-    }
-  }, [selectedGoal]);
-
-  useEffect(() => {
     setPendingTemplateId(initialTemplateId || null);
   }, [initialTemplateId, initialTemplateRequestId]);
 
@@ -9299,7 +9945,7 @@ export default function AIStudioPanel({
         context: contextPayload
       });
       const responseTemplate = response.template || activeTemplate;
-      let result: StudioResult = {
+      const result: StudioResult = {
         id: response.file.id,
         name: response.file.name,
         path: response.file.path,
@@ -9328,26 +9974,7 @@ export default function AIStudioPanel({
         qualityReport: response.qualityReport as StudioResult['qualityReport'],
         practiceNext: response.practiceNext || null
       };
-      let activeStudioResultId: string | null = result.id;
-      let autoCreatedNote: FileSystemObject | null = null;
-      if (isResourceNotesResult(result)) {
-        try {
-          autoCreatedNote = await createResourceNotesFile({
-            workspaceId,
-            workbenchId: effectiveWorkbenchId,
-            result
-          });
-          result = { ...result, createdNote: autoCreatedNote };
-          activeStudioResultId = null;
-        } catch (noteError: any) {
-          const noteMessage =
-            noteError?.response?.data?.error ||
-            noteError?.message ||
-            'AI Studio generated notes, but failed to create the BlockSuite note.';
-          result = { ...result, autoCreateNoteError: noteMessage };
-          setError(noteMessage);
-        }
-      }
+      const activeStudioResultId: string | null = result.id;
       const nextResults = [result, ...results.filter((item) => item.id !== result.id)].slice(0, 12);
       onUpdateViewState?.(editor.id, {
         studioResults: nextResults,
@@ -9369,9 +9996,6 @@ export default function AIStudioPanel({
       });
       setModal(null);
       if (response.artifact) setArtifacts((current) => [response.artifact!, ...current.filter((item) => item.id !== response.artifact?.id)].slice(0, 8));
-      if (autoCreatedNote) {
-        onOpenResource?.(resourceReferenceFromFile(autoCreatedNote));
-      }
     } catch (generateError: any) {
       setError(generateError?.response?.data?.error || generateError?.message || 'AI Studio generation failed');
     } finally {
@@ -9497,7 +10121,7 @@ export default function AIStudioPanel({
       setPendingTemplateId(null);
       return;
     }
-    if (template.goal) setSelectedGoal(template.goal);
+    setModal(defaultTemplateModalState(template));
     setPendingTemplateId(null);
     void refreshStudioResources();
   }, [effectiveTemplates, generating, loadingStudio, modal?.templateId, pendingTemplateId, refreshStudioResources]);
@@ -9552,16 +10176,11 @@ export default function AIStudioPanel({
         templates={templates}
         artifacts={artifacts}
         results={results}
-        selectedGoal={selectedGoal}
-        setSelectedGoal={setSelectedGoal}
-        practiceDraft={practiceDraft}
-        setPracticeDraft={setPracticeDraft}
-        studioResources={studioResources}
-        loadingResources={loadingResources}
-        generating={generating}
         onOpenRecorder={() => onUpdateViewState?.(editor.id, { activeStudioView: 'record' })}
-        onGenerateFromState={(state) => void generate(state)}
-        onSubmitPractice={submitPractice}
+        onOpenGenerateModal={(template) => {
+          setModal(defaultTemplateModalState(template));
+          void refreshStudioResources();
+        }}
         onOpenResult={(id) => onUpdateViewState?.(editor.id, { activeStudioResultId: id })}
         onDeleteResult={async (result) => {
           try {
@@ -9590,6 +10209,29 @@ export default function AIStudioPanel({
       {modal && (
         <StudioGenerateDetailModal
           template={selectedTemplate || effectiveTemplates.find((template) => template.legacyResourceType === modal.resourceType) || visibleStudioTemplates(coreStudioTemplates)[0]}
+          title={
+            (selectedTemplate?.goal
+              ? mergeGoalCatalog(goals).find((goal) => goal.id === selectedTemplate.goal)?.en
+              : null) ||
+            selectedTemplate?.shortTitle ||
+            selectedTemplate?.title ||
+            'AI Studio'
+          }
+          templateOptions={
+            selectedTemplate?.goal
+              ? effectiveTemplates.filter((template) => template.goal === selectedTemplate.goal)
+              : undefined
+          }
+          onTemplateChange={(template) => {
+            setModal((current) => {
+              if (!current) return current;
+              return {
+                ...defaultTemplateModalState(template),
+                topic: current.topic,
+                selectedResourceIds: current.selectedResourceIds
+              };
+            });
+          }}
           state={modal}
           setState={(patch) => setModal((current) => (current ? { ...current, ...patch } : current))}
           resources={studioResources}

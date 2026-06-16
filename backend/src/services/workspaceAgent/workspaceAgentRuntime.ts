@@ -2689,7 +2689,13 @@ export class WorkspaceAgentRuntime {
         content: clip(item.contentPreview || item.snippet || item.summary, 1200),
         source: item.url,
         score: item.score,
-        metadata: { provider: item.provider, publishedAt: item.publishedAt, author: item.author }
+        metadata: {
+          provider: item.provider,
+          publishedAt: item.publishedAt,
+          author: item.author,
+          imageUrl: item.imageUrl,
+          thumbnailUrl: item.thumbnailUrl
+        }
       }));
       return {
         summary: evidence.length ? `外部资源检索返回 ${evidence.length} 条结果。` : '外部资源检索没有结果。',

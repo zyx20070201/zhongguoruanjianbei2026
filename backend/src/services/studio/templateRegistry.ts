@@ -237,15 +237,15 @@ export const STUDIO_TEMPLATES: StudioResourceTemplate[] = [
     goal: 'lab',
     title: 'Code Lab',
     shortTitle: 'Code Lab',
-    description: '生成代码实操案例、步骤、Starter Code 和测试任务。',
+    description: '生成 LeetCode 风格代码题面、Starter Code、可执行测试用例和题解。',
     generator: 'code_lab',
     renderer: 'code_lab',
     format: 'md',
     filename: 'lab-code-lab.md',
     outputLabel: '代码类实操案例',
-    promptFrame: '围绕当前主题设计一个可操作的代码实验，包含目标、步骤、Starter Code、测试用例和反思问题。',
+    promptFrame: '围绕当前主题设计一个可运行的 Code Lab，包含完整题面、Starter Code、公开测试用例、提示、验收标准和题解。',
     systemInstruction:
-      '生成 Code Lab。必须包含实验目标、背景、Starter Code、TODO、测试用例、调试提示、验收标准和扩展任务。',
+      '生成 Code Lab。必须使用结构化字段 problem、editor、guide、tests、solution；题面和题解应完整，tests.cases 必须可通过 stdin/stdout 执行和判定。',
     defaultOptions: { language: 'auto', difficulty: 'adaptive' },
     tags: ['code', 'lab', 'hands-on'],
     recommendationRules: [
@@ -272,6 +272,53 @@ export const STUDIO_TEMPLATES: StudioResourceTemplate[] = [
     ]
   },
   {
+    id: 'presenton_pptx',
+    version: '1.0.0',
+    goal: 'visualize',
+    title: 'Presenton PPTX',
+    shortTitle: 'Presenton PPT',
+    description: '调用自托管 Presenton API 生成真实 PPTX 文件。',
+    generator: 'multimodal',
+    renderer: 'slides',
+    format: 'md',
+    filename: 'visualize-presenton-pptx.md',
+    outputLabel: 'Presenton PPTX',
+    legacyResourceType: 'slide_deck',
+    promptFrame: '用 Presenton 生成一份课堂讲解型 PPTX。',
+    systemInstruction:
+      '此模板由 presentonPptxService 直接调用 Presenton API；不要走 AI Studio V2 通用模型提示词。',
+    defaultOptions: { sourceScope: 'selected_resources_only', nSlides: 8, language: 'Chinese', presentonTemplate: 'general' },
+    tags: ['presenton', 'pptx', 'slides', 'source-grounded'],
+    recommendedUse: '需要真实 PPTX 文件，并希望使用 Presenton 的生成和模板能力时使用。',
+    recommendationRules: [
+      { id: 'presenton-pptx-source', reason: '当前资料可以直接交给 Presenton 生成 PPTX。', priority: 90, when: ['has_sources'] },
+      { id: 'presenton-pptx-visual', reason: '学习偏好包含视觉化表达，适合生成可下载 PPTX。', priority: 86, when: ['visual_preference'] }
+    ]
+  },
+  {
+    id: 'light_visual_lesson',
+    version: '1.0.0',
+    goal: 'visualize',
+    title: 'Light Visual Lesson',
+    shortTitle: 'Teacher Slides',
+    description: '用用户 prompt 和显式选中文件生成课件式 slide + timeline 讲解。',
+    generator: 'multimodal',
+    renderer: 'light_visual_lesson',
+    format: 'json',
+    filename: 'visualize-light-visual-lesson.json',
+    outputLabel: '轻量可视化讲解',
+    promptFrame: '基于用户显式选择的资料，生成一套像教师课堂 PPT 一样的逐页讲解。',
+    systemInstruction:
+      '只使用用户 prompt 和显式选中的文件内容。先形成清晰 Markdown 讲稿，再切分为 slide，每页包含 header、description、timeline 和可选 visuals。visuals 目前只保留 mock/hint，不生成复杂图解。',
+    defaultOptions: { sourceScope: 'selected_resources_only', visualMode: 'mock' },
+    tags: ['teacher-slides', 'timeline', 'source-grounded', 'lightweight'],
+    recommendedUse: '适合做类似教师 PPT 的逐页、逐条展开讲解，不走旧 visual explainer 或 React-Chat 沙盒。',
+    recommendationRules: [
+      { id: 'light-visual-source', reason: '当前资料适合生成轻量课件式逐步讲解。', priority: 88, when: ['has_sources'] },
+      { id: 'light-visual-preference', reason: '学习偏好包含视觉化表达，适合用 slide + timeline 展开讲解。', priority: 82, when: ['visual_preference'] }
+    ]
+  },
+  {
     id: 'visual_explainer',
     goal: 'visualize',
     title: 'Animated Explainer',
@@ -290,6 +337,28 @@ export const STUDIO_TEMPLATES: StudioResourceTemplate[] = [
     recommendationRules: [
       { id: 'visual-explainer-general', reason: '该主题适合从纯文字回答升级为分镜式视觉讲解。', priority: 86, when: ['visual_preference'] },
       { id: 'visual-explainer-source', reason: '当前资料可以先沉淀 Markdown，再转成可播放讲解。', priority: 74, when: ['has_sources'] }
+    ]
+  },
+  {
+    id: 'react_chat_visual',
+    goal: 'visualize',
+    title: 'React-Chat Visual',
+    shortTitle: 'React-Chat',
+    description: '使用 React-Chat 的自由回答协议生成 Markdown + REACT_VIZ/HTML_VIZ 可执行可视化。',
+    generator: 'multimodal',
+    renderer: 'visual_explainer',
+    format: 'md',
+    filename: 'visualize-react-chat-visual.md',
+    outputLabel: 'React-Chat 自由可视化',
+    promptFrame: '直接回答用户问题；需要可视化时，在回答中嵌入 REACT_VIZ 或 HTML_VIZ 代码块。',
+    systemInstruction:
+      '使用 React-Chat 的自由回答 + 可执行可视化协议。不要输出 JSON，不要走结构化课件 schema；直接生成自然语言讲解，并在适合位置嵌入 REACT_VIZ 或 HTML_VIZ。',
+    defaultOptions: { rendererFamily: 'react-chat-sandbox', output: 'freeform_react_viz' },
+    tags: ['react-chat', 'react-viz', 'html-viz', 'freeform'],
+    recommendedUse: '想要接近 React-Chat 原生效果、由模型自由生成交互动画时使用。',
+    recommendationRules: [
+      { id: 'react-chat-visual-freeform', reason: '该主题适合直接生成可执行交互可视化。', priority: 84, when: ['visual_preference'] },
+      { id: 'react-chat-visual-source', reason: '可用选定资料作为自由可视化回答的输入。', priority: 70, when: ['has_sources'] }
     ]
   },
   {
@@ -349,6 +418,28 @@ export const STUDIO_TEMPLATES: StudioResourceTemplate[] = [
     recommendationRules: [
       { id: 'visual-interactive', reason: '该主题适合用可调参数或逐步播放来观察变化。', priority: 72, when: ['visual_preference'] },
       { id: 'code-interactive', reason: '当前上下文包含算法或代码内容，适合生成交互式演示。', priority: 78, when: ['code_context'] }
+    ]
+  },
+  {
+    id: 'hyperframes_video',
+    goal: 'visualize',
+    title: 'HyperFrames Video',
+    shortTitle: 'HyperFrames',
+    description: '基于选中资源和用户提示词生成 HyperFrames HTML composition，并尝试渲染为 MP4。',
+    generator: 'multimodal',
+    renderer: 'hyperframes_composition',
+    format: 'md',
+    filename: 'visualize-hyperframes-video.html',
+    outputLabel: 'HyperFrames 视频',
+    promptFrame: '把选中资源转成 45-90 秒教学短视频，包含镜头节奏、字幕、关键视觉元素和结尾复盘。',
+    systemInstruction:
+      '只使用用户选中的资源和用户提示词生成 HyperFrames HTML composition。输出必须是自包含 HTML，适合由 HyperFrames CLI 预览和渲染为 MP4；不要输出 Markdown，不要输出解释文字。',
+    defaultOptions: { durationSeconds: 60, aspectRatio: '16:9', rendererFamily: 'hyperframes' },
+    tags: ['hyperframes', 'heygen', 'html-video', 'mp4'],
+    recommendedUse: '需要把资料和提示词直接转成可渲染视频 composition 时使用。',
+    recommendationRules: [
+      { id: 'hyperframes-source-video', reason: '当前资料可以转成短视频讲解，适合生成 HyperFrames composition。', priority: 80, when: ['has_sources'] },
+      { id: 'hyperframes-visual-video', reason: '视觉化表达适合当前主题，可用 HyperFrames 生成 HTML 驱动视频。', priority: 78, when: ['visual_preference'] }
     ]
   },
   {

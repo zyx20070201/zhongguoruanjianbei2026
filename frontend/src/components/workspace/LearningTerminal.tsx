@@ -2,18 +2,28 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Brain,
   CheckCircle2,
+  ChevronDown,
+  ExternalLink,
+  FileCode2,
+  FileText,
   Image,
   Loader2,
+  Network,
   Paperclip,
+  Play,
   Search,
+  Sparkles,
+  TerminalSquare,
   Target,
   Wand2,
   X
 } from 'lucide-react';
 import { AgentUiEvent, LearningGoalDraft, LearningTerminalMessage, TerminalChatFile, WorkbenchItem } from '../../types';
 import { learningApi } from '../../services/learningApi';
+import { fileSystemApi } from '../../services/fileSystemApi';
 import OpenWebUIMarkdownPreview, { OpenWebUICitationSource } from '../workbench/OpenWebUIMarkdownPreview';
 import TerminalComposer from './TerminalComposer';
+import TerminalResourcePreviewPanel, { TerminalResourcePreview } from './TerminalResourcePreviewPanel';
 
 interface LearningTerminalProps {
   workspaceId: string;
@@ -37,7 +47,7 @@ interface LearningTerminalProps {
   variant?: 'full' | 'dashboard';
   initialPrompt?: string;
   onInitialPromptConsumed?: () => void;
-  mode?: 'chat' | 'agentic';
+  mode?: 'chat' | 'agentic' | 'new_agentic';
   selectedSources?: Array<{ fileId: string; mode?: 'focused' | 'full_context' }>;
   chatFiles?: TerminalChatFile[];
   sourceFiles?: Array<{
@@ -50,10 +60,12 @@ interface LearningTerminalProps {
     indexStatusTone?: 'ready' | 'indexing' | 'degraded' | 'failed' | 'empty';
     chunkCount?: number;
   }>;
-  onModeChange?: (mode: 'chat' | 'agentic') => void;
+  onModeChange?: (mode: 'chat' | 'agentic' | 'new_agentic') => void;
   onSelectedSourcesChange?: (sources: Array<{ fileId: string; mode: 'focused' | 'full_context' }>) => void;
   onChatFilesChange?: (files: TerminalChatFile[]) => void;
   onUploadChatFiles?: (files: File[]) => Promise<TerminalChatFile[]>;
+  resourcePreview?: TerminalResourcePreview | null;
+  onResourcePreviewChange?: (preview: TerminalResourcePreview | null) => void;
 }
 
 const starterPrompts = [
@@ -78,6 +90,285 @@ const fileIsImage = (file: Pick<TerminalChatFile, 'mimeType' | 'extension' | 'na
 
 type TerminalEvidence = NonNullable<LearningTerminalMessage['evidence']>[number];
 type TerminalStatus = NonNullable<LearningTerminalMessage['statusHistory']>[number];
+type TerminalResourceDiscoveryCard = {
+  id: string;
+  title: string;
+  url: string;
+  thumbnailUrl?: string;
+  fromHistory?: boolean;
+};
+
+const webResourceEvidenceKinds = new Set(['web_search_result', 'web_page']);
+const webToolPattern = /\bweb\.(search|fetch)\b|searching the web|searched the web|fetching web content|fetched web content/i;
+
+const formatWorkingTime = (seconds: number) => {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+};
+
+const humanizeMachineName = (value?: string) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  return normalized
+    .replace(/workspace\.(fs|file|files)\.(list|search|read)/g, (_, area, action) => {
+      if (action === 'list') return 'workspace files';
+      if (action === 'search') return 'workspace resources';
+      if (action === 'read') return 'workspace files';
+      return `${area} ${action}`;
+    })
+    .replace(/knowledge\.search/g, 'knowledge base')
+    .replace(/attachment\.read/g, 'attachments')
+    .replace(/attachment\.image\.inspect/g, 'images')
+    .replace(/web\.search/g, 'web')
+    .replace(/web\.fetch/g, 'web page')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const toolActionLabel = (tool?: string, running = false) => {
+  const name = String(tool || '').trim();
+  const prefix = running ? 'Searching' : 'Searched';
+  if (!name) return running ? 'Working' : 'Finished step';
+  if (name === 'workspace.fs.list' || name === 'workspace.files.list') return running ? 'Listing workspace files' : 'Listed workspace files';
+  if (name === 'workspace.file.search' || name === 'workspace.files.search') return `${prefix} workspace resources`;
+  if (name === 'workspace.file.read' || name === 'workspace.files.read') return running ? 'Reading workspace files' : 'Read workspace files';
+  if (name === 'knowledge.search') return running ? 'Searching knowledge base' : 'Searched knowledge base';
+  if (name === 'attachment.list') return running ? 'Checking attachments' : 'Checked attachments';
+  if (name === 'attachment.read') return running ? 'Reading attachments' : 'Read attachments';
+  if (name === 'studio.generate_artifact') return running ? 'Generating Studio resource' : 'Generated Studio resource';
+  if (name === 'attachment.image.inspect') return running ? 'Inspecting images' : 'Inspected images';
+  if (name === 'web.search') return running ? 'Searching the web' : 'Searched the web';
+  if (name === 'web.fetch') return running ? 'Fetching web content' : 'Fetched web content';
+  if (name === 'file.write') return running ? 'Preparing a file' : 'Prepared a file';
+  if (name === 'file.write_many') return running ? 'Preparing files' : 'Prepared files';
+  if (name === 'file.replace') return running ? 'Updating a file' : 'Updated a file';
+  if (name === 'markdown_note.create') return running ? 'Preparing a Markdown file' : 'Prepared a Markdown file';
+  if (name === 'workbench.create') return running ? 'Preparing a workbench' : 'Prepared a workbench';
+  return running ? `Using ${humanizeMachineName(name)}` : `Used ${humanizeMachineName(name)}`;
+};
+
+const asRecord = (value: unknown): Record<string, any> | null =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
+
+const studioTemplateDisplay = (templateId?: string, fallback?: string) => {
+  if (templateId === 'mind_map') return '思维导图';
+  if (templateId === 'custom_practice') return '练习题';
+  if (templateId === 'react_chat_visual') return '可视化讲解';
+  if (templateId === 'flashcards') return '复习卡片';
+  if (templateId === 'light_visual_lesson') return 'Light Visual Lesson';
+  if (templateId === 'code_lab') return 'Code Lab';
+  return fallback || 'AI Studio 资源';
+};
+
+const studioTemplateIcon = (templateId?: string) => {
+  if (templateId === 'mind_map') return Network;
+  if (templateId === 'react_chat_visual') return Play;
+  if (templateId === 'flashcards') return Brain;
+  if (templateId === 'custom_practice') return CheckCircle2;
+  if (templateId === 'light_visual_lesson') return Sparkles;
+  if (templateId === 'code_lab') return FileCode2;
+  return Sparkles;
+};
+
+const compactPreview = (value: unknown, max = 420) => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1).trim()}…` : text;
+};
+
+const titleFromUrl = (url: string) => {
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+    return parsed.hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+};
+
+const metadataString = (metadata: Record<string, unknown> | undefined, keys: string[]) => {
+  for (const key of keys) {
+    const value = metadata?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+};
+
+const metadataImageUrl = (metadata: Record<string, unknown> | undefined) => {
+  const direct = metadataString(metadata, [
+    'image',
+    'imageUrl',
+    'thumbnail',
+    'thumbnailUrl',
+    'coverUrl',
+    'coverImageUrl',
+    'ogImage'
+  ]);
+  if (direct) return direct;
+
+  const images = metadata?.images;
+  if (Array.isArray(images)) {
+    for (const image of images) {
+      if (typeof image === 'string' && image.trim()) return image.trim();
+      const record = asRecord(image);
+      const src = metadataString(record || undefined, ['src', 'url', 'href']);
+      if (src) return src;
+    }
+  }
+  return '';
+};
+
+const youtubeVideoIdFromUrl = (url: string) => {
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+    const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
+    if (host === 'youtu.be') return parsed.pathname.split('/').filter(Boolean)[0] || '';
+    if (!host.endsWith('youtube.com') && !host.endsWith('youtube-nocookie.com')) return '';
+    const fromQuery = parsed.searchParams.get('v');
+    if (fromQuery) return fromQuery;
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    const markerIndex = parts.findIndex((part) => ['embed', 'shorts', 'live'].includes(part));
+    return markerIndex >= 0 ? parts[markerIndex + 1] || '' : '';
+  } catch {
+    return '';
+  }
+};
+
+const thumbnailForWebResource = (url: string, metadata: Record<string, unknown> | undefined) => {
+  const fromMetadata = metadataImageUrl(metadata);
+  if (fromMetadata) return fromMetadata;
+  const youtubeVideoId = youtubeVideoIdFromUrl(url);
+  return youtubeVideoId ? `https://img.youtube.com/vi/${youtubeVideoId}/hqdefault.jpg` : undefined;
+};
+
+const normalizedResourceUrl = (url: string) => {
+  const value = url.trim();
+  if (!value) return '';
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+    parsed.hash = '';
+    const normalized = parsed.toString();
+    return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+  } catch {
+    return value;
+  }
+};
+
+const extractNormalizedUrlsFromText = (text: string) => {
+  const matches = String(text || '').match(/https?:\/\/[^\s<>"'`）)\]]+/gi) || [];
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  matches.forEach((match) => {
+    const url = normalizedResourceUrl(match.replace(/[.,;，。；`]+$/g, ''));
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    urls.push(url);
+  });
+  return urls;
+};
+
+const resourceDiscoveryCardsFromEvidence = (
+  sources: TerminalEvidence[] = [],
+  assistantContent = ''
+): TerminalResourceDiscoveryCard[] => {
+  const cards: TerminalResourceDiscoveryCard[] = [];
+  const seen = new Set<string>();
+
+  sources.forEach((source, index) => {
+    if (!webResourceEvidenceKinds.has(source.kind)) return;
+    const metadata = source.metadata || {};
+    const rawUrl = metadataString(metadata, ['url', 'sourceUrl', 'externalUrl', 'canonicalUrl']) || source.source || '';
+    const url = normalizedResourceUrl(rawUrl);
+    const key = normalizedResourceUrl(url);
+    if (!url || seen.has(key)) return;
+    seen.add(key);
+
+    cards.push({
+      id: String(source.id || `web-resource-${index + 1}`),
+      title: decodeSourceString(source.title || titleFromUrl(url)),
+      url,
+      thumbnailUrl: thumbnailForWebResource(url, metadata),
+      fromHistory: Boolean(metadata.historyMessageId)
+    });
+  });
+
+  const contentUrls = extractNormalizedUrlsFromText(assistantContent);
+  if (contentUrls.length) {
+    const cardsByUrl = new Map(cards.map((card) => [normalizedResourceUrl(card.url), card] as const));
+    const matchedCards = contentUrls
+      .map((url) => cardsByUrl.get(url))
+      .filter((card): card is TerminalResourceDiscoveryCard => Boolean(card))
+      .slice(0, 8);
+    return matchedCards;
+  }
+
+  return cards.filter((card) => !card.fromHistory).slice(0, 8);
+};
+
+const hasWebResourceDiscoverySignal = (message: LearningTerminalMessage) => {
+  if ((message.evidence || []).some((source) => webResourceEvidenceKinds.has(source.kind))) return true;
+  if ((message.statusHistory || []).some((status) => webToolPattern.test(`${status.description || ''} ${status.action || ''}`))) return true;
+  return (message.agentEvents || []).some((event) => {
+    if (event.kind === 'activity') return webToolPattern.test(`${event.title || ''} ${event.detail || ''} ${event.node || ''}`);
+    if (event.kind === 'say') return webToolPattern.test(`${event.content || ''} ${event.node || ''}`);
+    return false;
+  });
+};
+
+const knownToolFromText = (value?: string) =>
+  String(value || '').match(
+    /\b(?:workspace\.(?:fs|file|files)\.(?:list|search|read)|knowledge\.search|attachment\.(?:list|read|image\.inspect)|web\.(?:search|fetch)|file\.(?:write|write_many|replace)|markdown_note\.create|workbench\.create|studio\.generate_artifact)\b/
+  )?.[0];
+
+const statusActionLabel = (status: TerminalStatus) => {
+  const action = String(status.action || '');
+  const running = status.done === false;
+  if (action === 'prepare_context_control') return running ? 'Preparing workspace context' : 'Prepared workspace context';
+  if (action === 'model_decision') return running ? 'Choosing the next step' : 'Chose the next step';
+  if (action === 'tool_call') return toolActionLabel(status.description, running);
+  if (action === 'knowledge_search') return `Searching knowledge for "${status.query || ''}"`;
+  if (action === 'queries_generated') return 'Planned search queries';
+  if (action === 'sources_retrieved') {
+    if (status.count === 0) return 'Found no matching sources';
+    if (status.count === 1) return 'Retrieved 1 source';
+    return `Retrieved ${status.count || 0} sources`;
+  }
+  if (action === 'thinking') return 'Thinking';
+  return humanizeMachineName(status.description || action) || 'Working';
+};
+
+const agentEventLabel = (event: AgentUiEvent) => {
+  if (event.kind === 'activity') {
+    const raw = event.detail || event.title;
+    if (/tools available;\s*mode=/i.test(raw || '')) return 'Prepared workspace context';
+    if (/fallback: request ordinary workspace search/i.test(raw || '')) return 'Searching workspace resources';
+    if (/fallback: search indexed knowledge/i.test(raw || '')) return 'Searching knowledge base';
+    if (/fallback: read explicit chat attachments/i.test(raw || '')) return 'Reading attachments';
+    const selectedMatch = raw?.match(/^Selected\s+(.+)$/i);
+    if (selectedMatch) return toolActionLabel(selectedMatch[1], true);
+    const toolName = knownToolFromText(raw);
+    if (toolName) return toolActionLabel(toolName, event.status === 'running');
+    if (/^tool_call$/i.test(raw || '') || /^tool call$/i.test(raw || '')) return 'Using a tool';
+    if (/^final$/i.test(raw || '')) return 'Drafting final answer';
+    if (/^ask_user$/i.test(raw || '')) return 'Preparing a question';
+    return humanizeMachineName(raw) || raw || 'Working';
+  }
+  if (event.kind === 'artifact') return `Generated ${humanizeMachineName(event.artifactType)}: ${event.title}`;
+  if (event.kind === 'ask') return event.prompt;
+  return '';
+};
+
+const normalizedAgentEvent = (event: AgentUiEvent): AgentUiEvent => {
+  if (event.kind === 'activity') {
+    const label = agentEventLabel(event);
+    return { ...event, title: label, detail: label };
+  }
+  if (event.kind === 'artifact') {
+    return { ...event, title: agentEventLabel(event) };
+  }
+  return event;
+};
 
 const metadataArray = <T,>(metadata: Record<string, unknown> | undefined, key: string): T[] =>
   Array.isArray(metadata?.[key]) ? (metadata[key] as T[]) : [];
@@ -303,6 +594,181 @@ function SourcesCapsule({
   );
 }
 
+function ResourceDiscoveryCards({
+  cards,
+  onOpen,
+  loading = false
+}: {
+  cards: TerminalResourceDiscoveryCard[];
+  onOpen: (card: TerminalResourceDiscoveryCard) => void;
+  loading?: boolean;
+}) {
+  if (!cards.length && !loading) return null;
+
+  return (
+    <div className="mb-4 w-full">
+      <div className="scrollbar-hidden -mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+        {loading && !cards.length ? Array.from({ length: 4 }).map((_, index) => (
+          <div
+            key={`resource-card-skeleton-${index}`}
+            className="flex w-36 shrink-0 flex-col overflow-hidden rounded-lg border border-gray-100 bg-white"
+            aria-hidden="true"
+          >
+            <div className="relative aspect-video w-full overflow-hidden bg-gray-100">
+              <div className="absolute inset-0 animate-pulse bg-gray-100" />
+              <div className="absolute inset-0 flex items-center justify-center text-gray-300">
+                <Search className="size-5" />
+              </div>
+            </div>
+            <div className="min-h-12 w-full px-2 py-2">
+              <div className="h-3 w-full animate-pulse rounded bg-gray-100" />
+              <div className="mt-1.5 h-3 w-3/4 animate-pulse rounded bg-gray-100" />
+            </div>
+          </div>
+        )) : cards.map((card) => (
+          <button
+            key={`${card.id}:${card.url}`}
+            type="button"
+            title={card.title}
+            className="group flex w-36 shrink-0 flex-col overflow-hidden rounded-lg border border-gray-100 bg-white text-left transition hover:border-gray-200 hover:bg-gray-50"
+            onClick={() => onOpen(card)}
+          >
+            <div className="relative aspect-video w-full overflow-hidden bg-gray-100">
+              <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                <Search className="size-5" />
+              </div>
+              {card.thumbnailUrl ? (
+                <img
+                  src={card.thumbnailUrl}
+                  alt=""
+                  className="absolute inset-0 h-full w-full object-cover"
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  onError={(event) => {
+                    event.currentTarget.style.display = 'none';
+                  }}
+                />
+              ) : null}
+            </div>
+            <div className="min-h-12 w-full px-2 py-2">
+              <div className="line-clamp-2 text-xs font-medium leading-4 text-gray-800 group-hover:text-gray-950">
+                {card.title}
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StudioArtifactCard({
+  workspaceId,
+  action,
+  onOpenPreview
+}: {
+  workspaceId: string;
+  action: NonNullable<LearningTerminalMessage['executedActions']>[number];
+  onOpenPreview: (preview: TerminalResourcePreview) => void;
+}) {
+  const card = asRecord(action.result?.studioCard);
+  if (!card) return null;
+  const templateId = typeof card.templateId === 'string' ? card.templateId : undefined;
+  const Icon = studioTemplateIcon(templateId);
+  const title = studioTemplateDisplay(templateId, typeof card.templateTitle === 'string' ? card.templateTitle : undefined);
+  const filename = typeof card.filename === 'string' ? card.filename : title;
+  const fileObjectId = typeof card.fileObjectId === 'string' ? card.fileObjectId : '';
+  const renderJobStatus = typeof card.renderJobStatus === 'string' ? card.renderJobStatus : '';
+  const reviewSummary = typeof card.reviewSummary === 'string' ? card.reviewSummary : '';
+  const preview = compactPreview(card.previewContent, 520);
+  const sourceCount = Array.isArray(card.sourceFileIds) ? card.sourceFileIds.length : 0;
+  const evidenceCount = Array.isArray(card.evidenceIds) ? card.evidenceIds.length : 0;
+  const downloadUrl = fileObjectId ? fileSystemApi.downloadUrl(workspaceId, fileObjectId) : '';
+  const previewResource: TerminalResourcePreview = {
+    id: fileObjectId || String(card.runId || action.id),
+    title,
+    subtitle: filename,
+    kind: templateId || (typeof card.deliveryKind === 'string' ? card.deliveryKind : undefined),
+    templateId,
+    fileObjectId,
+    filename,
+    previewContent: typeof card.previewContent === 'string' ? card.previewContent : '',
+    renderer: typeof card.renderer === 'string' ? card.renderer : undefined,
+    framework: typeof card.framework === 'string' ? card.framework : undefined,
+    reviewSummary
+  };
+  const canPreview = Boolean(previewResource.previewContent || previewResource.fileObjectId);
+
+  return (
+    <div className="mt-3 rounded-2xl border border-gray-100 bg-white p-3 text-gray-900 shadow-sm">
+      <div className="flex items-start gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-gray-900 text-white">
+          <Icon className="size-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <p className="min-w-0 truncate text-sm font-semibold">{title}</p>
+            {typeof card.reviewScore === 'number' ? (
+              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                Score {Math.round(card.reviewScore * 100)}
+              </span>
+            ) : null}
+            {renderJobStatus ? (
+              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                Render {renderJobStatus}
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-0.5 truncate text-xs text-gray-500">{filename}</p>
+          {reviewSummary ? <p className="mt-2 line-clamp-2 text-xs leading-5 text-gray-600">{reviewSummary}</p> : null}
+          {preview ? (
+            <div className="mt-2 rounded-xl bg-gray-50 p-2 text-xs leading-5 text-gray-700">
+              {preview}
+            </div>
+          ) : null}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
+            <span className="rounded-full bg-gray-100 px-2 py-0.5">{String(card.sourceMode || 'evidence')}</span>
+            {evidenceCount ? <span className="rounded-full bg-gray-100 px-2 py-0.5">{evidenceCount} evidence</span> : null}
+            {sourceCount ? <span className="rounded-full bg-gray-100 px-2 py-0.5">{sourceCount} source files</span> : null}
+            {typeof card.deliveryKind === 'string' ? <span className="rounded-full bg-gray-100 px-2 py-0.5">{card.deliveryKind}</span> : null}
+          </div>
+          {canPreview || downloadUrl ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {canPreview ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenPreview(previewResource)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-gray-900 px-3 text-xs font-medium text-white transition hover:bg-black"
+                >
+                  <Play className="size-3.5" />
+                  打开预览
+                </button>
+              ) : null}
+              {downloadUrl ? (
+                <a
+                  href={downloadUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-gray-100 px-3 text-xs font-medium text-gray-600 transition hover:bg-gray-200"
+                >
+                  <ExternalLink className="size-3.5" />
+                  新标签
+                </a>
+              ) : null}
+              {fileObjectId ? (
+                <span className="inline-flex h-8 items-center gap-1.5 rounded-full bg-gray-100 px-3 text-xs font-medium text-gray-600">
+                  <FileText className="size-3.5" />
+                  {fileObjectId.slice(0, 8)}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FollowUps({
   followUps,
   onClick
@@ -336,15 +802,7 @@ function FollowUps({
 }
 
 const statusDescription = (status: TerminalStatus) => {
-  if (status.action === 'knowledge_search') return `Searching Knowledge for "${status.query || ''}"`;
-  if (status.action === 'queries_generated') return 'Querying';
-  if (status.action === 'sources_retrieved') {
-    if (status.count === 0) return 'No sources found';
-    if (status.count === 1) return 'Retrieved 1 source';
-    return `Retrieved ${status.count || 0} sources`;
-  }
-  if (status.action === 'thinking') return 'Thinking';
-  return status.description || status.action;
+  return statusActionLabel(status);
 };
 
 function StatusHistory({ statusHistory = [] }: { statusHistory?: TerminalStatus[] }) {
@@ -414,14 +872,19 @@ function StatusHistory({ statusHistory = [] }: { statusHistory?: TerminalStatus[
 
 function StreamingInterimText({ content, active }: { content: string; active: boolean }) {
   const [visible, setVisible] = useState(active ? '' : content);
+  const visibleRef = useRef(visible);
+
+  useEffect(() => {
+    visibleRef.current = visible;
+  }, [visible]);
 
   useEffect(() => {
     if (!active) {
       setVisible(content);
       return;
     }
-    setVisible('');
-    let index = 0;
+    let index = content.startsWith(visibleRef.current) ? visibleRef.current.length : 0;
+    if (index === 0) setVisible('');
     const timer = window.setInterval(() => {
       index = Math.min(content.length, index + 2);
       setVisible(content.slice(0, index));
@@ -523,6 +986,125 @@ function InlineAgentUpdates({ events = [], isStreaming }: { events?: AgentUiEven
   return null;
 }
 
+const eventStatusLabel = (event: AgentUiEvent) => {
+  if (event.kind === 'activity' || event.kind === 'artifact' || event.kind === 'ask') return agentEventLabel(event);
+  return '';
+};
+
+function AgentTimeline({
+  message,
+  isStreaming,
+  onOpenSource,
+  onLinkPreview,
+  resourceCards,
+  resourceCardsLoading
+}: {
+  message: LearningTerminalMessage;
+  isStreaming: boolean;
+  onOpenSource: (source: TerminalEvidence) => void;
+  onLinkPreview: (link: { href: string; title?: string; text?: string }) => void;
+  resourceCards: TerminalResourceDiscoveryCard[];
+  resourceCardsLoading: boolean;
+}) {
+  const events = message.agentEvents || [];
+  const [open, setOpen] = useState(false);
+  const runtimeEvents = events.filter((event) => event.kind === 'activity' || event.kind === 'artifact' || event.kind === 'ask');
+  const progressSayEvents = events.filter((event): event is Extract<AgentUiEvent, { kind: 'say' }> =>
+    event.kind === 'say' && event.node !== 'ResponseComposer' && Boolean(event.content?.trim())
+  );
+  const answerSayEvents = events.filter((event): event is Extract<AgentUiEvent, { kind: 'say' }> =>
+    event.kind === 'say' && event.node === 'ResponseComposer' && Boolean(event.content?.trim())
+  );
+  const currentStatus = runtimeEvents[runtimeEvents.length - 1];
+  const currentSay = progressSayEvents[progressSayEvents.length - 1];
+  const assistantContent = isStreaming
+    ? answerSayEvents[answerSayEvents.length - 1]?.content || message.content || ''
+    : message.content || answerSayEvents[answerSayEvents.length - 1]?.content || '';
+  const firstAt = events[0]?.at ? Date.parse(events[0].at) : NaN;
+  const lastAt = events[events.length - 1]?.at ? Date.parse(events[events.length - 1].at) : NaN;
+  const elapsedSeconds = Number.isFinite(firstAt) && Number.isFinite(lastAt)
+    ? Math.max(0, Math.round((lastAt - firstAt) / 1000))
+    : 0;
+  const visibleEvents = open ? runtimeEvents : [];
+  const currentStatusLabel = currentStatus ? eventStatusLabel(currentStatus) : '';
+
+  return (
+    <div className="w-full">
+      {isStreaming && (currentStatusLabel || currentSay) ? (
+        <div className="mb-4 space-y-2 text-gray-500">
+          {currentStatusLabel ? (
+            <div className="workspace-agent-status-breathe flex min-h-6 items-center gap-3 text-[15px] font-medium leading-6">
+              <Search className="size-4 shrink-0" />
+              <span key={currentStatus?.id || currentStatusLabel} className="workspace-agent-status-swap min-w-0 flex-1 truncate">
+                {currentStatusLabel}
+              </span>
+            </div>
+          ) : null}
+          {currentSay ? (
+            <div className="flex items-start gap-3 text-[15px] leading-7 text-gray-700">
+              <Sparkles className="mt-1 size-4 shrink-0 text-gray-400" />
+              <div className="min-w-0 flex-1">
+                <StreamingInterimText content={currentSay.content} active={isStreaming} />
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : !isStreaming && runtimeEvents.length ? (
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            className="inline-flex items-center gap-1 border-b border-gray-100 pb-2 pr-1 text-base font-medium text-gray-400 transition hover:text-gray-700"
+          >
+            <span>Worked for {formatWorkingTime(elapsedSeconds)}</span>
+            <ChevronDown className={`size-4 transition ${open ? 'rotate-180' : ''}`} />
+          </button>
+        </div>
+      ) : null}
+      {visibleEvents.length ? (
+        <div className="mb-4 space-y-4">
+          {visibleEvents.map((event, eventIndex) => {
+            const label = eventStatusLabel(event);
+            if (!label) return null;
+            const icon = event.kind === 'artifact' || event.kind === 'ask'
+              ? <TerminalSquare className="mt-0.5 size-4 shrink-0 text-gray-400" />
+              : <Search className="mt-0.5 size-4 shrink-0 text-gray-400" />;
+            return (
+              <div key={event.id || `activity-${eventIndex}`} className="flex items-start gap-3 text-[15px] font-medium leading-6 text-gray-400">
+                {icon}
+                <span className="min-w-0 flex-1">{label}</span>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      <ResourceDiscoveryCards
+        cards={resourceCards}
+        loading={resourceCardsLoading}
+        onOpen={(card) => onLinkPreview({ href: card.url, text: card.title, title: card.title })}
+      />
+      {assistantContent.trim() ? (
+        <div className="chat-assistant markdown-prose mb-4 w-full min-w-full">
+                      <OpenWebUIMarkdownPreview
+                        content={assistantContent}
+                        emptyMessage=""
+                        isStreaming={isStreaming}
+                        citationSources={citationSourcesFromEvidence(message.evidence || [])}
+                        onLinkPreview={onLinkPreview}
+                        onCitationJump={(source) => {
+                          const evidence = evidenceByCitationId(message.evidence || []).get(source.sourceId);
+                          if (evidence) onOpenSource(evidence);
+            }}
+          />
+        </div>
+      ) : null}
+      {isStreaming ? (
+        <span className="ml-0.5 inline-block h-4 w-1 translate-y-0.5 animate-pulse rounded-full bg-gray-900" />
+      ) : null}
+    </div>
+  );
+}
+
 export default function LearningTerminal({
   workspaceId,
   sessionId,
@@ -550,7 +1132,9 @@ export default function LearningTerminal({
   loadingEarlierMessages = false,
   initialCheckpointThreadId,
   onLoadEarlierMessages,
-  onCheckpointThreadIdChange
+  onCheckpointThreadIdChange,
+  resourcePreview: controlledResourcePreview,
+  onResourcePreviewChange
 }: LearningTerminalProps) {
   const [input, setInput] = useState('');
   const [goalDraft, setGoalDraft] = useState<LearningGoalDraft | null>(null);
@@ -563,10 +1147,13 @@ export default function LearningTerminal({
   const [error, setError] = useState<string | null>(null);
   const [streamingMessageIndex, setStreamingMessageIndex] = useState<number | null>(null);
   const [sourceModalSource, setSourceModalSource] = useState<TerminalEvidence | null>(null);
+  const [internalResourcePreview, setInternalResourcePreview] = useState<TerminalResourcePreview | null>(null);
   const [uploadingChatFiles, setUploadingChatFiles] = useState(false);
   const [workingSeconds, setWorkingSeconds] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
+  const resourcePreview = controlledResourcePreview !== undefined ? controlledResourcePreview : internalResourcePreview;
+  const setResourcePreview = onResourcePreviewChange || setInternalResourcePreview;
   const preserveScrollRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const sentInitialPromptRef = useRef<string | null>(null);
   const isChatMode = mode === 'chat';
@@ -585,7 +1172,7 @@ export default function LearningTerminal({
   }, [initialPrompt, messages.length, onInitialPromptConsumed]);
 
   useEffect(() => {
-    if (mode === 'chat') {
+    if (mode !== 'agentic') {
       setGoalDraft(null);
     }
   }, [mode]);
@@ -690,7 +1277,7 @@ export default function LearningTerminal({
     onMessagesChange(nextMessages);
     setInput('');
     setError(null);
-    setAgentProgress(isChatMode ? 'Retrieving workspace sources...' : 'Starting Workspace Agent graph...');
+    setAgentProgress(isChatMode ? 'Retrieving workspace sources...' : mode === 'new_agentic' ? 'Starting Workspace Agent V2 loop...' : 'Starting Workspace Agent graph...');
     setStreamingMessageIndex(null);
     setLoading(true);
 
@@ -729,8 +1316,57 @@ export default function LearningTerminal({
         onEvent: (event, data) => {
           if (data?.message) setAgentProgress(String(data.message));
           if (data?.result?.checkpointThreadId) rememberCheckpointThreadId(data.result.checkpointThreadId);
+          if (event === 'say' && data?.say) {
+            const say = data.say as { id?: string; at?: string; phase?: 'interim' | 'final'; node?: string; content?: string; delta?: string };
+            const sayNode = say.node || data.node;
+            const isAnswerSay = sayNode === 'ResponseComposer';
+            const content = isAnswerSay
+              ? typeof say.content === 'string'
+                ? say.content
+                : typeof say.delta === 'string'
+                  ? `${streamedReply}${say.delta}`
+                  : streamedReply
+              : typeof say.content === 'string'
+                ? say.content
+                : typeof say.delta === 'string'
+                  ? say.delta
+                  : '';
+            if (isAnswerSay) {
+              streamedReply = content;
+            }
+            if (content.trim()) {
+              const eventId = say.id || 'say';
+              const existingIndex = agentEvents.findIndex((item) =>
+                item.kind === 'say' && (item.id === eventId || item.node === sayNode)
+              );
+              const sayEvent: AgentUiEvent = {
+                id: eventId,
+                kind: 'say',
+                at: say.at || new Date().toISOString(),
+                phase: say.phase || 'interim',
+                node: sayNode,
+                content
+              };
+              agentEvents = existingIndex >= 0
+                ? [
+                    ...agentEvents.slice(0, existingIndex),
+                    sayEvent,
+                    ...agentEvents.slice(existingIndex + 1)
+                  ].slice(-120)
+                : [
+                    ...agentEvents,
+                    sayEvent
+                  ].slice(-120);
+            }
+            setAgentProgress('Working through the next step');
+            upsertStreamingAssistant(streamedReply);
+          }
           if (event === 'ui_event' && data?.uiEvent) {
-            const uiEvent = data.uiEvent as AgentUiEvent;
+            const uiEvent = normalizedAgentEvent(data.uiEvent as AgentUiEvent);
+            if (mode === 'new_agentic' && uiEvent.kind === 'say') {
+              upsertStreamingAssistant(streamedReply);
+              return;
+            }
             const lastEvent = agentEvents[agentEvents.length - 1];
             if (
               uiEvent.kind === 'say' &&
@@ -744,7 +1380,7 @@ export default function LearningTerminal({
                 : `${lastEvent.content}${uiEvent.content}`;
               agentEvents = [...agentEvents.slice(0, -1), { ...lastEvent, content, at: uiEvent.at }].slice(-80);
             } else {
-              agentEvents = [...agentEvents, uiEvent].slice(-80);
+              agentEvents = [...agentEvents, uiEvent].slice(-120);
             }
             if (uiEvent.kind === 'activity') setAgentProgress(uiEvent.detail || uiEvent.title);
             if (uiEvent.kind === 'say') setAgentProgress('Working through the next step');
@@ -754,6 +1390,19 @@ export default function LearningTerminal({
           const status = event === 'status' ? data?.status || data?.data : null;
           if (status?.action) {
             statusHistory = [...statusHistory, status as TerminalStatus];
+            const activityEvent: AgentUiEvent = {
+              id: `status-${Date.now()}-${agentEvents.length}`,
+              kind: 'activity',
+              at: new Date().toISOString(),
+              status: status.done === false ? 'running' : 'done',
+              node: data?.node,
+              title: statusDescription(status as TerminalStatus),
+              detail: statusDescription(status as TerminalStatus)
+            };
+            agentEvents = [
+              ...agentEvents,
+              normalizedAgentEvent(activityEvent)
+            ].slice(-120);
             setAgentProgress(statusDescription(status as TerminalStatus));
             upsertStreamingAssistant(streamedReply);
           }
@@ -780,7 +1429,7 @@ export default function LearningTerminal({
           role: 'assistant',
           content: response.reply || streamedReply,
           mode,
-          agentEvents: agentEvents.length ? agentEvents : response.agentEvents,
+          agentEvents: response.agentEvents || agentEvents,
           statusHistory,
           goalDraft: response.goalDraft,
           proposedActions: response.proposedActions,
@@ -862,6 +1511,7 @@ export default function LearningTerminal({
         workbenchId,
         sessionId,
         checkpointThreadId,
+        mode,
         messages,
         decision: {
           decision,
@@ -1057,6 +1707,9 @@ export default function LearningTerminal({
                     Saved as workspace-level plan · {String(action.result.planId)}
                   </div>
                 ) : null}
+                {action.success && action.result?.studioCard ? (
+                  <StudioArtifactCard workspaceId={workspaceId} action={action} onOpenPreview={setResourcePreview} />
+                ) : null}
               </div>
             ))}
           </div>
@@ -1085,12 +1738,27 @@ export default function LearningTerminal({
   );
 
   const isDashboard = variant === 'dashboard';
+  const openLinkPreview = (link: { href: string; title?: string; text?: string }) => {
+    const href = String(link.href || '').trim();
+    if (!href) return;
+    setResourcePreview({
+      id: `url-${href}`,
+      title: link.text?.trim() || link.title?.trim() || titleFromUrl(href),
+      subtitle: href,
+      kind: 'web',
+      url: href
+    });
+  };
 
   return (
     <section className={`workspace-terminal font-primary mx-auto flex w-full flex-col overflow-hidden bg-white text-gray-900 ${
       isDashboard ? 'min-h-[520px] max-w-none px-0 pb-0 pt-0' : 'h-full min-h-0 px-0 pb-0 pt-0'
     }`}>
-      <div className={`mx-auto flex min-h-0 w-full flex-1 flex-col ${isDashboard ? 'max-w-none' : 'max-w-6xl'}`}>
+      <div className={`mx-auto flex min-h-0 w-full flex-1 ${isDashboard ? 'max-w-none flex-col' : 'max-w-none flex-row'}`}>
+        <div className={`flex min-h-0 flex-1 flex-col transition-[max-width] duration-200 ${
+          isDashboard ? 'w-full' : 'max-w-none'
+        }`}>
+          <div className={`mx-auto flex min-h-0 w-full flex-1 flex-col ${isDashboard ? 'max-w-none' : 'max-w-6xl'}`}>
         {messages.length > 0 && (
         <div
           ref={messageScrollRef}
@@ -1110,7 +1778,16 @@ export default function LearningTerminal({
               </button>
             </div>
           ) : null}
-          {messages.map((message, index) => (
+          {messages.map((message, index) => {
+            const resourceCards = message.role === 'assistant'
+              ? resourceDiscoveryCardsFromEvidence(message.evidence || [], message.content)
+              : [];
+            const resourceCardsLoading = message.role === 'assistant'
+              && streamingMessageIndex === index
+              && !resourceCards.length
+              && hasWebResourceDiscoverySignal(message);
+
+            return (
             <div
               key={`${message.role}-${index}`}
               className={`workspace-message group mx-auto flex w-full max-w-3xl px-0 py-2 text-sm ${
@@ -1133,29 +1810,59 @@ export default function LearningTerminal({
                     <div className="min-w-0 flex-1">
                       <div className="self-center font-semibold line-clamp-1 flex gap-1 items-center text-sm leading-6 text-black">
                         <span className="line-clamp-1">
-                          {message.mode === 'agentic' ? 'Workspace Agent' : 'AI Terminal'}
+                          {message.mode === 'new_agentic' ? 'Workspace Agent V2' : message.mode === 'agentic' ? 'Workspace Agent' : 'AI Terminal'}
                         </span>
                       </div>
-                      {message.agentEvents?.length ? (
+                      {streamingMessageIndex === index ? (
+                        <div className="mb-4 flex min-w-0 items-center gap-2 text-sm font-medium text-gray-400">
+                          <div className="flex h-5 items-center gap-1">
+                            <span className="size-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-160ms]" />
+                            <span className="size-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-80ms]" />
+                            <span className="size-1.5 animate-bounce rounded-full bg-gray-400" />
+                          </div>
+                          <span>Working {formatWorkingTime(workingSeconds)}</span>
+                          {agentProgress ? <span className="min-w-0 truncate text-gray-400">· {agentProgress}</span> : null}
+                        </div>
+                      ) : null}
+                      {message.mode === 'new_agentic' ? null : message.agentEvents?.length ? (
                         <InlineAgentUpdates events={message.agentEvents} isStreaming={streamingMessageIndex === index} />
                       ) : (
                         <StatusHistory statusHistory={message.statusHistory} />
                       )}
-                      <div className="chat-assistant markdown-prose w-full min-w-full">
-                        <OpenWebUIMarkdownPreview
-                          content={message.content}
-                          emptyMessage=""
+                      {message.mode === 'new_agentic' ? (
+                        <AgentTimeline
+                          message={message}
                           isStreaming={streamingMessageIndex === index}
-                          citationSources={citationSourcesFromEvidence(message.evidence || [])}
-                          onCitationJump={(source) => {
-                            const evidence = evidenceByCitationId(message.evidence || []).get(source.sourceId);
-                            if (evidence) setSourceModalSource(evidence);
-                          }}
+                          onOpenSource={setSourceModalSource}
+                          onLinkPreview={openLinkPreview}
+                          resourceCards={resourceCards}
+                          resourceCardsLoading={resourceCardsLoading}
                         />
-                        {streamingMessageIndex === index ? (
-                          <span className="ml-0.5 inline-block h-4 w-1 translate-y-0.5 animate-pulse rounded-full bg-gray-900" />
-                        ) : null}
-                      </div>
+                      ) : (
+                        <>
+                          <ResourceDiscoveryCards
+                            cards={resourceCards}
+                            loading={resourceCardsLoading}
+                            onOpen={(card) => openLinkPreview({ href: card.url, text: card.title, title: card.title })}
+                          />
+                          <div className="chat-assistant markdown-prose w-full min-w-full">
+                            <OpenWebUIMarkdownPreview
+                              content={message.content}
+                              emptyMessage=""
+                              isStreaming={streamingMessageIndex === index}
+                              citationSources={citationSourcesFromEvidence(message.evidence || [])}
+                              onLinkPreview={openLinkPreview}
+                              onCitationJump={(source) => {
+                                const evidence = evidenceByCitationId(message.evidence || []).get(source.sourceId);
+                                if (evidence) setSourceModalSource(evidence);
+                              }}
+                            />
+                            {streamingMessageIndex === index ? (
+                              <span className="ml-0.5 inline-block h-4 w-1 translate-y-0.5 animate-pulse rounded-full bg-gray-900" />
+                            ) : null}
+                          </div>
+                        </>
+                      )}
                       {message.evidence?.length ? (
                         <SourcesCapsule sources={message.evidence} onOpenSource={setSourceModalSource} />
                       ) : null}
@@ -1186,19 +1893,8 @@ export default function LearningTerminal({
                 )}
               </div>
             </div>
-          ))}
-
-          {loading && (
-            <div className="mx-auto flex w-full max-w-3xl items-center gap-2 px-0 py-3 text-sm text-gray-500">
-              <div className="flex h-6 items-center gap-1">
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-160ms]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-80ms]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400" />
-              </div>
-              <span>Working {workingSeconds}s</span>
-              {agentProgress ? <span className="truncate text-gray-400">· {agentProgress}</span> : null}
-            </div>
-          )}
+          );
+          })}
 
           {goalDraft && (
             <div className="workspace-card-in mx-auto mt-4 w-full max-w-3xl rounded-3xl border border-gray-100 bg-white p-4 shadow-sm">
@@ -1313,7 +2009,19 @@ export default function LearningTerminal({
             )}
           </div>
         </div>
+          </div>
+        </div>
       </div>
+      {resourcePreview && (!onResourcePreviewChange || isDashboard) ? (
+        <div className={`${isDashboard ? 'fixed inset-0 z-[80]' : 'fixed inset-x-0 bottom-0 z-[80] h-[82vh] xl:hidden'} bg-white`}>
+          <TerminalResourcePreviewPanel
+            workspaceId={workspaceId}
+            workbenchId={workbenchId}
+            preview={resourcePreview}
+            onClose={() => setResourcePreview(null)}
+          />
+        </div>
+      ) : null}
       <SourceDetailModal source={sourceModalSource} onClose={() => setSourceModalSource(null)} />
     </section>
   );

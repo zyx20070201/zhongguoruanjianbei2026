@@ -1,5 +1,7 @@
 import prisma from '../../config/db';
+import { aiModelProviderService } from '../aiModelProviderService';
 import { FileSystemService } from '../fileSystemService';
+import { documentTextExtractionService } from '../documentTextExtractionService';
 import { learningRunService } from '../learningRunService';
 import { learnerStateContextAdapter } from '../learnerStateContextAdapter';
 import { learningEventCollectionService } from '../learningEventCollectionService';
@@ -13,6 +15,12 @@ import { studioArtifactRepository } from './artifactRepository';
 import { buildStudioDeliveryArtifact } from './visualArtifactAdapters';
 import { studioRenderJobService } from './renderJobService';
 import { quizQualityService } from '../quizQualityService';
+import { normalizeStudioArtifact } from './artifactSchemas';
+import { renderStudioArtifact } from './artifactRenderer';
+import { REACT_CHAT_SYSTEM_PROMPT, reactChatVisualUserPrompt } from './reactChatVisualPrompt';
+import { lightVisualLessonService } from './lightVisualLessonService';
+import { presentonPptxService } from './presentonPptxService';
+import { ContextCapsule } from '../../types/contextSystem';
 import {
   StudioGenerateV2Input,
   StudioGenerateV2Result,
@@ -32,6 +40,95 @@ const legacyAudience = (templateId: string) => {
 
 const isPracticeTemplate = (templateId: string) =>
   templateId === 'custom_practice';
+
+const emptyReactChatContextPolicy = () => ({
+  includeSelection: false,
+  includeViewport: false,
+  includeActiveFileFullText: false,
+  includeActiveFileSummary: false,
+  ragScope: 'none' as const,
+  includeResourceSummaries: false,
+  maxRetrievedChunks: 0,
+  intent: 'general_qa' as const,
+  reasons: ['React-Chat Visual uses only explicit source selection and the user prompt.']
+});
+
+const emptyReactChatReview = (): StudioGenerateV2Result['review'] => ({
+  score: 1,
+  warnings: [],
+  checks: [],
+  metrics: {
+    grounding: 1,
+    schema: 1,
+    personalization: 1,
+    pedagogicalFit: 1,
+    usability: 1
+  },
+  passed: true,
+  summary: 'React-Chat Visual direct generation skips AI Studio review.'
+});
+
+const videoAnalysisText = (file: any) => {
+  try {
+    const metadata = file.metadataJson ? JSON.parse(file.metadataJson) : {};
+    const analysis = metadata.videoAnalysis && typeof metadata.videoAnalysis === 'object' ? metadata.videoAnalysis : null;
+    if (!analysis) return '';
+    const transcript = Array.isArray(analysis.transcript)
+      ? analysis.transcript.map((item: any) => `[${item.start ?? ''}] ${item.text || item.content || ''}`).join('\n')
+      : '';
+    const chapters = Array.isArray(analysis.chapters)
+      ? analysis.chapters.map((item: any) => `${item.title || ''}\n${item.summary || ''}`).join('\n\n')
+      : '';
+    const keyPoints = Array.isArray(analysis.keyPoints)
+      ? analysis.keyPoints.map((item: any) => `${item.concept || item.title || ''}: ${item.explanation || item.summary || ''}`).join('\n')
+      : '';
+    return [analysis.title ? `Title: ${analysis.title}` : '', analysis.summary || '', chapters, keyPoints, transcript]
+      .filter(Boolean)
+      .join('\n\n');
+  } catch {
+    return '';
+  }
+};
+
+const readExplicitSourceText = async (workspaceId: string, file: any) => {
+  const videoText = videoAnalysisText(file);
+  if (videoText.trim()) return videoText;
+  try {
+    return await FileSystemService.getFileContent(workspaceId, file.id);
+  } catch {
+    const extracted = await documentTextExtractionService.extract(file).catch(() => null);
+    return extracted?.text || '';
+  }
+};
+
+const explicitSelectedSources = async (workspaceId: string, selectedResourceIds: unknown[] = []) => {
+  const ids = [...new Set(selectedResourceIds.filter((value): value is string => typeof value === 'string' && Boolean(value)))];
+  if (!ids.length) return [];
+  const files = await prisma.fileSystemObject.findMany({
+    where: { workspaceId, id: { in: ids }, nodeType: 'file' }
+  });
+  const byId = new Map(files.map((file) => [file.id, file] as const));
+  return Promise.all(ids.map(async (id, index) => {
+    const file = byId.get(id);
+    if (!file) return { id, name: `Selected source ${index + 1}`, path: '', content: '' };
+    const content = await readExplicitSourceText(workspaceId, file);
+    return {
+      id: file.id,
+      name: file.name,
+      path: file.path,
+      fileId: file.id,
+      content: String(content || '').trim()
+    };
+  }));
+};
+
+const reactChatVisualFilename = (prompt: string) => {
+  const raw = clip(prompt || 'react-chat-visual', 40)
+    .replace(/[\\/:*?"<>|#{}[\]`]+/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `react-chat-visual-${raw || 'visual'}.md`;
+};
 
 const buildNextPractice = (
   template: StudioResourceTemplate,
@@ -149,12 +246,208 @@ export class StudioV2Service {
     return studioArtifactRepository.list(input);
   }
 
+  private async generateReactChatVisualDirect(
+    input: StudioGenerateV2Input,
+    template: StudioResourceTemplate
+  ): Promise<StudioGenerateV2Result> {
+    const startedAt = Date.now();
+    const runId = `react-chat-direct-${Date.now()}`;
+    const selectedSources = input.prebuiltContextCapsule
+      ? [
+          ...(input.prebuiltContextCapsule.retrievedChunks || []).map((chunk) => ({
+            id: chunk.sourceId || chunk.chunkId,
+            name: chunk.fileName,
+            path: '',
+            fileId: chunk.fileId,
+            content: chunk.content
+          })),
+          ...(input.prebuiltContextCapsule.resources || [])
+            .filter((resource) => resource.summary)
+            .map((resource) => ({
+              id: resource.fileId,
+              name: resource.fileName,
+              path: resource.filePath || '',
+              fileId: resource.fileId,
+              content: resource.summary || resource.fileName
+            }))
+        ].slice(0, 12)
+      : await explicitSelectedSources(input.workspaceId, input.context.selectedResourceIds || []);
+    const selectedSourceIds = selectedSources.map((source) => source.id);
+    const citations = input.prebuiltContextCapsule?.citations || selectedSources.map((source) => ({
+      sourceId: source.id,
+      fileId: source.fileId || source.id,
+      fileName: source.name,
+      label: source.name,
+      sourceType: 'pinned' as const,
+      confidence: 'high' as const,
+      preview: clip(source.content, 600)
+    }));
+    const selectedSourceChars = selectedSources.reduce((sum, source) => sum + source.content.length, 0);
+    const capsule: ContextCapsule = input.prebuiltContextCapsule || {
+      capsuleId: runId,
+      userId: 'react-chat-direct',
+      workspaceId: input.workspaceId,
+      workbenchId: input.workbenchId || undefined,
+      mode: 'workbench',
+      resources: selectedSources.map((source) => ({
+        fileId: source.fileId || source.id,
+        fileName: source.name,
+        filePath: source.path || undefined,
+        type: 'generated',
+        summary: clip(source.content, 300),
+        tokenCount: Math.ceil(source.content.length / 4),
+        indexed: false
+      })),
+      retrievedChunks: [],
+      visualEvidence: [],
+      tokenBudget: selectedSourceChars,
+      estimatedTokens: Math.ceil(selectedSourceChars / 4),
+      estimatedTokensByLayer: { selected_sources: Math.ceil(selectedSourceChars / 4) },
+      promptContextPreview: selectedSources.map((source) => `## ${source.name}\n${clip(source.content, 1000)}`).join('\n\n---\n\n'),
+      buildTrace: [],
+      fallbackReasons: [],
+      clippedItems: [],
+      citations,
+      sourceMap: citations.map((citation, index) => ({
+        ...citation,
+        sourceId: citation.sourceId || `S${index + 1}`,
+        sourceType: citation.sourceType || 'retrieval',
+        confidence: citation.confidence || 'medium',
+        includedInPrompt: true
+      })),
+      createdAt: new Date(startedAt).toISOString()
+    };
+    const contextPolicy = input.prebuiltContextPolicy || emptyReactChatContextPolicy();
+    const contextShell = {
+      input,
+      template,
+      runId,
+      goalId: null,
+      capsule,
+      contextPolicy,
+      trace: []
+    } as StudioGenerationContext;
+    const response = await aiModelProviderService.chat(
+      [
+        {
+          role: 'user',
+          content: reactChatVisualUserPrompt(input.prompt || '', selectedSources)
+        }
+      ],
+      undefined,
+      {
+        provider: 'openai',
+        useCase: 'studio',
+        systemPrompt: REACT_CHAT_SYSTEM_PROMPT,
+        maxTokens: Number(process.env.REACT_CHAT_VISUAL_MAX_TOKENS || 131072),
+        timeoutMs: Number(process.env.STUDIO_MODEL_TIMEOUT_MS || 240000)
+      }
+    );
+    const rawContent = JSON.stringify({
+      schemaVersion: 'visual_code_lesson.v1',
+      title: input.prompt || template.title,
+      summary: '使用 React-Chat 自由回答协议生成的可执行可视化讲解。',
+      sourceIds: selectedSourceIds.slice(0, 20),
+      contentMarkdown: response.reply.trim()
+    }, null, 2);
+    const structured = normalizeStudioArtifact(contextShell, rawContent);
+    const content = renderStudioArtifact(structured);
+    const metadata = {
+      model: response.model,
+      usage: response.usage,
+      selectedResourceIds: selectedSourceIds,
+      selectedSourceCount: selectedSources.length,
+      selectedSourceChars,
+      visualCodeLessonGeneration: {
+        schemaVersion: 'visual_code_lesson.generation.v1',
+        strategy: 'react_chat_direct',
+        provider: response.provider,
+        model: response.model,
+        durationMs: Date.now() - startedAt
+      }
+    };
+    const file = await FileSystemService.saveGeneratedContent({
+      workspaceId: input.workspaceId,
+      targetDir: 'Generated',
+      filename: reactChatVisualFilename(input.prompt || template.title),
+      category: 'generated',
+      mimeType: 'text/markdown',
+      isBinary: false,
+      workbenchId: input.workbenchId || undefined,
+      resourceRole: 'generated',
+      resourceType: 'generated',
+      scope: input.workbenchId ? 'workbench' : 'workspace',
+      origin: 'ai',
+      metadata: {
+        generator: 'react-chat-direct',
+        templateId: template.id,
+        goal: template.goal,
+        generatorKind: template.generator,
+        renderer: template.renderer,
+        source: `${response.provider}-react-chat-direct`,
+        studioMetadata: metadata
+      },
+      content
+    });
+    return {
+      file,
+      content,
+      template,
+      goal: input.goal || template.goal,
+      generator: template.generator,
+      renderer: template.renderer,
+      runId,
+      source: `${response.provider}-react-chat-direct`,
+      metadata,
+      contextCapsule: capsule,
+      contextPolicy,
+      usedContextSummary: {
+        mode: capsule.mode,
+        selection: false,
+        viewport: false,
+        activeFile: null,
+        resources: selectedSources.length,
+        retrievedChunks: 0,
+        estimatedTokens: capsule.estimatedTokens,
+        citations: citations.map((citation) => citation.label)
+      },
+      workflowTrace: [],
+      review: emptyReactChatReview(),
+      qualityReport: null,
+      practiceNext: null,
+      recommendation: null,
+      structured,
+      artifact: null,
+      renderJob: null,
+      delivery: {
+        kind: 'markdown',
+        filename: file.name,
+        mimeType: 'text/markdown',
+        fileObjectId: file.id,
+        path: file.path,
+        previewContent: content
+      }
+    };
+  }
+
   async generate(input: StudioGenerateV2Input): Promise<StudioGenerateV2Result> {
     const workspace = await prisma.workspace.findUnique({ where: { id: input.workspaceId } });
     if (!workspace) throw new Error('Workspace not found');
 
     const template = studioTemplateRegistry.get(input.templateId);
     if (!template) throw new Error(`Studio template "${input.templateId}" not found`);
+
+    if (template.id === 'react_chat_visual') {
+      return this.generateReactChatVisualDirect(input, template);
+    }
+
+    if (template.id === 'light_visual_lesson') {
+      return lightVisualLessonService.generate(input, template);
+    }
+
+    if (template.id === 'presenton_pptx') {
+      return presentonPptxService.generate(input, template);
+    }
 
     const workbench = input.workbenchId
       ? await prisma.workbench.findFirst({
@@ -189,30 +482,60 @@ export class StudioV2Service {
         trace
       } as StudioGenerationContext;
 
-      const capsuleResult = await studioWorkflowRunner.step(
-        contextShell,
-        'ContextAgent',
-        'context capsule',
-        {
-          contextMode: input.context.contextMode,
-          templateId: template.id
-        },
-        () =>
-          workbenchContextService.buildCapsule({
-            context: {
-              ...input.context,
-              workspaceId: input.workspaceId,
-              workbenchId: input.workbenchId || input.context.workbenchId || null
+      const capsuleResult = input.prebuiltContextCapsule
+        ? await studioWorkflowRunner.step(
+            contextShell,
+            'ContextAgent',
+            'agent-built context capsule',
+            {
+              contextMode: input.prebuiltContextCapsule.mode,
+              templateId: template.id,
+              contextRefs: input.contextRefs?.map((ref) => ({
+                type: ref.type,
+                fileId: ref.fileId,
+                evidenceId: ref.evidenceId,
+                messageId: ref.messageId,
+                turnId: ref.turnId,
+                title: ref.title
+              })) || []
             },
-            messages: [{ role: 'user', content: input.prompt || template.promptFrame }]
-          }),
-        (output) =>
-          `Built context capsule with ${output.capsule.citations.length} citation(s), ${output.capsule.retrievedChunks?.length || 0} retrieved chunk(s).`,
-        (output) => ({
-          estimatedTokens: output.capsule.estimatedTokens,
-          citations: output.capsule.citations.map((citation) => citation.label)
-        })
-      );
+            async () => ({
+              capsule: input.prebuiltContextCapsule!,
+              policy: input.prebuiltContextPolicy || emptyReactChatContextPolicy(),
+              promptPreview: input.prebuiltContextCapsule!.promptContextPreview || '',
+              trace: input.prebuiltContextCapsule!.buildTrace || []
+            }),
+            (output) =>
+              `Accepted agent-built context capsule with ${output.capsule.citations.length} citation(s), ${output.capsule.retrievedChunks?.length || 0} retrieved chunk(s).`,
+            (output) => ({
+              estimatedTokens: output.capsule.estimatedTokens,
+              citations: output.capsule.citations.map((citation) => citation.label)
+            })
+          )
+        : await studioWorkflowRunner.step(
+            contextShell,
+            'ContextAgent',
+            'context capsule',
+            {
+              contextMode: input.context.contextMode,
+              templateId: template.id
+            },
+            () =>
+              workbenchContextService.buildCapsule({
+                context: {
+                  ...input.context,
+                  workspaceId: input.workspaceId,
+                  workbenchId: input.workbenchId || input.context.workbenchId || null
+                },
+                messages: [{ role: 'user', content: input.prompt || template.promptFrame }]
+              }),
+            (output) =>
+              `Built context capsule with ${output.capsule.citations.length} citation(s), ${output.capsule.retrievedChunks?.length || 0} retrieved chunk(s).`,
+            (output) => ({
+              estimatedTokens: output.capsule.estimatedTokens,
+              citations: output.capsule.citations.map((citation) => citation.label)
+            })
+          );
 
       contextShell.capsule = capsuleResult.capsule;
       contextShell.contextPolicy = capsuleResult.policy;

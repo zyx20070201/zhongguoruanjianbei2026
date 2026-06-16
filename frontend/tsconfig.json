@@ -11,6 +11,10 @@
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@react-chat/*": ["../React-Chat/src/*"]
+    },
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
@@ -18,6 +22,6 @@
     "types": ["vite/client"],
     "ignoreDeprecations": "6.0"
   },
-  "include": ["src"],
+  "include": ["src", "../React-Chat/src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

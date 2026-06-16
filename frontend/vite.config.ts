@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'node:path';
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -17,10 +18,17 @@ export default defineConfig({
       '@blocksuite/presets'
     ],
     alias: {
+      '@react-chat': path.resolve(__dirname, '../React-Chat/src'),
       'gl-bench': 'gl-bench/dist/gl-bench.module.js'
     }
   },
   server: {
+    fs: {
+      allow: [
+        path.resolve(__dirname),
+        path.resolve(__dirname, '../React-Chat')
+      ]
+    },
     proxy: {
       '/api': {
         target: process.env.VITE_DEV_API_TARGET || 'http://127.0.0.1:3001',

@@ -1,0 +1,161 @@
+.inp-area {
+  padding: 14px 20px 18px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.inp-row {
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.inp-row textarea {
+  flex: 1;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  padding: 11px 14px;
+  border-radius: var(--r);
+  font-size: 13.5px;
+  font-family: inherit;
+  resize: none;
+  outline: none;
+  line-height: 1.5;
+  min-height: 46px;
+  max-height: 150px;
+  transition: border-color 0.2s;
+}
+
+.inp-row textarea:focus {
+  border-color: var(--accent);
+}
+
+.inp-row textarea::placeholder {
+  color: var(--text-3);
+}
+
+.btns {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.s-btn,
+.c-btn {
+  border: none;
+  width: 46px;
+  height: 46px;
+  border-radius: var(--r);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.s-btn {
+  background: var(--accent);
+  color: #fff;
+}
+
+.s-btn:hover {
+  background: var(--accent-h);
+}
+
+.s-btn:active {
+  transform: scale(0.95);
+}
+
+.s-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.s-btn svg,
+.c-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.c-btn {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.c-btn:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* ── Image preview ── */
+.img-preview {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.img-preview-item {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: var(--rs);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.img-preview-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.img-preview-item .img-rm {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--red);
+  color: #fff;
+  border: none;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.img-btn {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  width: 46px;
+  height: 46px;
+  border-radius: var(--r);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.img-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.img-btn svg {
+  width: 16px;
+  height: 16px;
+}

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../config/db';
 import { workbenchService } from '../services/workbenchService';
+import { isHiddenFromWorkspaceKnowledge, visibleWorkspaceKnowledgeWhere } from '../services/fileObjectVisibility';
 
 const getSingleValue = (value: any): string | undefined =>
   Array.isArray(value) ? value[0] : value;
@@ -255,7 +256,7 @@ export const getWorkspaces = async (req: Request, res: Response) => {
     where: { userId: parsedUserId },
     include: {
       fileObjects: {
-        where: { scope: { not: 'chat' } },
+        where: { scope: { not: 'chat' }, ...visibleWorkspaceKnowledgeWhere },
         select: fileObjectSummarySelect,
         orderBy: { updatedAt: 'desc' },
         take: 1,
@@ -269,14 +270,24 @@ export const getWorkspaces = async (req: Request, res: Response) => {
 
   const enrichedWorkspaces = await Promise.all(
     workspaces.map(async (workspace) => {
-      const workbenches = await workbenchService.listByWorkspace(workspace.id);
+      const [workbenches, visibleFileCount] = await Promise.all([
+        workbenchService.listByWorkspace(workspace.id),
+        prisma.fileSystemObject.count({
+          where: {
+            workspaceId: workspace.id,
+            scope: { not: 'chat' },
+            ...visibleWorkspaceKnowledgeWhere
+          }
+        })
+      ]);
 
       return {
         ...workspace,
         workbenches,
         _count: {
           ...workspace._count,
-          workbenches: workbenches.length
+          workbenches: workbenches.length,
+          fileObjects: visibleFileCount
         }
       };
     })
@@ -297,7 +308,7 @@ export const getWorkspace = async (req: Request, res: Response) => {
     where: { id: workspaceId },
     include: {
       fileObjects: {
-        where: { scope: { not: 'chat' } },
+        where: { scope: { not: 'chat' }, ...visibleWorkspaceKnowledgeWhere },
         select: fileObjectSummarySelect,
         orderBy: { updatedAt: 'desc' },
       },
@@ -317,6 +328,7 @@ export const getWorkspace = async (req: Request, res: Response) => {
   res.json({
     workspace: {
       ...workspace,
+      fileObjects: workspace.fileObjects.filter((file) => !isHiddenFromWorkspaceKnowledge(file)),
       workbenches
     }
   });

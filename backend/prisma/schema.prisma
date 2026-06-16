@@ -110,6 +110,7 @@ model FileSystemObject {
   id           String   @id @default(uuid())
   name         String
   nodeType     String // "file" | "folder"
+  // Descriptive resource attributes. These are not folder hierarchy.
   fileCategory String? // "note", "code", "document", "media", "generated", "other"
   resourceType String   @default("file") // "source" | "note" | "generated" | "artifact" | "file" | "folder"
   scope        String   @default("workspace") // "workspace" | "workbench"
@@ -119,7 +120,7 @@ model FileSystemObject {
   extension    String?
   size         Int?
   isBinary     Boolean  @default(false)
-  path         String // Virtual path in workspace
+  path         String // User-visible organization path in the workspace folder tree
   content      String? // Content for simple text files, or reference to S3/Local disk
   mimeType     String?
   storageKey   String? // For binary files
@@ -132,7 +133,7 @@ model FileSystemObject {
   ownerWorkbenchId String?
   ownerWorkbench   Workbench? @relation("OwnedResources", fields: [ownerWorkbenchId], references: [id])
 
-  parentId String?
+  parentId String? // Folder-tree parent. Null means workspace root.
   parent   FileSystemObject?  @relation("FolderChildren", fields: [parentId], references: [id])
   children FileSystemObject[] @relation("FolderChildren")
 
@@ -147,6 +148,7 @@ model FileSystemObject {
   studioArtifacts    StudioArtifact[]
 
   @@unique([workspaceId, path])
+  @@index([workspaceId, parentId, nodeType, name])
   @@index([workspaceId, resourceType, updatedAt])
   @@index([workspaceId, scope, updatedAt])
   @@index([ownerWorkbenchId, resourceType, updatedAt])

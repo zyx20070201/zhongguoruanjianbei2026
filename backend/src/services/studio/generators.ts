@@ -23,9 +23,7 @@ import {
   buildVisualExplainerMarkdownSourceBlocks,
   buildVisualExplainerFromStages,
   buildFallbackVisualExplainer,
-  buildAvlVisualCodeLesson,
   extractVisualExplainerMarkdownDraft,
-  isAvlVisualExplainerRequest,
   normalizeVisualExplainerContentMap,
   normalizeVisualCodeLessonPayload,
   normalizeVisualExplainerRendererBlocks,
@@ -48,6 +46,7 @@ import {
   visualExplainerSlideTextPrompt,
   visualExplainerVisualIntentPrompt
 } from './visualExplainer';
+import { REACT_CHAT_SYSTEM_PROMPT, reactChatVisualUserPrompt } from './reactChatVisualPrompt';
 
 const STUDIO_MODEL_TIMEOUT_MS = Number(process.env.STUDIO_MODEL_TIMEOUT_MS || 240000);
 const VISUAL_EXPLAINER_STAGE_TIMEOUT_MS = Number(process.env.VISUAL_EXPLAINER_STAGE_TIMEOUT_MS || 45000);
@@ -166,7 +165,7 @@ const describeModelError = (provider: AiModelProviderId, error: unknown) => {
 const chatWithStudioFallback = async (
   messages: ProviderChatMessage[],
   context: StudioGenerationContext,
-  options: { includeVisualEvidence?: boolean; timeoutMs?: number } = {}
+  options: { includeVisualEvidence?: boolean; timeoutMs?: number; systemPrompt?: string; maxTokens?: number } = {}
 ) => {
   const primary = aiModelProviderService.provider({ useCase: 'studio' });
   const errors: string[] = [];
@@ -179,7 +178,9 @@ const chatWithStudioFallback = async (
         provider: provider === primary ? undefined : provider,
         timeoutMs,
         useCase: 'studio',
-        visualEvidence
+        visualEvidence,
+        systemPrompt: options.systemPrompt,
+        maxTokens: options.maxTokens
       });
       recordProviderSuccess(provider);
       return {
@@ -602,6 +603,18 @@ const selectedSourcesMarkdownBlock = (sources: Awaited<ReturnType<typeof selecte
     source.content || '(empty source text)'
   ].filter(Boolean).join('\n')).join('\n\n---\n\n');
 
+const freeformVisualCodeLessonFromMarkdown = (
+  context: StudioGenerationContext,
+  content: string,
+  sourceIds: string[]
+) => JSON.stringify({
+  schemaVersion: 'visual_code_lesson.v1',
+  title: latestPrompt(context) || context.template.title,
+  summary: '使用 React-Chat 自由回答协议生成的可执行可视化讲解。',
+  sourceIds: sourceIds.slice(0, 20),
+  contentMarkdown: content
+}, null, 2);
+
 const pureMarkdownNotesPrompt = (
   userRequirement: string,
   sources: Awaited<ReturnType<typeof selectedSourceFullTexts>>
@@ -620,6 +633,62 @@ const pureMarkdownNotesPrompt = (
   userRequirement ? `用户要求：\n${userRequirement}` : '用户要求：整理成学习笔记。',
   '',
   '# 用户勾选资料全文',
+  selectedSourcesMarkdownBlock(sources)
+].join('\n');
+
+const hyperFramesVideoSchema = {
+  type: 'object',
+  required: ['title', 'summary', 'durationSeconds', 'scenes'],
+  properties: {
+    title: { type: 'string' },
+    summary: { type: 'string' },
+    durationSeconds: { type: 'number' },
+    visualStyle: { type: 'string' },
+    scenes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'title', 'start', 'duration', 'headline', 'caption', 'narration', 'visual'],
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          start: { type: 'number' },
+          duration: { type: 'number' },
+          headline: { type: 'string' },
+          caption: { type: 'string' },
+          narration: { type: 'string' },
+          visual: { type: 'string' },
+          bullets: { type: 'array', items: { type: 'string' } },
+          accent: { type: 'string' }
+        }
+      }
+    },
+    sourceNotes: { type: 'array', items: { type: 'string' } }
+  }
+};
+
+const hyperFramesVideoPrompt = (
+  userRequirement: string,
+  sources: Awaited<ReturnType<typeof selectedSourceFullTexts>>
+) => [
+  'You are generating the content plan for a HyperFrames HTML video composition.',
+  '',
+  'Use only the selected source text and the user prompt below.',
+  'Do not use learner profile, recommendation context, hidden system context, or AI Studio 2.0 prompt conventions.',
+  '',
+  'Return only valid JSON matching this shape:',
+  JSON.stringify(hyperFramesVideoSchema, null, 2),
+  '',
+  'Rules:',
+  '- durationSeconds should be between 30 and 90; prefer 60.',
+  '- Create 4 to 7 scenes with non-overlapping start/duration values.',
+  '- Every scene must be visual enough for an HTML/CSS/GSAP video composition.',
+  '- Keep text concise: headline <= 32 chars, caption <= 90 chars, narration <= 220 chars.',
+  '- Do not mention unavailable details. If source text is thin, keep the video conservative.',
+  '',
+  userRequirement ? `User prompt:\n${userRequirement}` : 'User prompt:\nCreate a short teaching video from the selected sources.',
+  '',
+  '# Selected source text',
   selectedSourcesMarkdownBlock(sources)
 ].join('\n');
 
@@ -882,35 +951,50 @@ const fallbackFlashcards = (context: StudioGenerationContext) => {
   ].join('\n');
 };
 
-const fallbackCodeLab = (context: StudioGenerationContext) =>
-  fallbackMarkdown(context, [
-    '## 实验目标',
-    `围绕「${latestPrompt(context)}」完成一个可运行或可推演的小实验。`,
-    '',
-    '## Starter Code',
-    '```ts',
-    'type Input = Record<string, unknown>;',
-    '',
-    'export function solve(input: Input) {',
-    '  // TODO: 根据课程资料补全核心步骤',
-    '  return { ok: false, reason: "not implemented" };',
-    '}',
-    '```',
-    '',
-    '## TODO',
-    '1. 标出输入条件和输出目标。',
-    '2. 补全核心判断步骤。',
-    '3. 写出至少 2 个正常样例和 1 个边界样例。',
-    '',
-    '## 调试提示',
-    '- 先验证前置条件，再执行核心算法。',
-    '- 每一步输出中间状态，检查是否与资料中的定义一致。',
-    '',
-    '## 验收标准',
-    '- 能解释每个变量或步骤的含义。',
-    '- 能通过基础样例和边界样例。',
-    '- 能指出一个常见错误及修复方式。'
-  ]);
+const fallbackCodeLab = (context: StudioGenerationContext) => JSON.stringify({
+  title: context.input.prompt || context.template.title,
+  problem: {
+    statementMarkdown: [
+      `围绕「${latestPrompt(context)}」完成一个可运行的代码练习。`,
+      '',
+      '实现一个程序：从标准输入读取若干整数，输出它们的和。这个默认题面用于生成失败时保持 Code Lab 可运行；重新生成后会替换为更贴合资料的题目。'
+    ].join('\n'),
+    examples: [
+      { input: '1 2 3\n', output: '6', explanation: '读取 1、2、3，和为 6。' }
+    ],
+    constraints: ['输入只包含整数。', '输出一个整数并换行。']
+  },
+  editor: {
+    language: 'javascript',
+    starterCode: [
+      "const fs = require('fs');",
+      "const nums = fs.readFileSync(0, 'utf8').trim().split(/\\s+/).filter(Boolean).map(Number);",
+      '',
+      '// TODO: replace the placeholder implementation with your solution.',
+      'const answer = nums.reduce((sum, value) => sum + value, 0);',
+      'console.log(answer);'
+    ].join('\n')
+  },
+  guide: {
+    hints: ['先确认输入如何被拆分成数字。', '边界情况可以从空格、换行和负数开始检查。'],
+    acceptanceCriteria: ['能运行公开样例。', '输出必须与期望输出一致。']
+  },
+  tests: {
+    cases: [
+      { id: 'case-1', name: '公开样例', stdin: '1 2 3\n', expectedStdout: '6', explanation: '基础求和。' },
+      { id: 'case-2', name: '包含负数', stdin: '10 -2 5 -3\n', expectedStdout: '10' }
+    ]
+  },
+  solution: {
+    approachMarkdown: '把标准输入按空白符切分为数字，累加后输出。复杂度为 O(n)。',
+    referenceCode: [
+      "const fs = require('fs');",
+      "const nums = fs.readFileSync(0, 'utf8').trim().split(/\\s+/).filter(Boolean).map(Number);",
+      'console.log(nums.reduce((sum, value) => sum + value, 0));'
+    ].join('\n'),
+    complexity: 'Time O(n), space O(n).'
+  }
+}, null, 2);
 
 const fallbackSlides = (context: StudioGenerationContext) => {
   const topic = latestPrompt(context);
@@ -1063,6 +1147,32 @@ const buildSchemaHint = (template: StudioResourceTemplate) => {
           sourceRefs: [{ sourceId: 'string', title: 'string', snippet: 'string' }]
         }
       ]
+    };
+  }
+  if (template.renderer === 'code_lab') {
+    return {
+      title: 'string',
+      problem: {
+        statementMarkdown: 'complete learner-facing problem statement; include background, task, input/output format when relevant',
+        examples: [{ input: 'string', output: 'string', explanation: 'string' }],
+        constraints: ['string']
+      },
+      editor: {
+        language: 'javascript | typescript | python | java | cpp | c | go | rust | sql',
+        starterCode: 'runnable starter code with TODO markers; read from stdin and print to stdout'
+      },
+      guide: {
+        hints: ['short solving hints'],
+        acceptanceCriteria: ['observable pass criteria']
+      },
+      tests: {
+        cases: [{ id: 'case-1', name: 'public sample', stdin: 'string', expectedStdout: 'exact stdout string', explanation: 'string' }]
+      },
+      solution: {
+        approachMarkdown: 'concise editorial explanation',
+        referenceCode: 'optional complete accepted solution',
+        complexity: 'string'
+      }
     };
   }
   if (template.renderer === 'visual_explainer') {
@@ -1281,6 +1391,39 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
     };
   }
 
+  if (context.template.renderer === 'code_lab') {
+    const response = await jsonWithStudioFallback<Record<string, unknown>>(context, {
+      instruction: commonPrompt(
+        context,
+        [
+          '必须输出 JSON，不要 Markdown。',
+          '生成一个 LeetCode 风格的 Code Lab：左侧题面和题解可读，右侧代码编辑器可直接运行 testcase。',
+          '字段只使用 problem、editor、guide、tests、solution 五组，不要额外展开一堆扁平字段。',
+          'problem.statementMarkdown 写完整题面，包含背景、任务、输入输出格式；不要把步骤拆成独立字段。',
+          'editor.starterCode 必须能在对应语言运行，并从 stdin 读取输入、向 stdout 输出结果；保留清晰 TODO。',
+          'tests.cases 必须给出 2-5 个可执行公开 testcase，每个 expectedStdout 必须是精确输出文本。',
+          'solution.approachMarkdown 写题解思路；referenceCode 可以给完整参考实现。',
+          '如果资料不足以生成领域题，生成一个与用户主题最接近的保守练习，并在题面说明证据不足。'
+        ].join('\n')
+      ),
+      schema: buildSchemaHint(context.template),
+      input: {
+        prompt: latestPrompt(context),
+        options: context.input.options || null,
+        contextPreview: context.capsule.promptContextPreview,
+        sources: context.capsule.citations.slice(0, 12)
+      }
+    });
+    const rawContent = JSON.stringify(response.data, null, 2);
+    const structured = normalizeStudioArtifact(context, rawContent);
+    return {
+      content: renderStudioArtifact(structured),
+      structured,
+      source: response.provider === 'deepseek' ? 'deepseek-json' : `${response.provider}-json`,
+      metadata: { model: response.model, usage: response.usage }
+    };
+  }
+
   if (context.template.id === 'pure_markdown_notes') {
     const selectedSources = await selectedSourceFullTexts(context);
     const userRequirement = String(context.input.options?.userRequirement || context.input.prompt || '').trim();
@@ -1359,36 +1502,88 @@ const generateWithModel = async (context: StudioGenerationContext): Promise<Stud
     };
   }
 
+  if (context.template.id === 'react_chat_visual') {
+    const userPrompt = latestPrompt(context);
+    const selectedSources = await selectedSourceFullTexts(context);
+    const selectedSourceIds = selectedSources.map((source) => source.id);
+    const response = await chatWithStudioFallback(
+      [
+        { role: 'user', content: reactChatVisualUserPrompt(userPrompt, selectedSources) }
+      ],
+      context,
+      {
+        includeVisualEvidence: false,
+        systemPrompt: REACT_CHAT_SYSTEM_PROMPT,
+        maxTokens: Number(process.env.REACT_CHAT_VISUAL_MAX_TOKENS || 131072)
+      }
+    );
+    const rawContent = freeformVisualCodeLessonFromMarkdown(context, response.reply.trim(), selectedSourceIds);
+    const structured = normalizeStudioArtifact(context, rawContent);
+    return {
+      content: renderStudioArtifact(structured),
+      structured,
+      source: `${response.provider}-react-chat-visual`,
+      metadata: {
+        model: response.model,
+        usage: response.usage,
+        selectedResourceIds: selectedSourceIds,
+        selectedSourceCount: selectedSources.length,
+        selectedSourceChars: selectedSources.reduce((sum, source) => sum + source.content.length, 0),
+        visualCodeLessonGeneration: {
+          schemaVersion: 'visual_code_lesson.generation.v1',
+          strategy: 'react_chat_freeform_markdown_code_blocks',
+          provider: response.provider,
+          model: response.model
+        }
+      }
+    };
+  }
+
+  if (context.template.id === 'hyperframes_video') {
+    const selectedSources = await selectedSourceFullTexts(context);
+    const selectedSourceIds = selectedSources.map((source) => source.id);
+    const userRequirement = String(context.input.options?.userRequirement || context.input.prompt || '').trim();
+    const response = await jsonWithStudioFallback<Record<string, unknown>>(context, {
+      instruction: hyperFramesVideoPrompt(userRequirement, selectedSources),
+      schema: hyperFramesVideoSchema,
+      input: {
+        userPrompt: userRequirement,
+        selectedSources: selectedSources.map((source, index) => ({
+          index: index + 1,
+          id: source.id,
+          name: source.name,
+          path: source.path,
+          text: source.content
+        }))
+      }
+    }, { includeVisualEvidence: false, timeoutMs: STUDIO_MODEL_TIMEOUT_MS });
+    const rawContent = JSON.stringify(response.data, null, 2);
+    const structured = normalizeStudioArtifact(context, rawContent);
+    return {
+      content: renderStudioArtifact(structured),
+      structured,
+      source: response.provider === 'deepseek' ? 'deepseek-hyperframes-json' : `${response.provider}-hyperframes-json`,
+      metadata: {
+        model: response.model,
+        usage: response.usage,
+        selectedResourceIds: selectedSourceIds,
+        selectedSourceCount: selectedSources.length,
+        selectedSourceChars: selectedSources.reduce((sum, source) => sum + source.content.length, 0),
+        hyperframesGeneration: {
+          schemaVersion: 'hyperframes_video_plan.v1',
+          strategy: 'selected_sources_and_user_prompt_only',
+          provider: response.provider,
+          model: response.model
+        }
+      }
+    };
+  }
+
   if (context.template.renderer === 'visual_explainer') {
     const userPrompt = latestPrompt(context);
     const selectedSources = await selectedSourceFullTexts(context);
     const visualStages: VisualExplainerPipelineStage[] = [];
     const selectedSourceIds = selectedSources.map((source) => source.id);
-
-    if (isAvlVisualExplainerRequest(userPrompt, selectedSources)) {
-      const visualCodeLesson = buildAvlVisualCodeLesson(context, userPrompt, selectedSourceIds);
-      const rawContent = JSON.stringify(visualCodeLesson, null, 2);
-      const structured = normalizeStudioArtifact(context, rawContent);
-      return {
-        content: renderStudioArtifact(structured),
-        structured,
-        source: 'avl-specialized-visual-code-lesson',
-        metadata: {
-          selectedResourceIds: selectedSourceIds,
-          selectedSourceCount: selectedSources.length,
-          selectedSourceChars: selectedSources.reduce((sum, source) => sum + source.content.length, 0),
-          visualCodeLessonSchemaVersion: visualCodeLesson.schemaVersion,
-          specializedDemo: 'avl_tree_interactive',
-          visualCodeLessonGeneration: {
-            schemaVersion: 'visual_code_lesson.generation.v1',
-            strategy: 'specialized_avl_tree_interactive_demo',
-            provider: 'local',
-            model: 'deterministic-avl-demo',
-            durationMs: 0
-          }
-        }
-      };
-    }
 
     const directCodeLessonStartedAt = Date.now();
     try {

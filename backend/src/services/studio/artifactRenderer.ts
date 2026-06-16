@@ -197,27 +197,75 @@ const renderFlashcards = (artifact: StudioStructuredArtifact<any>) => {
 
 const renderCodeLab = (artifact: StudioStructuredArtifact<any>) => {
   const payload = artifact.payload || {};
+  const problem = payload.problem || {};
+  const editor = payload.editor || {};
+  const guide = payload.guide || {};
+  const tests = payload.tests || {};
+  const solution = payload.solution || {};
+  const examples = Array.isArray(problem.examples) ? problem.examples : [];
+  const cases = Array.isArray(tests.cases) ? tests.cases : [];
   return [
     `# ${artifact.title}`,
     '',
     artifact.summary,
     '',
-    '## 实验目标',
-    payload.objective || '',
+    '## 题目',
+    problem.statementMarkdown || '',
     '',
-    '## 实验步骤',
-    Array.isArray(payload.steps) ? payload.steps.map((step: string, index: number) => `${index + 1}. ${step}`).join('\n') : '',
+    examples.length ? '## 示例' : '',
+    ...examples.map((example: any, index: number) =>
+      [
+        `### 示例 ${index + 1}`,
+        '',
+        'Input:',
+        '```text',
+        example.input || '',
+        '```',
+        '',
+        'Output:',
+        '```text',
+        example.output || '',
+        '```',
+        example.explanation ? `\n${example.explanation}` : ''
+      ].filter(Boolean).join('\n')
+    ),
+    '',
+    Array.isArray(problem.constraints) && problem.constraints.length ? '## 约束' : '',
+    Array.isArray(problem.constraints) ? problem.constraints.map((item: string) => `- ${item}`).join('\n') : '',
     '',
     '## Starter Code',
-    '```' + (payload.language || ''),
-    payload.starterCode || '',
+    '```' + (editor.language || ''),
+    editor.starterCode || '',
     '```',
     '',
-    '## 测试任务',
-    Array.isArray(payload.tests) ? payload.tests.map((test: string) => `- ${test}`).join('\n') : '',
+    cases.length ? '## Test Cases' : '',
+    ...cases.map((test: any, index: number) =>
+      [
+        `### ${test.name || `Case ${index + 1}`}`,
+        '',
+        'Input:',
+        '```text',
+        test.stdin || '',
+        '```',
+        '',
+        'Expected Output:',
+        '```text',
+        test.expectedStdout || '',
+        '```',
+        test.explanation ? `\n${test.explanation}` : ''
+      ].filter(Boolean).join('\n')
+    ),
     '',
-    '## 调试提示',
-    Array.isArray(payload.debugHints) ? payload.debugHints.map((hint: string) => `- ${hint}`).join('\n') : '',
+    Array.isArray(guide.hints) && guide.hints.length ? '## 提示' : '',
+    Array.isArray(guide.hints) ? guide.hints.map((hint: string) => `- ${hint}`).join('\n') : '',
+    '',
+    Array.isArray(guide.acceptanceCriteria) && guide.acceptanceCriteria.length ? '## 验收标准' : '',
+    Array.isArray(guide.acceptanceCriteria) ? guide.acceptanceCriteria.map((item: string) => `- ${item}`).join('\n') : '',
+    '',
+    '## 题解',
+    solution.approachMarkdown || '',
+    solution.complexity ? `\nComplexity: ${solution.complexity}` : '',
+    solution.referenceCode ? ['\n### Reference Code', '```' + (editor.language || ''), solution.referenceCode, '```'].join('\n') : '',
     '',
     personalizationSection(artifact),
     '',
@@ -307,6 +355,29 @@ const renderVideoScript = (artifact: StudioStructuredArtifact<any>) => {
   ].join('\n');
 };
 
+const renderHyperFramesVideo = (artifact: StudioStructuredArtifact<any>) => {
+  const payload = artifact.payload || {};
+  const scenes = Array.isArray(payload.scenes) ? payload.scenes : [];
+  return [
+    `# ${payload.title || artifact.title}`,
+    '',
+    payload.summary || artifact.summary,
+    '',
+    `- Duration: ${payload.durationSeconds || 60}s`,
+    `- Renderer: HyperFrames`,
+    '',
+    '| Start | Duration | Headline | Caption | Visual |',
+    '| --- | --- | --- | --- | --- |',
+    ...scenes.map((scene: any) =>
+      `| ${scene.start ?? ''}s | ${scene.duration ?? ''}s | ${scene.headline || scene.title || ''} | ${scene.caption || ''} | ${scene.visual || ''} |`
+    ),
+    '',
+    personalizationSection(artifact),
+    '',
+    sourceSection(artifact)
+  ].join('\n');
+};
+
 const renderStudyPlan = (artifact: StudioStructuredArtifact<any>) => {
   const payload = artifact.payload || {};
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
@@ -340,14 +411,46 @@ const renderStudyPlan = (artifact: StudioStructuredArtifact<any>) => {
   ].filter(Boolean).join('\n');
 };
 
+const renderLightVisualLesson = (artifact: StudioStructuredArtifact<any>) => {
+  const payload = artifact.payload || {};
+  const slides = Array.isArray(payload.slides) ? payload.slides : [];
+  return [
+    `# ${payload.title || artifact.title}`,
+    '',
+    artifact.summary,
+    '',
+    ...slides.flatMap((slide: any, index: number) => {
+      const timeline = Array.isArray(slide?.timeline) ? slide.timeline : [];
+      const visuals = Array.isArray(slide?.visuals) ? slide.visuals : [];
+      return [
+        `## Slide ${index + 1}: ${slide?.header || `Slide ${index + 1}`}`,
+        '',
+        slide?.description || '',
+        '',
+        timeline.length ? '### Timeline' : '',
+        ...timeline.map((step: any, stepIndex: number) => `${step?.kind === 'visual' ? `${stepIndex + 1}. [Visual]` : `${stepIndex + 1}.`} ${step?.content || ''}`),
+        '',
+        visuals.length ? '### Visuals (Mock)' : '',
+        ...visuals.map((visual: any, visualIndex: number) => `- ${visualIndex}. ${visual?.type || 'diagram'}: ${visual?.content || ''}`),
+        ''
+      ].filter(Boolean);
+    }),
+    personalizationSection(artifact),
+    '',
+    sourceSection(artifact)
+  ].join('\n');
+};
+
 export const renderStudioArtifact = (artifact: StudioStructuredArtifact) => {
   if (artifact.artifactKind === 'quiz') return renderQuiz(artifact);
   if (artifact.artifactKind === 'mind_map') return renderMindMap(artifact);
   if (artifact.artifactKind === 'flashcards') return renderFlashcards(artifact);
   if (artifact.artifactKind === 'code_lab') return renderCodeLab(artifact);
   if (artifact.artifactKind === 'slides') return renderSlides(artifact);
+  if (artifact.artifactKind === 'light_visual_lesson') return renderLightVisualLesson(artifact);
   if (artifact.artifactKind === 'visual_explainer') return renderVisualExplainer(artifact);
   if (artifact.artifactKind === 'video_script') return renderVideoScript(artifact);
+  if (artifact.artifactKind === 'hyperframes_video') return renderHyperFramesVideo(artifact);
   if (artifact.artifactKind === 'interactive_demo') return renderText(artifact);
   if (artifact.artifactKind === 'animation_script') return renderText(artifact);
   if (artifact.artifactKind === 'ui_video') return renderText(artifact);

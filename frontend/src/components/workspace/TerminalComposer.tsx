@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { TerminalChatFile } from '../../types';
 
-export type TerminalComposerMode = 'chat' | 'agentic';
+export type TerminalComposerMode = 'chat' | 'agentic' | 'new_agentic';
 export type TerminalComposerSourceMode = 'focused' | 'full_context';
 
 export interface TerminalComposerSourceFile {
@@ -68,6 +68,12 @@ const fileIsImage = (file: Pick<TerminalChatFile, 'mimeType' | 'extension' | 'na
   const mimeType = (file.mimeType || '').toLowerCase();
   const extension = (file.extension || file.name.split('.').pop() || '').toLowerCase();
   return mimeType.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(extension);
+};
+
+const modeLabel = (mode: TerminalComposerMode) => {
+  if (mode === 'agentic') return 'Agentic';
+  if (mode === 'new_agentic') return 'Agentic V2';
+  return 'Chat';
 };
 
 export default function TerminalComposer({
@@ -231,7 +237,7 @@ export default function TerminalComposer({
                 type="button"
                 onClick={() => setModeMenuOpen((current) => !current)}
                 className="flex size-8 items-center justify-center rounded-full bg-transparent text-gray-700 outline-none transition hover:bg-gray-100"
-                title={`Mode: ${mode === 'agentic' ? 'Agentic' : 'Chat'}`}
+                title={`Mode: ${modeLabel(mode)}`}
               >
                 <Wand2 className="size-4.5" strokeWidth={1.75} />
               </button>
@@ -239,7 +245,8 @@ export default function TerminalComposer({
                 <div className="absolute bottom-10 left-0 z-50 w-44 rounded-2xl border border-gray-100 bg-white p-1 text-sm text-gray-900 shadow-lg">
                   {([
                     { value: 'chat' as const, label: 'Chat' },
-                    { value: 'agentic' as const, label: 'Agentic' }
+                    { value: 'agentic' as const, label: 'Agentic' },
+                    { value: 'new_agentic' as const, label: 'Agentic V2' }
                   ]).map((item) => (
                     <button
                       key={item.value}

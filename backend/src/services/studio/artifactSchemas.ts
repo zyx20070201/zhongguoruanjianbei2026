@@ -22,8 +22,10 @@ export const inferArtifactKind = (context: StudioGenerationContext): StudioArtif
   if (context.template.renderer === 'flashcards') return 'flashcards';
   if (context.template.renderer === 'code_lab') return 'code_lab';
   if (context.template.renderer === 'slides') return 'slides';
+  if (context.template.renderer === 'light_visual_lesson') return 'light_visual_lesson';
   if (context.template.renderer === 'visual_explainer') return 'visual_explainer';
   if (context.template.renderer === 'interactive_html') return 'interactive_demo';
+  if (context.template.renderer === 'hyperframes_composition') return 'hyperframes_video';
   if (context.template.renderer === 'manim_script') return 'animation_script';
   if (context.template.renderer === 'remotion_source') return 'ui_video';
   if (context.template.id === 'video_script') return 'video_script';
@@ -49,6 +51,174 @@ const parseJson = (value: string) => {
     }
   }
   return null;
+};
+
+const isRecord = (value: unknown): value is Record<string, any> =>
+  Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+const stringArray = (value: unknown, max = 8) =>
+  Array.isArray(value)
+    ? value.map((item) => clip(String(item), 500)).filter(Boolean).slice(0, max)
+    : [];
+
+const codeLabFallbackPayload = (context: StudioGenerationContext) => {
+  const topic = clip(context.input.prompt || context.template.promptFrame || context.template.title, 220);
+  return {
+    problem: {
+      statementMarkdown: [
+        `围绕「${topic}」完成一个可运行的代码练习。`,
+        '',
+        '实现一个程序：从标准输入读取若干整数，输出它们的和。这个默认题面用于生成失败时保持 Code Lab 可运行；重新生成后会替换为更贴合资料的题目。'
+      ].join('\n'),
+      examples: [
+        { input: '1 2 3\n', output: '6', explanation: '读取 1、2、3，和为 6。' }
+      ],
+      constraints: ['输入只包含整数。', '输出一个整数并换行。']
+    },
+    editor: {
+      language: 'javascript',
+      starterCode: [
+        "const fs = require('fs');",
+        "const nums = fs.readFileSync(0, 'utf8').trim().split(/\\s+/).filter(Boolean).map(Number);",
+        '',
+        '// TODO: replace the placeholder implementation with your solution.',
+        'const answer = nums.reduce((sum, value) => sum + value, 0);',
+        'console.log(answer);'
+      ].join('\n')
+    },
+    guide: {
+      hints: ['先确认输入如何被拆分成数字。', '边界情况可以从空格、换行和负数开始检查。'],
+      acceptanceCriteria: ['能运行公开样例。', '输出必须与期望输出一致。']
+    },
+    tests: {
+      cases: [
+        { id: 'case-1', name: '公开样例', stdin: '1 2 3\n', expectedStdout: '6', explanation: '基础求和。' },
+        { id: 'case-2', name: '包含负数', stdin: '10 -2 5 -3\n', expectedStdout: '10' }
+      ]
+    },
+    solution: {
+      approachMarkdown: '把标准输入按空白符切分为数字，累加后输出。复杂度为 O(n)。',
+      referenceCode: [
+        "const fs = require('fs');",
+        "const nums = fs.readFileSync(0, 'utf8').trim().split(/\\s+/).filter(Boolean).map(Number);",
+        'console.log(nums.reduce((sum, value) => sum + value, 0));'
+      ].join('\n'),
+      complexity: 'Time O(n), space O(n).'
+    }
+  };
+};
+
+const normalizeCodeLabPayload = (raw: any, context: StudioGenerationContext) => {
+  const fallback = codeLabFallbackPayload(context);
+  const problem = isRecord(raw?.problem) ? raw.problem : {};
+  const editor = isRecord(raw?.editor) ? raw.editor : {};
+  const guide = isRecord(raw?.guide) ? raw.guide : {};
+  const tests = isRecord(raw?.tests) ? raw.tests : {};
+  const solution = isRecord(raw?.solution) ? raw.solution : {};
+
+  const examples = Array.isArray(problem.examples)
+    ? problem.examples.slice(0, 4).map((example: any, index: number) => ({
+        input: clip(example?.input || '', 1200),
+        output: clip(example?.output || '', 1200),
+        explanation: clip(example?.explanation || '', 800)
+      })).filter((example: any) => example.input || example.output)
+    : [];
+
+  const cases = Array.isArray(tests.cases)
+    ? tests.cases.slice(0, 10).map((test: any, index: number) => ({
+        id: clip(test?.id || `case-${index + 1}`, 60),
+        name: clip(test?.name || `Case ${index + 1}`, 120),
+        stdin: clip(test?.stdin || '', 4000),
+        expectedStdout: clip(test?.expectedStdout ?? test?.output ?? '', 4000),
+        explanation: clip(test?.explanation || '', 800)
+      })).filter((test: any) => test.stdin || test.expectedStdout)
+    : [];
+
+  return {
+    problem: {
+      statementMarkdown: clip(problem.statementMarkdown || fallback.problem.statementMarkdown, 5000),
+      examples: examples.length ? examples : fallback.problem.examples,
+      constraints: stringArray(problem.constraints, 10).length ? stringArray(problem.constraints, 10) : fallback.problem.constraints
+    },
+    editor: {
+      language: clip(editor.language || context.input.options?.language as string || fallback.editor.language, 40),
+      starterCode: clip(editor.starterCode || fallback.editor.starterCode, 12000)
+    },
+    guide: {
+      hints: stringArray(guide.hints, 8).length ? stringArray(guide.hints, 8) : fallback.guide.hints,
+      acceptanceCriteria: stringArray(guide.acceptanceCriteria, 8).length
+        ? stringArray(guide.acceptanceCriteria, 8)
+        : fallback.guide.acceptanceCriteria
+    },
+    tests: {
+      cases: cases.length ? cases : fallback.tests.cases
+    },
+    solution: {
+      approachMarkdown: clip(solution.approachMarkdown || fallback.solution.approachMarkdown, 5000),
+      referenceCode: clip(solution.referenceCode || '', 12000),
+      complexity: clip(solution.complexity || '', 500)
+    }
+  };
+};
+
+const normalizeLightVisualLesson = (context: StudioGenerationContext, content: string) => {
+  const parsed = parseJson(content) || {};
+  const fallbackSections = sectionsFromMarkdown(content);
+  const rawSlides = Array.isArray(parsed.slides) && parsed.slides.length
+    ? parsed.slides
+    : fallbackSections.map((section) => ({
+        header: section.title,
+        description: section.body,
+        timeline: section.bullets.length
+          ? section.bullets.map((bullet) => ({ kind: 'text', content: bullet }))
+          : [{ kind: 'text', content: section.body || section.title }]
+      }));
+  const slides = rawSlides.slice(0, 18).map((slide: any, index: number) => {
+    const description = String(slide?.description || slide?.body || slide?.content || '').trim();
+    const timeline = Array.isArray(slide?.timeline)
+      ? slide.timeline.slice(0, 8).map((step: any) => ({
+          kind: step?.kind === 'visual' ? 'visual' : 'text',
+          content: clip(step?.content || step?.text || step?.description || '', 1000),
+          visualIndex: Number.isInteger(step?.visualIndex) ? step.visualIndex : undefined
+        })).filter((step: any) => step.content)
+      : [];
+    const visuals = Array.isArray(slide?.visuals)
+      ? slide.visuals.slice(0, 4).map((visual: any) => ({
+          type: ['diagram', 'chart', 'table', 'formula', 'code', 'image_hint', 'sketch'].includes(String(visual?.type)) ? String(visual.type) : 'diagram',
+          content: clip(visual?.content || visual?.description || visual?.hint || '', 1600)
+        })).filter((visual: any) => visual.content)
+      : [];
+    return {
+      header: clip(slide?.header || slide?.title || `Slide ${index + 1}`, 120),
+      description,
+      timeline: timeline.length ? timeline : [{ kind: 'text', content: description || clip(slide?.header || `Slide ${index + 1}`, 1000) }],
+      visuals
+    };
+  }).filter((slide: any) => slide.header || slide.description);
+  const nestedLesson = slides.length === 1 ? parseJson(slides[0].description || '') : null;
+  if (Array.isArray(nestedLesson?.slides) && nestedLesson.slides.length) {
+    return normalizeLightVisualLesson(context, JSON.stringify({
+      ...nestedLesson,
+      markdownDraft: parsed.markdownDraft || nestedLesson.markdownDraft || ''
+    }));
+  }
+
+  return createArtifactEnvelope(
+    context,
+    'light_visual_lesson',
+    {
+      title: clip(parsed.title || context.input.prompt || context.template.title, 160),
+      markdownDraft: String(parsed.markdownDraft || parsed.markdown || '').trim(),
+      slides: slides.length ? slides : [{
+        header: context.template.title,
+        description: String(content || '').trim(),
+        timeline: [{ kind: 'text', content: clip(content, 1000) }],
+        visuals: []
+      }]
+    },
+    clip(parsed.title || context.input.prompt || context.template.title, 160),
+    '轻量课件式可视化讲解，按 slide 和 timeline 展开。'
+  );
 };
 
 const sectionsFromMarkdown = (content: string) => {
@@ -222,31 +392,13 @@ const normalizeFlashcards = (context: StudioGenerationContext, content: string) 
 };
 
 const normalizeCodeLab = (context: StudioGenerationContext, content: string) => {
-  const code = content.match(/```([a-zA-Z0-9_-]*)\s*([\s\S]*?)```/) || [];
+  const parsed = parseJson(content);
+  const payload = normalizeCodeLabPayload(parsed || {}, context);
   return createArtifactEnvelope(
     context,
     'code_lab',
-    {
-      objective: clip(content.match(/##\s*实验目标\s*([\s\S]*?)(?:\n##|$)/i)?.[1] || context.template.promptFrame, 1000),
-      steps: (content.match(/##\s*(?:TODO|实验步骤)\s*([\s\S]*?)(?:\n##|$)/i)?.[1] || '')
-        .split('\n')
-        .map((line) => line.replace(/^\s*[-*\d.、]+\s*/, '').trim())
-        .filter(Boolean)
-        .slice(0, 12),
-      language: code[1] || 'text',
-      starterCode: clip(code[2] || '', 4000),
-      tests: (content.match(/##\s*(?:测试任务|测试用例)\s*([\s\S]*?)(?:\n##|$)/i)?.[1] || '')
-        .split('\n')
-        .map((line) => line.replace(/^\s*[-*\d.、]+\s*/, '').trim())
-        .filter(Boolean)
-        .slice(0, 10),
-      debugHints: (content.match(/##\s*调试提示\s*([\s\S]*?)(?:\n##|$)/i)?.[1] || '')
-        .split('\n')
-        .map((line) => line.replace(/^\s*[-*\d.、]+\s*/, '').trim())
-        .filter(Boolean)
-        .slice(0, 10)
-    },
-    context.input.prompt || context.template.title,
+    payload,
+    clip((parsed as any)?.title || context.input.prompt || context.template.title, 160),
     '可操作的代码实操案例。'
   );
 };
@@ -323,6 +475,45 @@ const normalizeVideoScript = (context: StudioGenerationContext, content: string)
     { scenes, sceneCount: scenes.length },
     context.input.prompt || context.template.title,
     '教学视频或动画脚本。'
+  );
+};
+
+const normalizeHyperFramesVideo = (context: StudioGenerationContext, content: string) => {
+  const parsed = parseJson(content) || {};
+  const rawScenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
+  const durationSeconds = Math.max(30, Math.min(90, Number(parsed.durationSeconds || context.input.options?.durationSeconds || 60)));
+  const fallbackSceneDuration = durationSeconds / Math.max(1, rawScenes.length || 4);
+  const scenes = (rawScenes.length ? rawScenes : [
+    { title: 'Opening', headline: context.input.prompt || context.template.title, caption: '建立学习目标和问题背景。', narration: '先确认这个视频要解决的学习问题。', visual: 'Title card with source chips.' },
+    { title: 'Concept', headline: '核心概念', caption: '提炼资料中的定义、条件和关键关系。', narration: '把核心概念拆成可以观察的对象和关系。', visual: 'Concept cards connect on screen.' },
+    { title: 'Process', headline: '过程演示', caption: '用状态变化展示推理或操作步骤。', narration: '逐步展示每一步发生了什么，以及为什么成立。', visual: 'Animated timeline with highlighted states.' },
+    { title: 'Review', headline: '复盘检查', caption: '总结结论、易错点和自测问题。', narration: '最后用一个检查问题确认是否真正理解。', visual: 'Checklist and final callout.' }
+  ]).slice(0, 8).map((scene: any, index: number) => ({
+    id: clip(scene?.id || `scene-${index + 1}`, 60),
+    title: clip(scene?.title || `Scene ${index + 1}`, 80),
+    start: Math.max(0, Number.isFinite(Number(scene?.start)) ? Number(scene.start) : index * fallbackSceneDuration),
+    duration: Math.max(3, Math.min(24, Number.isFinite(Number(scene?.duration)) ? Number(scene.duration) : fallbackSceneDuration)),
+    headline: clip(scene?.headline || scene?.title || context.input.prompt || context.template.title, 80),
+    caption: clip(scene?.caption || scene?.summary || '', 180),
+    narration: clip(scene?.narration || scene?.voiceover || '', 420),
+    visual: clip(scene?.visual || scene?.visualDescription || '', 240),
+    bullets: stringArray(scene?.bullets, 5),
+    accent: clip(scene?.accent || '', 40)
+  }));
+  return createArtifactEnvelope(
+    context,
+    'hyperframes_video',
+    {
+      schemaVersion: 'hyperframes_video_plan.v1',
+      title: clip(parsed.title || context.input.prompt || context.template.title, 160),
+      summary: clip(parsed.summary || context.template.description, 500),
+      durationSeconds,
+      visualStyle: clip(parsed.visualStyle || 'clean educational motion graphics', 180),
+      scenes,
+      sourceNotes: stringArray(parsed.sourceNotes, 8)
+    },
+    parsed.title || context.input.prompt || context.template.title,
+    parsed.summary || '可由 HyperFrames 渲染为 MP4 的 HTML 视频 composition。'
   );
 };
 
@@ -490,8 +681,10 @@ export const normalizeStudioArtifact = (
   if (kind === 'flashcards') return normalizeFlashcards(context, content);
   if (kind === 'code_lab') return normalizeCodeLab(context, content);
   if (kind === 'slides') return normalizeSlides(context, content);
+  if (kind === 'light_visual_lesson') return normalizeLightVisualLesson(context, content);
   if (kind === 'visual_explainer') return normalizeVisualExplainer(context, content);
   if (kind === 'video_script') return normalizeVideoScript(context, content);
+  if (kind === 'hyperframes_video') return normalizeHyperFramesVideo(context, content);
   if (kind === 'interactive_demo') return normalizeInteractiveDemo(context, content);
   if (kind === 'animation_script') return normalizeAnimationScript(context, content);
   if (kind === 'ui_video') return normalizeUiVideo(context, content);

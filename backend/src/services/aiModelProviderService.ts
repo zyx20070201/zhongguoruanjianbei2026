@@ -32,6 +32,7 @@ export interface ProviderChatOptions {
   attachments?: ChatSessionAttachmentContext[];
   visualEvidence?: VisualEvidenceItem[];
   systemPrompt?: string;
+  maxTokens?: number;
 }
 
 export interface ProviderChatResult {
@@ -262,6 +263,17 @@ class AiModelProviderService {
       });
   }
 
+  configuredVisionProvider(options?: Pick<ProviderChatOptions, 'provider' | 'useCase'>): AiModelProviderId | undefined {
+    const preferred = this.provider({ provider: options?.provider, useCase: options?.useCase || 'chat' });
+    const candidates: AiModelProviderId[] = preferred === 'deepseek'
+      ? ['openai', 'gemini', 'claude']
+      : [preferred, 'openai', 'gemini', 'claude'];
+    for (const provider of candidates) {
+      if (provider !== 'deepseek' && this.isConfigured({ provider, useCase: options?.useCase || 'chat' })) return provider;
+    }
+    return undefined;
+  }
+
   private normalizeOptions(contextOrOptions?: ProviderChatOptions | Record<string, any>, maybeOptions?: ProviderChatOptions): ProviderChatOptions {
     const looksLikeOptions =
       contextOrOptions &&
@@ -273,7 +285,8 @@ class AiModelProviderService {
         'signal' in contextOrOptions ||
         'attachments' in contextOrOptions ||
         'visualEvidence' in contextOrOptions ||
-        'systemPrompt' in contextOrOptions);
+        'systemPrompt' in contextOrOptions ||
+        'maxTokens' in contextOrOptions);
     return looksLikeOptions ? { ...(contextOrOptions as ProviderChatOptions), ...(maybeOptions || {}) } : (maybeOptions || {});
   }
 
@@ -300,7 +313,8 @@ class AiModelProviderService {
     const result = await deepseekService.chat(projectedMessages as any, undefined, {
       timeoutMs: options.timeoutMs,
       signal: options.signal,
-      systemPrompt: options.systemPrompt
+      systemPrompt: options.systemPrompt,
+      maxTokens: options.maxTokens
     });
     return { reply: result.reply, model: result.model, provider: 'deepseek', usage: result.usage as any };
   }
@@ -360,6 +374,7 @@ class AiModelProviderService {
     useCase?: AiProviderUseCase;
     model?: string;
     systemPrompt?: string;
+    attachments?: ChatSessionAttachmentContext[];
   }): Promise<{ data: T; model: string; provider: AiModelProviderId; usage: Record<string, unknown> | null | undefined }> {
     const response = await this.chat(
       [
@@ -378,6 +393,7 @@ class AiModelProviderService {
       useCase: params.useCase,
       model: params.model,
       timeoutMs: params.timeoutMs,
+      attachments: params.attachments,
       visualEvidence: params.context?.visualEvidence as VisualEvidenceItem[] | undefined,
       systemPrompt: params.systemPrompt
     }
@@ -445,7 +461,8 @@ class AiModelProviderService {
         body: JSON.stringify({
           model,
           messages: this.openaiChatCompletionMessages(messages, options),
-          temperature: 0.4
+          temperature: 0.4,
+          ...(options.maxTokens ? { max_tokens: options.maxTokens } : {})
         })
       });
       const data = await response.json().catch(() => null) as any;
@@ -468,7 +485,8 @@ class AiModelProviderService {
       body: JSON.stringify({
         model,
         instructions: options.systemPrompt || DEFAULT_SYSTEM_PROMPT,
-        input
+        input,
+        ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {})
       })
     });
     const data = await response.json().catch(() => null) as any;
@@ -623,7 +641,8 @@ class AiModelProviderService {
       signal: requestSignal(options),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: options.systemPrompt || DEFAULT_SYSTEM_PROMPT }] },
-        contents
+        contents,
+        ...(options.maxTokens ? { generationConfig: { maxOutputTokens: options.maxTokens } } : {})
       })
     });
     const data = await response.json().catch(() => null) as any;
@@ -706,7 +725,7 @@ class AiModelProviderService {
       signal: requestSignal(options),
       body: JSON.stringify({
         model,
-        max_tokens: Number(process.env.CLAUDE_MAX_TOKENS || 4096),
+        max_tokens: options.maxTokens || Number(process.env.CLAUDE_MAX_TOKENS || 4096),
         system: options.systemPrompt || DEFAULT_SYSTEM_PROMPT,
         messages: messages
           .filter((message) => message.role !== 'system')
@@ -738,7 +757,7 @@ class AiModelProviderService {
       signal: requestSignal(options),
       body: JSON.stringify({
         model,
-        max_tokens: Number(process.env.CLAUDE_MAX_TOKENS || 4096),
+        max_tokens: options.maxTokens || Number(process.env.CLAUDE_MAX_TOKENS || 4096),
         system: options.systemPrompt || DEFAULT_SYSTEM_PROMPT,
         stream: true,
         messages: messages

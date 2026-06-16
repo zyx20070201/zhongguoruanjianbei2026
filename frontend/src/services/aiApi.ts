@@ -79,7 +79,9 @@ export type AiContextMode =
 export type AiStudioResourceType =
   | 'report'
   | 'slide_deck'
+  | 'light_visual_lesson'
   | 'visual_explainer'
+  | 'hyperframes_composition'
   | 'mind_map'
   | 'flashcards'
   | 'quiz'
@@ -195,7 +197,7 @@ export interface AiStudioArtifactSummary {
 }
 
 export interface AiStudioDeliveryArtifact {
-  kind: 'markdown' | 'pptx' | 'html' | 'python' | 'tsx';
+  kind: 'markdown' | 'pptx' | 'html' | 'python' | 'tsx' | 'hyperframes';
   filename: string;
   mimeType: string;
   fileObjectId: string;
@@ -242,6 +244,19 @@ export interface AiCodeLabRunResult {
   message: string;
   time: string | null;
   memory: number | null;
+}
+
+export interface AiCodeLabTestRunResult {
+  provider: 'judge0';
+  language: string;
+  status: 'passed' | 'failed' | 'error';
+  passedCount: number;
+  totalCount: number;
+  results: Array<AiCodeLabRunResult & {
+    id: string;
+    expectedStdout: string;
+    passed: boolean;
+  }>;
 }
 
 export interface AiContextChipPayload {
@@ -751,6 +766,17 @@ export const aiApi = {
     stdin?: string;
   }): Promise<AiCodeLabRunResult> => {
     const response = await client.post('/studio/code-lab/run', payload, {
+      timeout: STUDIO_CODE_RUN_TIMEOUT_MS
+    });
+    return response.data;
+  },
+
+  runCodeLabTests: async (payload: {
+    language: string;
+    sourceCode: string;
+    cases: Array<{ id: string; stdin: string; expectedStdout: string }>;
+  }): Promise<AiCodeLabTestRunResult> => {
+    const response = await client.post('/studio/code-lab/run-tests', payload, {
       timeout: STUDIO_CODE_RUN_TIMEOUT_MS
     });
     return response.data;

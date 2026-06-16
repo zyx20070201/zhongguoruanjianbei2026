@@ -29,7 +29,7 @@ const parseSseBlock = (block: string) => {
   return { event, data: dataLines.join('\n') };
 };
 
-export type TerminalChatMode = 'chat' | 'agentic';
+export type TerminalChatMode = 'chat' | 'agentic' | 'new_agentic';
 
 export interface TerminalChatListItem {
   id: string;
@@ -114,6 +114,7 @@ export const learningApi = {
     sessionId?: string;
     workbenchId?: string;
     checkpointThreadId?: string;
+    mode?: TerminalChatMode;
     decision: {
       decision: 'approve' | 'reject';
       actionIds?: string[];
@@ -125,6 +126,7 @@ export const learningApi = {
       sessionId: data.sessionId,
       workbenchId: data.workbenchId,
       checkpointThreadId: data.checkpointThreadId,
+      mode: data.mode,
       messages: data.messages.map(({ role, content }) => ({ role, content })),
       decision: data.decision
     }, { timeout: 0 });

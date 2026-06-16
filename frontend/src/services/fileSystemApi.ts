@@ -72,6 +72,8 @@ export interface DiscoveredResource {
   publishedAt?: string;
   author?: string;
   contentPreview?: string;
+  imageUrl?: string;
+  thumbnailUrl?: string;
 }
 
 export interface SourceDiscoveryResult {

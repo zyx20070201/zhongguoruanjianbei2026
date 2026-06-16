@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import { loadEnv } from './config/loadEnv';
 import express from 'express';
 import cors from 'cors';
 import { ensureAuthSecuritySchema } from './config/ensureAuthSecuritySchema';
@@ -19,6 +19,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { securityHeaders } from './middleware/securityHeaders';
 import { configureSqliteConnection } from './config/db';
 
+loadEnv();
 configureHttpProxy();
 
 const app = express();

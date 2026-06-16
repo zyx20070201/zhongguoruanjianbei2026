@@ -1,0 +1,97 @@
+.viz {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: #fff;
+}
+
+.viz-h {
+  background: var(--bg-1);
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+
+.viz-h .viz-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.viz-h .viz-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.dl-btn {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.dl-btn:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.dl-btn:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.video-btn:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.dl-btn svg {
+  width: 11px;
+  height: 11px;
+}
+
+.vtag {
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.vtag.html {
+  background: rgba(234, 88, 12, 0.1);
+  color: var(--orange);
+}
+
+.vtag.react {
+  background: rgba(22, 163, 74, 0.1);
+  color: var(--green);
+}
+
+.viz-if {
+  width: 100%;
+  border: none;
+  background: #fff;
+  min-height: 80px;
+  display: block;
+  transition: height 0.3s;
+}

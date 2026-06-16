@@ -43,10 +43,32 @@ export interface CodeExecutionResult {
   memory: number | null;
 }
 
+export interface CodeExecutionTestCase {
+  id: string;
+  stdin: string;
+  expectedStdout: string;
+}
+
+export interface CodeExecutionTestCaseResult extends CodeExecutionResult {
+  id: string;
+  expectedStdout: string;
+  passed: boolean;
+}
+
+export interface CodeExecutionTestRunResult {
+  provider: 'judge0';
+  language: CodeLabLanguage;
+  status: 'passed' | 'failed' | 'error';
+  passedCount: number;
+  totalCount: number;
+  results: CodeExecutionTestCaseResult[];
+}
+
 const DEFAULT_JUDGE0_BASE_URL = 'http://localhost:2358';
 const MAX_SOURCE_LENGTH = Number(process.env.CODE_LAB_MAX_SOURCE_CHARS || 80_000);
 const MAX_STDIN_LENGTH = Number(process.env.CODE_LAB_MAX_STDIN_CHARS || 20_000);
 const JUDGE0_TIMEOUT_MS = Number(process.env.JUDGE0_TIMEOUT_MS || 30_000);
+const MAX_TEST_CASES = Number(process.env.CODE_LAB_MAX_TEST_CASES || 12);
 
 const LANGUAGE_IDS: Record<CodeLabLanguage, number> = {
   c: 50,
@@ -72,6 +94,8 @@ const normalizeLanguage = (language: string): CodeLabLanguage | null => {
   if (value in LANGUAGE_IDS) return value as CodeLabLanguage;
   return null;
 };
+
+const comparableOutput = (value: string) => String(value || '').replace(/\r\n/g, '\n').trimEnd();
 
 const judge0BaseUrl = () =>
   (process.env.JUDGE0_BASE_URL || process.env.CODE_LAB_JUDGE0_BASE_URL || DEFAULT_JUDGE0_BASE_URL).replace(/\/$/, '');
@@ -140,6 +164,40 @@ class CodeExecutionService {
       message: result.message || '',
       time: result.time || null,
       memory: typeof result.memory === 'number' ? result.memory : null
+    };
+  }
+
+  async runTests(input: CodeExecutionInput & { cases: CodeExecutionTestCase[] }): Promise<CodeExecutionTestRunResult> {
+    const language = normalizeLanguage(input.language);
+    if (!language) throw new Error(`Unsupported Code Lab language "${input.language}"`);
+    const cases = Array.isArray(input.cases) ? input.cases.slice(0, MAX_TEST_CASES) : [];
+    if (!cases.length) throw new Error('cases are required');
+
+    const results: CodeExecutionTestCaseResult[] = [];
+    for (const testCase of cases) {
+      const run = await this.run({
+        language,
+        sourceCode: input.sourceCode,
+        stdin: String(testCase.stdin || '')
+      });
+      const expectedStdout = String(testCase.expectedStdout || '');
+      results.push({
+        ...run,
+        id: String(testCase.id || `case-${results.length + 1}`),
+        expectedStdout,
+        passed: run.status.success && comparableOutput(run.stdout) === comparableOutput(expectedStdout)
+      });
+    }
+
+    const passedCount = results.filter((result) => result.passed).length;
+    const hasRuntimeError = results.some((result) => !result.status.success);
+    return {
+      provider: 'judge0',
+      language,
+      status: passedCount === results.length ? 'passed' : hasRuntimeError ? 'error' : 'failed',
+      passedCount,
+      totalCount: results.length,
+      results
     };
   }
 }

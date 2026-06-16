@@ -26,6 +26,7 @@ import {
   buildWorkspaceResourceWhere,
   workbenchResourceTypeFilter
 } from './workbenchResourceScope';
+import { isHiddenFromWorkspaceKnowledge, isInternalDerivedFileObject, visibleWorkspaceKnowledgeWhere } from './fileObjectVisibility';
 
 const CJK_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
 const SUSPICIOUS_LATIN1_PATTERN = /[À-ÿ]/;
@@ -99,16 +100,8 @@ const mapFileSystemObject = (node: any) => ({
   metadata: parseJsonObject(node.metadataJson)
 });
 
-const RESOURCE_ROLE_LABELS: Record<string, string> = {
-  source: 'Sources',
-  resource: 'Sources',
-  note: 'Files',
-  file: 'Files',
-  workspace: 'Files',
-  chat_attachment: 'Attachments',
-  generated: 'Generated',
-  artifact: 'Artifacts'
-};
+const SYSTEM_RESOURCE_ROOTS = new Set(['Sources', 'Files', 'Generated', 'Artifacts']);
+const LEGACY_WRAPPER_ROOTS = new Set(['Global']);
 
 const normalizeResourceRole = (value?: string | null) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -164,6 +157,37 @@ const sanitizeRelativePathSegments = (value: unknown) =>
         .trim()
     )
     .filter((segment) => segment && segment !== '.' && segment !== '..');
+
+const normalizeFolderPath = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw || raw === '/') return '';
+  const segments = sanitizeRelativePathSegments(raw);
+  if (segments.length && SYSTEM_RESOURCE_ROOTS.has(segments[0])) {
+    segments.shift();
+  }
+  return segments.length ? `/${segments.join('/')}` : '';
+};
+
+const dirnameOfPath = (path: string) => {
+  const index = path.lastIndexOf('/');
+  return index > 0 ? path.slice(0, index) : '';
+};
+
+const basenameOfPath = (path: string) => path.split('/').filter(Boolean).pop() || path.replace(/^\/+/, '');
+
+const legacyResourcePathMatch = (path: string) => {
+  const segments = path.split('/').filter(Boolean);
+  const resourceIndex = segments.findIndex((segment) => SYSTEM_RESOURCE_ROOTS.has(segment));
+  if (resourceIndex >= 0 && segments[resourceIndex + 1]) {
+    return `/${[...segments.slice(0, resourceIndex), ...segments.slice(resourceIndex + 1)].join('/')}`;
+  }
+
+  if (segments[0] && LEGACY_WRAPPER_ROOTS.has(segments[0]) && segments[1]) {
+    return `/${segments.slice(1).join('/')}`;
+  }
+
+  return null;
+};
 
 const INDEXABLE_EXTENSIONS = new Set([
   'pdf',
@@ -238,7 +262,8 @@ export class FileSystemService {
   }
 
   private static async ensureFolderPath(workspaceId: string, targetDir: string) {
-    const normalizedPath = targetDir.startsWith('/') ? targetDir : `/${targetDir}`;
+    const normalizedPath = normalizeFolderPath(targetDir);
+    if (!normalizedPath) return null;
     const parts = normalizedPath.split('/').filter((part) => part);
     let folder: any = null;
     let currentParentId: string | undefined;
@@ -249,6 +274,10 @@ export class FileSystemService {
       let currentFolder = await prisma.fileSystemObject.findUnique({
         where: { workspaceId_path: { workspaceId, path: currentPath } }
       });
+
+      if (currentFolder && currentFolder.nodeType !== 'folder') {
+        throw new FileSystemError(409, `A file already exists at folder path ${currentPath}`);
+      }
 
       if (!currentFolder) {
         currentFolder = await prisma.fileSystemObject.create({
@@ -284,16 +313,26 @@ export class FileSystemService {
     scope?: string | null;
     metadata?: Record<string, unknown>;
   }) {
-    if (input.parentId || input.parentPath) {
+    if (input.parentId) {
+      const parent = await prisma.fileSystemObject.findFirst({
+        where: { id: input.parentId, workspaceId: input.workspaceId, nodeType: 'folder' }
+      });
+      if (!parent) throw new FileSystemError(404, 'Parent folder not found');
       return {
-        parentId: input.parentId || undefined,
-        parentPath: input.parentPath || undefined
+        parentId: parent.id,
+        parentPath: parent.path
       };
     }
 
-    const role = normalizeResourceRole(input.role);
+    if (input.parentPath) {
+      const folder = await FileSystemService.ensureFolderPath(input.workspaceId, input.parentPath);
+      return {
+        parentId: folder?.id,
+        parentPath: folder?.path || ''
+      };
+    }
+
     const scope = normalizeScope(input.scope, input.workbenchId);
-    const section = RESOURCE_ROLE_LABELS[role] || RESOURCE_ROLE_LABELS.resource;
 
     if (scope === 'chat') {
       return {
@@ -308,10 +347,11 @@ export class FileSystemService {
         select: { rootPath: true, title: true }
       });
       const rootPath = workbench?.rootPath || `/${workbench?.title || input.workbenchId}`;
-      return { parentId: undefined, parentPath: `${rootPath}/${section}` };
+      const folder = await FileSystemService.ensureFolderPath(input.workspaceId, rootPath);
+      return { parentId: folder?.id, parentPath: folder?.path || '' };
     }
 
-    return { parentId: undefined, parentPath: `/Global/${section}` };
+    return { parentId: undefined, parentPath: '' };
   }
 
   private static async indexFileForKnowledge(node: any) {
@@ -342,6 +382,189 @@ export class FileSystemService {
         );
       });
     });
+  }
+
+  private static async repairLegacyResourceFolders(workspaceId: string) {
+    const nodes = await prisma.fileSystemObject.findMany({
+      where: { workspaceId },
+      orderBy: { path: 'asc' }
+    });
+    const nodesById = new Map(nodes.map((node: any) => [node.id, node]));
+    const foldersByPath = new Map(
+      nodes
+        .filter((node: any) => node.nodeType === 'folder')
+        .map((node: any) => [node.path, node])
+    );
+    const rootPaths = new Set(nodes.map((node: any) => node.path));
+
+    for (const node of nodes) {
+      if (node.nodeType !== 'file') continue;
+
+      const metadata = parseJsonObject(node.metadataJson);
+      const legacyPath = legacyResourcePathMatch(node.path);
+      if (metadata.folderTreeNormalizedAt && !legacyPath) continue;
+
+      let nextPath = node.path;
+      let nextParentId: string | null = node.parentId || null;
+
+      if (legacyPath) {
+        nextPath = legacyPath;
+        nextParentId = null;
+      } else {
+        const parent = node.parentId ? nodesById.get(node.parentId) : null;
+        if (parent && parent.nodeType === 'folder') continue;
+
+        const parentPath = dirnameOfPath(node.path);
+        if (!parentPath) {
+          nextParentId = null;
+        } else {
+          const parentFolder = foldersByPath.get(parentPath);
+          if (parentFolder) {
+            nextParentId = parentFolder.id;
+          } else {
+            nextParentId = null;
+          }
+        }
+      }
+
+      if (nextPath !== node.path) {
+        const nextParentPath = dirnameOfPath(nextPath);
+        const folder = nextParentPath ? await FileSystemService.ensureFolderPath(workspaceId, nextParentPath) : null;
+        nextParentId = folder?.id || null;
+        const targetName = basenameOfPath(nextPath);
+        nextPath = generateNewPath(folder?.path || '', targetName);
+        const siblingNames = await prisma.fileSystemObject.findMany({
+          where: {
+            workspaceId,
+            parentId: nextParentId
+          },
+          select: { name: true, id: true }
+        });
+        const existingNames = new Set(
+          siblingNames
+            .filter((sibling: { id: string; name: string }) => sibling.id !== node.id)
+            .map((sibling: { id: string; name: string }) => sibling.name)
+        );
+        const finalName = generateUniqueFilename(targetName, existingNames);
+        nextPath = generateNewPath(folder?.path || '', finalName);
+      }
+
+      if (rootPaths.has(nextPath) && nextPath !== node.path) continue;
+
+      if (nextPath !== node.path || nextParentId !== (node.parentId || null)) {
+        await prisma.fileSystemObject.update({
+          where: { id: node.id },
+          data: {
+            name: nextPath !== node.path ? basenameOfPath(nextPath) : node.name,
+            path: nextPath,
+            parentId: nextParentId,
+            metadataJson: serializeMetadata({
+              ...metadata,
+              folderTreeNormalizedAt: new Date().toISOString()
+            })
+          }
+        });
+        rootPaths.delete(node.path);
+        rootPaths.add(nextPath);
+      }
+    }
+
+    await FileSystemService.unwrapLegacyFolders(workspaceId);
+  }
+
+  private static async unwrapLegacyFolders(workspaceId: string) {
+    const legacyFolders = await prisma.fileSystemObject.findMany({
+      where: {
+        workspaceId,
+        nodeType: 'folder',
+        OR: [
+          { path: '/Global' },
+          { path: { startsWith: '/Global/' } },
+          ...Array.from(SYSTEM_RESOURCE_ROOTS).map((root) => ({ path: `/${root}` })),
+          ...Array.from(SYSTEM_RESOURCE_ROOTS).map((root) => ({ path: { startsWith: `/${root}/` } }))
+        ]
+      },
+      orderBy: { path: 'desc' }
+    });
+
+    for (const folder of legacyFolders) {
+      const shouldUnwrap =
+        SYSTEM_RESOURCE_ROOTS.has(folder.name) ||
+        (LEGACY_WRAPPER_ROOTS.has(folder.name) && (folder.parentId == null || folder.path === `/${folder.name}`));
+      const targetParent = shouldUnwrap && folder.parentId
+        ? await prisma.fileSystemObject.findFirst({
+            where: { id: folder.parentId, workspaceId, nodeType: 'folder' },
+            select: { id: true, path: true }
+          })
+        : null;
+      const targetParentId = shouldUnwrap ? targetParent?.id || null : folder.parentId || null;
+      const targetParentPath = shouldUnwrap ? targetParent?.path || '' : dirnameOfPath(folder.path);
+      const children = await prisma.fileSystemObject.findMany({
+        where: {
+          workspaceId,
+          parentId: folder.id
+        }
+      });
+
+      if (shouldUnwrap && children.length) {
+        const siblings = await prisma.fileSystemObject.findMany({
+          where: {
+            workspaceId,
+            parentId: targetParentId
+          },
+          select: { id: true, name: true }
+        });
+        const existingNames = new Set(
+          siblings
+            .filter((sibling) => sibling.id !== folder.id)
+            .map((sibling) => sibling.name)
+        );
+
+        for (const child of children) {
+          const nextName = generateUniqueFilename(child.name, existingNames);
+          existingNames.add(nextName);
+          const oldChildPath = child.path;
+          const nextPath = generateNewPath(targetParentPath, nextName);
+
+          await prisma.$transaction(async (tx: any) => {
+            await tx.fileSystemObject.update({
+              where: { id: child.id },
+              data: {
+                name: nextName,
+                path: nextPath,
+                parentId: targetParentId
+              }
+            });
+
+            if (child.nodeType === 'folder') {
+              const descendants = await tx.fileSystemObject.findMany({
+                where: {
+                  workspaceId,
+                  path: { startsWith: `${oldChildPath}/` }
+                }
+              });
+
+              for (const descendant of descendants) {
+                await tx.fileSystemObject.update({
+                  where: { id: descendant.id },
+                  data: { path: replacePathPrefix(descendant.path, nextPath, oldChildPath) }
+                });
+              }
+            }
+          });
+        }
+      }
+
+      const remainingChildren = await prisma.fileSystemObject.count({
+        where: {
+          workspaceId,
+          parentId: folder.id
+        }
+      });
+      if (remainingChildren === 0) {
+        await prisma.fileSystemObject.delete({ where: { id: folder.id } }).catch(() => undefined);
+      }
+    }
   }
 
   private static async repairNormalizedNames(workspaceId: string) {
@@ -395,17 +618,25 @@ export class FileSystemService {
     }
   }
 
-  static async getFileTree(workspaceId: string) {
+  static async getFileTree(workspaceId: string, options: { visibleWorkspaceKnowledgeOnly?: boolean } = {}) {
+    await FileSystemService.repairLegacyResourceFolders(workspaceId);
     await FileSystemService.repairNormalizedNames(workspaceId);
     const nodes = await prisma.fileSystemObject.findMany({
-      where: { workspaceId },
+      where: {
+        workspaceId,
+        ...(options.visibleWorkspaceKnowledgeOnly ? { scope: { not: 'chat' }, ...visibleWorkspaceKnowledgeWhere } : {})
+      },
       orderBy: [{ nodeType: 'asc' }, { name: 'asc' }]
     });
 
-    return nodes.map((node) => mapFileSystemObject(node));
+    return nodes
+      .map((node) => mapFileSystemObject(node))
+      .filter((node) => !options.visibleWorkspaceKnowledgeOnly || !isHiddenFromWorkspaceKnowledge(node));
   }
 
   static async initFileSystem(workspaceId: string) {
+    await FileSystemService.repairLegacyResourceFolders(workspaceId);
+    await FileSystemService.repairNormalizedNames(workspaceId);
     const existingFiles = await prisma.fileSystemObject.findMany({
       where: { workspaceId }
     });
@@ -1154,31 +1385,22 @@ export class FileSystemService {
   static async saveGeneratedContent(dto: SaveGeneratedContentDTO) {
     const { workspaceId, targetDir, filename, content, category } = dto;
 
-    const useVirtualTarget = Boolean(dto.workbenchId);
-    const target = useVirtualTarget
-      ? await FileSystemService.resolveDefaultParent({
-          workspaceId,
-          workbenchId: dto.workbenchId,
-          role: dto.resourceRole || dto.resourceType || category || 'generated',
-          scope: dto.scope || 'workbench'
-        })
-      : { parentPath: targetDir };
-    if (!target.parentPath) throw new FileSystemError(400, 'Target directory is required');
-
-    const folder = useVirtualTarget ? null : await FileSystemService.ensureFolderPath(workspaceId, target.parentPath);
-
-    if (!useVirtualTarget && !folder) throw new FileSystemError(500, 'Failed to ensure target directory');
+    const target = await FileSystemService.resolveDefaultParent({
+      workspaceId,
+      parentPath: targetDir,
+      workbenchId: dto.workbenchId,
+      role: dto.resourceRole || dto.resourceType || category || 'generated',
+      scope: dto.scope || (dto.workbenchId ? 'workbench' : 'workspace')
+    });
 
     const siblings = await prisma.fileSystemObject.findMany({
-      where: useVirtualTarget
-        ? { workspaceId, path: { startsWith: `${target.parentPath.replace(/\/+$/, '')}/` } }
-        : { workspaceId, parentId: folder!.id },
+      where: { workspaceId, parentId: target.parentId || null },
       select: { name: true }
     });
     const existingNames = new Set<string>(siblings.map((s: { name: string }) => s.name));
     const finalFilename = generateUniqueFilename(filename, existingNames);
     const extension = getExtension(finalFilename);
-    const newPath = generateNewPath(useVirtualTarget ? target.parentPath : folder!.path, finalFilename);
+    const newPath = generateNewPath(target.parentPath, finalFilename);
     const resourceType = inferResourceRole({
       nodeType: 'file',
       fileCategory: category || 'generated',
@@ -1210,7 +1432,7 @@ export class FileSystemService {
         size,
         isBinary,
         workspaceId,
-        parentId: folder?.id,
+        parentId: target.parentId,
         ownerWorkbenchId: dto.workbenchId || undefined
       } as any
     });
@@ -1282,7 +1504,9 @@ export class FileSystemService {
       } as any
     });
 
-    return resources.map((node) => mapFileSystemObject(node));
+    return resources
+      .filter((node) => !isInternalDerivedFileObject(node))
+      .map((node) => mapFileSystemObject(node));
   }
 
   static async updateNodeTags(dto: UpdateNodeTagsDTO) {

@@ -16,6 +16,7 @@ import {
   getWorkbenchResourceFileIds,
   normalizeWorkbenchResourceRole
 } from './workbenchResourceScope';
+import { isInternalDerivedFileObject } from './fileObjectVisibility';
 
 const DEFAULT_LAYOUT_MODE = 'freeform' as const;
 
@@ -723,6 +724,7 @@ export class WorkbenchService {
     };
 
     resources
+      .filter((resource) => !isInternalDerivedFileObject(resource))
       .sort((left: any, right: any) => {
         const leftOrder = left.workbenchBindings?.[0]?.orderIndex ?? Number.MAX_SAFE_INTEGER;
         const rightOrder = right.workbenchBindings?.[0]?.orderIndex ?? Number.MAX_SAFE_INTEGER;

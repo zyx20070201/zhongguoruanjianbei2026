@@ -136,13 +136,17 @@ export class StudioRenderJobService {
     ]);
     const remotionBin = path.resolve(process.cwd(), '../frontend/node_modules/.bin/remotion');
     const remotion = await fs.access(remotionBin).then(() => true).catch(() => false);
+    const hyperframesBin = path.resolve(process.cwd(), 'node_modules/.bin/hyperframes');
+    const hyperframes = await fs.access(hyperframesBin).then(() => true).catch(() => false);
     return {
       pptx: true,
       html: true,
       manim,
       ffmpeg,
       remotion,
-      remotionBin: remotion ? remotionBin : null
+      remotionBin: remotion ? remotionBin : null,
+      hyperframes,
+      hyperframesBin: hyperframes ? hyperframesBin : null
     };
   }
 
@@ -307,6 +311,9 @@ export class StudioRenderJobService {
       if (job.kind === 'tsx') {
         return await this.renderRemotion(job);
       }
+      if (job.kind === 'hyperframes') {
+        return await this.renderHyperFrames(job);
+      }
       return this.update(job.id, {
         status: 'skipped',
         stage: 'skipped',
@@ -424,6 +431,102 @@ export class StudioRenderJobService {
         'Remotion CLI was detected, but automated rendering needs a generated Remotion project wrapper.',
         'The TSX source file is saved; render orchestration can be enabled once a composition host is configured.'
       ],
+      completedAt: now()
+    });
+  }
+
+  private async renderHyperFrames(job: StudioRenderJobRecord) {
+    const capabilities = await this.capabilities();
+    if (!capabilities.hyperframes || !capabilities.hyperframesBin) {
+      return this.update(job.id, {
+        status: 'failed',
+        stage: 'missing-runtime',
+        progress: 100,
+        logs: ['HyperFrames CLI is not installed in the backend project.'],
+        error: 'HyperFrames runtime unavailable. Run npm install in backend and retry this render job.',
+        completedAt: now()
+      });
+    }
+    if (!capabilities.ffmpeg) {
+      return this.update(job.id, {
+        status: 'failed',
+        stage: 'missing-ffmpeg',
+        progress: 100,
+        logs: ['HyperFrames local rendering requires FFmpeg.'],
+        error: 'FFmpeg is not installed or not available on PATH. Install FFmpeg and retry this render job.',
+        completedAt: now()
+      });
+    }
+
+    const { content } = await this.readSourceText(job);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pp1-studio-hyperframes-'));
+    const assetsDir = path.join(tempDir, 'assets');
+    await fs.mkdir(assetsDir, { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'index.html'), content, 'utf-8');
+    const gsapSource = path.resolve(process.cwd(), 'node_modules/gsap/dist/gsap.min.js');
+    await fs.copyFile(gsapSource, path.join(assetsDir, 'gsap.min.js'));
+
+    await this.update(job.id, {
+      stage: 'linting',
+      progress: 24,
+      logs: ['HyperFrames CLI detected. Validating composition with hyperframes lint.']
+    });
+
+    const lint = await execFileAsync(capabilities.hyperframesBin, ['lint', tempDir, '--json'], {
+      cwd: tempDir,
+      timeout: 60000
+    }).catch((error) => {
+      throw new Error(`HyperFrames lint failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+
+    await this.update(job.id, {
+      stage: 'rendering',
+      progress: 48,
+      logs: [
+        'HyperFrames lint completed.',
+        lint.stdout ? lint.stdout.slice(0, 1200) : 'No lint findings.'
+      ]
+    });
+
+    const outputPath = path.join(tempDir, 'visualize-hyperframes-video.mp4');
+    const rendered = await execFileAsync(
+      capabilities.hyperframesBin,
+      ['render', tempDir, '-c', 'index.html', '-o', outputPath, '-f', '30', '-q', 'standard'],
+      {
+        cwd: tempDir,
+        timeout: 300000
+      }
+    );
+    const buffer = await fs.readFile(outputPath);
+    const output = await FileSystemService.saveGeneratedContent({
+      workspaceId: job.workspaceId,
+      filename: 'visualize-hyperframes-video.mp4',
+      category: 'generated',
+      mimeType: 'video/mp4',
+      isBinary: true,
+      workbenchId: job.workbenchId || undefined,
+      resourceRole: 'generated',
+      resourceType: 'generated',
+      scope: job.workbenchId ? 'workbench' : 'workspace',
+      origin: 'ai',
+      metadata: {
+        generator: 'studio-render-job',
+        renderJobId: job.id,
+        framework: 'HyperFrames',
+        sourceFileObjectId: job.sourceFileObjectId
+      },
+      content: buffer
+    });
+    return this.update(job.id, {
+      status: 'succeeded',
+      stage: 'rendered',
+      progress: 100,
+      logs: [
+        rendered.stdout ? rendered.stdout.slice(0, 1600) : 'HyperFrames render completed.',
+        `Rendered MP4 output: ${output.path}`
+      ],
+      outputFileObjectId: output.id,
+      output: { outputFileObjectId: output.id, path: output.path, mimeType: 'video/mp4' },
       completedAt: now()
     });
   }

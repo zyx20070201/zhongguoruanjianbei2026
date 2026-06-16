@@ -71,9 +71,13 @@ const kindSpecificChecks = (artifact: StudioStructuredArtifact<any>) => {
     ];
   }
   if (artifact.artifactKind === 'code_lab') {
+    const payload = artifact.payload || {};
+    const editor = payload.editor || {};
+    const tests = payload.tests || {};
+    const cases = Array.isArray(tests.cases) ? tests.cases : [];
     return [
-      check('lab.code', 'Starter Code', Boolean(artifact.payload.starterCode), 'warning', artifact.payload.starterCode ? '包含 Starter Code。' : '缺少 Starter Code。'),
-      check('lab.steps', '实验步骤', Array.isArray(artifact.payload.steps) && artifact.payload.steps.length > 0, 'warning', '检查是否包含可执行步骤。')
+      check('lab.code', 'Starter Code', Boolean(editor.starterCode), 'warning', editor.starterCode ? '包含 Starter Code。' : '缺少 Starter Code。'),
+      check('lab.tests', '测试用例', cases.length > 0, 'warning', cases.length ? `包含 ${cases.length} 个可执行测试用例。` : '缺少可执行测试用例。')
     ];
   }
   if (artifact.artifactKind === 'slides') {

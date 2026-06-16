@@ -6,6 +6,7 @@ import { studioRenderJobService } from '../services/studio/renderJobService';
 import { codeExecutionService } from '../services/studio/codeExecutionService';
 import { StudioGoalCategory } from '../services/studio/types';
 import { STUDIO_VISUALIZATION_IR_JSON_SCHEMA } from '../services/studio/visualizationIr';
+import { reactChatVideoRenderService } from '../services/reactChatVideoRenderService';
 
 const router = Router();
 
@@ -45,6 +46,34 @@ router.get('/code-lab/languages', (_req: Request, res: Response) => {
   return res.json({ languages: codeExecutionService.supportedLanguages() });
 });
 
+router.post('/react-chat-video', async (req: Request, res: Response) => {
+  const { type, code, width, height, fps } = req.body ?? {};
+
+  if (type !== 'react' && type !== 'html') {
+    return res.status(400).json({ error: 'type must be react or html' });
+  }
+  if (typeof code !== 'string' || !code.trim()) {
+    return res.status(400).json({ error: 'code is required' });
+  }
+
+  try {
+    const result = await reactChatVideoRenderService.render({
+      type,
+      code,
+      width: Number.isFinite(Number(width)) ? Number(width) : undefined,
+      height: Number.isFinite(Number(height)) ? Number(height) : undefined,
+      fps: Number.isFinite(Number(fps)) ? Number(fps) : undefined
+    });
+    res.setHeader('Content-Type', result.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.setHeader('X-React-Chat-Video-Metadata', encodeURIComponent(JSON.stringify(result.metadata)));
+    return res.send(result.buffer);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'React Chat video render failed';
+    return res.status(502).json({ error: message });
+  }
+});
+
 router.post('/code-lab/run', async (req: Request, res: Response) => {
   const { language, sourceCode, stdin } = req.body ?? {};
 
@@ -65,6 +94,38 @@ router.post('/code-lab/run', async (req: Request, res: Response) => {
     return res.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Code Lab execution failed';
+    return res.status(502).json({ error: message });
+  }
+});
+
+router.post('/code-lab/run-tests', async (req: Request, res: Response) => {
+  const { language, sourceCode, cases } = req.body ?? {};
+
+  if (typeof language !== 'string' || !language.trim()) {
+    return res.status(400).json({ error: 'language is required' });
+  }
+
+  if (typeof sourceCode !== 'string' || !sourceCode.trim()) {
+    return res.status(400).json({ error: 'sourceCode is required' });
+  }
+
+  if (!Array.isArray(cases) || cases.length === 0) {
+    return res.status(400).json({ error: 'cases are required' });
+  }
+
+  try {
+    const result = await codeExecutionService.runTests({
+      language,
+      sourceCode,
+      cases: cases.map((testCase, index) => ({
+        id: String(testCase?.id || `case-${index + 1}`),
+        stdin: String(testCase?.stdin || ''),
+        expectedStdout: String(testCase?.expectedStdout ?? '')
+      }))
+    });
+    return res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Code Lab tests failed';
     return res.status(502).json({ error: message });
   }
 });

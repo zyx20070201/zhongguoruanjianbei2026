@@ -1,7 +1,7 @@
 import { StudioGenerationContext, StudioReviewResult } from './types';
 import { buildFallbackTeachingVisualizationIR, normalizeTeachingVisualizationIR } from './visualizationIr';
 
-type DeliveryKind = 'markdown' | 'pptx' | 'html' | 'python' | 'tsx';
+type DeliveryKind = 'markdown' | 'pptx' | 'html' | 'python' | 'tsx' | 'hyperframes';
 
 export interface StudioDeliveryArtifact {
   kind: DeliveryKind;
@@ -27,8 +27,19 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 
+const escapeSingleQuotedAttr = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/'/g, '&#039;');
+
 const latestPrompt = (context: StudioGenerationContext) =>
   clip(context.input.prompt || context.template.promptFrame || context.template.title, 180);
+
+const markdownTitle = (content: string) => {
+  const match = String(content || '').match(/^\s*#\s+(.+?)\s*$/m);
+  return clip(match?.[1], 180);
+};
 
 const splitSlides = (content: string) =>
   content
@@ -385,6 +396,259 @@ export const AIStudioVideo: React.FC = () => {
 `;
 };
 
+const cellText = (value: string) =>
+  value
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const parseHyperFramesScenes = (content: string) => {
+  const rows = content
+    .split('\n')
+    .filter((line) => /^\|.+\|$/.test(line) && !/---/.test(line) && !/Start\s*\|/i.test(line))
+    .map((line) => line.split('|').slice(1, -1).map(cellText))
+    .filter((cells) => cells.length >= 5);
+  return rows.slice(0, 8).map((cells, index) => {
+    const start = Number(String(cells[0] || '').replace(/[^\d.]/g, ''));
+    const duration = Number(String(cells[1] || '').replace(/[^\d.]/g, ''));
+    return {
+      id: `scene-${index + 1}`,
+      start: Number.isFinite(start) ? start : index * 10,
+      duration: Number.isFinite(duration) && duration > 0 ? duration : 10,
+      headline: cells[2] || `Scene ${index + 1}`,
+      caption: cells[3] || '',
+      visual: cells[4] || '',
+      accent: ['#2f6f5e', '#3457d5', '#9a5b2f', '#7a3f73', '#276b7a'][index % 5]
+    };
+  });
+};
+
+const hyperFramesCompositionHtml = (context: StudioGenerationContext, content: string) => {
+  const title = markdownTitle(content) || latestPrompt(context);
+  const scenes = parseHyperFramesScenes(content);
+  const fallbackScenes = [
+    { id: 'scene-1', start: 0, duration: 8, headline: title, caption: '建立学习目标和问题背景。', visual: 'Title card and source chips.', accent: '#2f6f5e' },
+    { id: 'scene-2', start: 8, duration: 14, headline: '核心概念', caption: '提炼资料中的定义、条件和关键关系。', visual: 'Concept cards connect in sequence.', accent: '#3457d5' },
+    { id: 'scene-3', start: 22, duration: 18, headline: '过程演示', caption: '用状态变化展示推理或操作步骤。', visual: 'Timeline highlights each state change.', accent: '#9a5b2f' },
+    { id: 'scene-4', start: 40, duration: 12, headline: '复盘检查', caption: '总结结论、易错点和自测问题。', visual: 'Checklist and final question.', accent: '#7a3f73' }
+  ];
+  const normalizedScenes = scenes.length ? scenes : fallbackScenes;
+  const durationSeconds = Math.max(30, Math.ceil(Math.max(...normalizedScenes.map((scene) => scene.start + scene.duration), 60)));
+  const sourceLabels = context.capsule.citations.slice(0, 5).map((citation) => citation.label);
+  const safeAccent = (value: string | undefined, index: number) =>
+    /^#[0-9a-f]{3,8}$/i.test(String(value || '')) ? String(value) : ['#2f6f5e', '#3457d5', '#9a5b2f', '#7a3f73', '#276b7a'][index % 5];
+  const clipSections = normalizedScenes.map((scene, index) => {
+    const id = (scene.id || `scene-${index + 1}`).replace(/[^a-zA-Z0-9_-]/g, '-');
+    return [
+      `<section id="${escapeHtml(id)}" class="clip" data-start="${scene.start}" data-duration="${scene.duration}" data-track-index="${index}" style="--accent: ${safeAccent(scene.accent, index)}">`,
+      '  <div class="scene-shell">',
+      '    <div class="copy">',
+      `      <div class="eyebrow">Scene ${String(index + 1).padStart(2, '0')}</div>`,
+      `      <h2 class="headline">${escapeHtml(scene.headline || `Scene ${index + 1}`)}</h2>`,
+      `      <p class="caption">${escapeHtml(scene.caption || '')}</p>`,
+      '    </div>',
+      '    <div class="visual">',
+      '      <div class="line line-a"></div>',
+      '      <div class="line line-b"></div>',
+      '      <div class="node node-a">1</div>',
+      '      <div class="node node-b">2</div>',
+      '      <div class="node node-c">3</div>',
+      `      <p class="visual-text">${escapeHtml(scene.visual || 'Animated learning visual')}</p>`,
+      '    </div>',
+      '  </div>',
+      '</section>'
+    ].join('\n');
+  }).join('\n');
+  const variables = JSON.stringify([
+    { id: 'title', type: 'string', label: 'Title', default: title },
+    { id: 'durationSeconds', type: 'number', label: 'Duration', default: durationSeconds }
+  ]);
+  const scenesJson = JSON.stringify(normalizedScenes).replace(/</g, '\\u003c');
+  const sourcesJson = JSON.stringify(sourceLabels).replace(/</g, '\\u003c');
+
+  const timelineShim = `
+    (function () {
+      if (window.gsap && window.gsap.timeline) return;
+      function applyValue(element, prop, value) {
+        if (!element) return;
+        if (prop === 'opacity') element.style.opacity = String(value);
+        if (prop === 'visibility') element.style.visibility = String(value);
+        if (prop === 'width') element.style.width = String(value);
+        if (prop === 'scale') element.dataset.hfScale = String(value);
+        if (prop === 'x') element.dataset.hfX = String(value);
+        if (prop === 'y') element.dataset.hfY = String(value);
+        if (prop === 'rotation') element.dataset.hfRotation = String(value);
+        if (prop === 'scale' || prop === 'x' || prop === 'y' || prop === 'rotation') {
+          var x = element.dataset.hfX || '0';
+          var y = element.dataset.hfY || '0';
+          var scale = element.dataset.hfScale || '1';
+          var rotation = element.dataset.hfRotation || '0';
+          element.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + scale + ') rotate(' + rotation + 'deg)';
+        }
+      }
+      function toArray(selector) {
+        return Array.prototype.slice.call(document.querySelectorAll(selector));
+      }
+      window.gsap = {
+        timeline: function () {
+          var operations = [];
+          var callbacks = {};
+          var currentTime = 0;
+          var playing = false;
+          var raf = 0;
+          var startMs = 0;
+          function add(type, selector, fromVars, toVars, at) {
+            operations.push({
+              type: type,
+              selector: selector,
+              fromVars: fromVars || {},
+              toVars: toVars || {},
+              at: Number(at || 0),
+              duration: Number((toVars && toVars.duration) || 0)
+            });
+          }
+          function render(time) {
+            currentTime = Math.max(0, time);
+            operations.forEach(function (operation) {
+              var elements = toArray(operation.selector);
+              var local = currentTime - operation.at;
+              var progress = operation.duration <= 0 ? (local >= 0 ? 1 : 0) : Math.max(0, Math.min(1, local / operation.duration));
+              if (local < 0) return;
+              elements.forEach(function (element) {
+                var vars = operation.type === 'fromTo'
+                  ? Object.assign({}, operation.fromVars, operation.toVars)
+                  : operation.toVars;
+                Object.keys(vars).forEach(function (prop) {
+                  if (prop === 'duration' || prop === 'ease' || prop === 'stagger') return;
+                  var fromValue = operation.fromVars[prop];
+                  var toValue = operation.toVars[prop];
+                  if (typeof fromValue === 'number' && typeof toValue === 'number') {
+                    applyValue(element, prop, fromValue + (toValue - fromValue) * progress);
+                  } else if (progress >= 1) {
+                    applyValue(element, prop, toValue);
+                  } else if (operation.type === 'fromTo') {
+                    applyValue(element, prop, fromValue);
+                  }
+                });
+              });
+            });
+            if (callbacks.onUpdate) callbacks.onUpdate();
+          }
+          function tick(now) {
+            if (!playing) return;
+            render((now - startMs) / 1000);
+            if (currentTime < ${durationSeconds}) raf = requestAnimationFrame(tick);
+            else playing = false;
+          }
+          return {
+            set: function (selector, vars, at) { add('set', selector, {}, vars, at); render(currentTime); return this; },
+            to: function (selector, vars, at) { add('to', selector, {}, vars, at); return this; },
+            fromTo: function (selector, fromVars, toVars, at) { add('fromTo', selector, fromVars, toVars, at); return this; },
+            eventCallback: function (name, callback) { callbacks[name] = callback; return this; },
+            time: function (value) { if (typeof value === 'number') { render(value); return this; } return currentTime; },
+            play: function () { playing = true; startMs = performance.now() - currentTime * 1000; cancelAnimationFrame(raf); raf = requestAnimationFrame(tick); return this; },
+            pause: function () { playing = false; cancelAnimationFrame(raf); return this; },
+            restart: function () { render(0); return this.play(); },
+            progress: function (value) { if (typeof value === 'number') render(value * ${durationSeconds}); return currentTime / ${durationSeconds}; }
+          };
+        }
+      };
+    })();
+  `;
+
+  return `<!doctype html>
+<html lang="zh-CN" data-composition-variables='${escapeSingleQuotedAttr(variables)}'>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(title)} - HyperFrames</title>
+  <script src="./assets/gsap.min.js"></script>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #f6f2ea; color: #171717; }
+    #root { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: linear-gradient(135deg, #fbf7ef 0%, #eef5f0 56%, #f2edf7 100%); }
+    .frame-border { position: absolute; inset: 48px; border: 2px solid rgba(23, 23, 23, 0.12); }
+    .brand { position: absolute; left: 78px; top: 66px; font-size: 28px; font-weight: 800; letter-spacing: 0; color: #33433d; }
+    .clock { position: absolute; right: 78px; top: 70px; font-size: 22px; color: #58615d; font-variant-numeric: tabular-nums; }
+    .title { position: absolute; left: 78px; top: 146px; width: 1220px; font-size: 86px; line-height: 0.98; font-weight: 900; letter-spacing: 0; color: #171717; }
+    .source-row { position: absolute; left: 78px; right: 78px; bottom: 58px; display: flex; justify-content: space-between; gap: 24px; color: #606a66; font-size: 22px; }
+    .source-list { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .clip { position: absolute; left: 78px; right: 78px; bottom: 132px; height: 540px; visibility: hidden; opacity: 0; }
+    .scene-shell { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr); gap: 42px; align-items: stretch; }
+    .copy { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+    .eyebrow { margin-bottom: 22px; font-size: 24px; font-weight: 800; color: var(--accent); }
+    .headline { margin: 0; font-size: 72px; line-height: 1.02; font-weight: 900; letter-spacing: 0; color: #1b1b1b; }
+    .caption { margin-top: 28px; max-width: 760px; font-size: 34px; line-height: 1.34; color: #4b5652; }
+    .visual { position: relative; min-width: 0; border: 2px solid rgba(23, 23, 23, 0.12); background: rgba(255, 255, 255, 0.72); overflow: hidden; }
+    .visual::before { content: ""; position: absolute; inset: 34px; border: 2px solid color-mix(in srgb, var(--accent) 42%, transparent); }
+    .node { position: absolute; display: grid; place-items: center; width: 142px; height: 142px; border-radius: 999px; background: var(--accent); color: white; font-size: 30px; font-weight: 900; }
+    .node-a { left: 72px; top: 92px; }
+    .node-b { right: 110px; top: 184px; }
+    .node-c { left: 250px; bottom: 92px; }
+    .line { position: absolute; height: 5px; background: rgba(23, 23, 23, 0.28); transform-origin: left center; }
+    .line-a { left: 202px; top: 174px; width: 360px; transform: rotate(15deg); }
+    .line-b { left: 318px; bottom: 172px; width: 300px; transform: rotate(-24deg); }
+    .visual-text { position: absolute; left: 46px; right: 46px; bottom: 40px; font-size: 28px; line-height: 1.32; color: #394541; }
+    .progress { position: absolute; left: 78px; right: 78px; bottom: 104px; height: 8px; background: rgba(23, 23, 23, 0.12); }
+    .progress-fill { height: 100%; width: 0; background: #171717; }
+  </style>
+</head>
+<body>
+  <main id="root" data-composition-id="root" data-start="0" data-duration="${durationSeconds}" data-width="1920" data-height="1080">
+    <div class="frame-border"></div>
+    <div class="brand">AI Studio / HyperFrames</div>
+    <div class="clock" id="clock">00:00 / ${String(Math.round(durationSeconds)).padStart(2, '0')}s</div>
+    <h1 class="title" id="title"></h1>
+    <div id="clips">
+${clipSections}
+    </div>
+    <div class="progress"><div class="progress-fill" id="progress"></div></div>
+    <div class="source-row">
+      <span class="source-list" id="sources"></span>
+      <span>Selected resources + user prompt</span>
+    </div>
+  </main>
+  <script>
+    ${timelineShim}
+    const vars = window.__hyperframes?.getVariables ? window.__hyperframes.getVariables() : {};
+    const scenes = ${scenesJson};
+    const sources = ${sourcesJson};
+    const durationSeconds = Number(vars.durationSeconds || ${durationSeconds});
+    document.getElementById('title').textContent = vars.title || ${JSON.stringify(title)};
+    document.getElementById('sources').textContent = sources.length ? 'Sources: ' + sources.join(' / ') : 'Sources: selected resources';
+    const tl = gsap.timeline({ paused: true });
+    tl.set('.clip', { visibility: 'hidden', opacity: 0 }, 0);
+    scenes.forEach((scene, index) => {
+      const selector = '.clip[data-track-index="' + index + '"]';
+      tl.set(selector, { visibility: 'visible' }, scene.start);
+      tl.fromTo(selector, { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 0.5 }, scene.start);
+      tl.fromTo(selector + ' .node', { scale: 0.72, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.7, stagger: 0.12 }, scene.start + 0.25);
+      tl.to(selector + ' .visual', { scale: 1.03, duration: Math.max(1, scene.duration - 1), ease: 'none' }, scene.start + 0.5);
+      tl.to(selector, { opacity: 0, y: -26, duration: 0.45 }, Math.max(scene.start + 0.75, scene.start + scene.duration - 0.45));
+      tl.set(selector, { opacity: 0 }, scene.start + scene.duration);
+      tl.set(selector, { visibility: 'hidden' }, scene.start + scene.duration);
+    });
+    tl.to('#progress', { width: '100%', duration: durationSeconds, ease: 'none' }, 0);
+    tl.eventCallback('onUpdate', () => {
+      const second = Math.floor(tl.time());
+      document.getElementById('clock').textContent = '00:' + String(second).padStart(2, '0') + ' / ' + String(Math.round(durationSeconds)).padStart(2, '0') + 's';
+    });
+    window.__timelines = window.__timelines || {};
+    window.__timelines.root = tl;
+    window.addEventListener('message', (event) => {
+      const data = event.data || {};
+      if (data.type !== 'hyperframes-control') return;
+      if (data.action === 'play') tl.play();
+      if (data.action === 'pause') tl.pause();
+      if (data.action === 'restart') tl.restart();
+      if (data.action === 'seek' && Number.isFinite(Number(data.time))) tl.time(Number(data.time));
+    });
+  </script>
+</body>
+</html>`;
+};
+
 export const buildStudioDeliveryArtifact = async (
   context: StudioGenerationContext,
   content: string,
@@ -425,6 +689,23 @@ export const buildStudioDeliveryArtifact = async (
       framework: 'p5.js',
       previewContent: content,
       metadata: { visualFramework: 'p5.js' }
+    };
+  }
+
+  if (context.template.id === 'hyperframes_video') {
+    return {
+      kind: 'hyperframes',
+      filename: 'visualize-hyperframes-video.html',
+      content: hyperFramesCompositionHtml(context, content),
+      mimeType: 'text/html; charset=utf-8',
+      isBinary: false,
+      framework: 'HyperFrames',
+      previewContent: content,
+      metadata: {
+        visualFramework: 'HyperFrames',
+        renderCommand: 'hyperframes render . -c index.html -o output.mp4',
+        compositionId: 'root'
+      }
     };
   }
 

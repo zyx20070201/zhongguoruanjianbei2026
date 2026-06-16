@@ -2,6 +2,8 @@ import { DocumentChunkRecord, documentChunkStore } from './documentChunkStore';
 import { embeddingService } from './embeddingService';
 import { vectorStoreService, VectorSearchResult } from './vectorStoreService';
 import { KnowledgeChunkType } from './chunkSchema';
+import prisma from '../config/db';
+import { visibleWorkspaceKnowledgeWhere } from './fileObjectVisibility';
 
 export interface KnowledgeSearchResult {
   chunkId: string;
@@ -269,12 +271,29 @@ export class KnowledgeSearchService {
     requireDiversity?: boolean;
     candidateLimit?: number;
     includeChatScoped?: boolean;
+    visibleWorkspaceOnly?: boolean;
   }): Promise<KnowledgeSearchResult[]> {
     const query = input.query.trim();
     const terms = tokenize(query);
     const limit = Math.min(Math.max(input.limit || 6, 1), 20);
 
     if (terms.length === 0 && !query) return [];
+    let effectiveFileIds = input.fileIds;
+    if (input.visibleWorkspaceOnly && !input.fileIds?.length && !input.includeChatScoped) {
+      const visibleFiles = await prisma.fileSystemObject.findMany({
+        where: {
+          workspaceId: input.workspaceId,
+          nodeType: 'file',
+          scope: { not: 'chat' },
+          ...visibleWorkspaceKnowledgeWhere
+        },
+        select: { id: true },
+        orderBy: [{ updatedAt: 'desc' }, { path: 'asc' }],
+        take: Number(process.env.KNOWLEDGE_VISIBLE_FILE_FILTER_MAX || 5000)
+      });
+      effectiveFileIds = visibleFiles.map((file) => file.id);
+      if (!effectiveFileIds.length) return [];
+    }
 
     const lexicalCandidateTake =
       input.candidateLimit != null
@@ -288,7 +307,7 @@ export class KnowledgeSearchService {
       .searchByTerms({
         workspaceId: input.workspaceId,
         terms,
-        fileIds: input.fileIds,
+        fileIds: effectiveFileIds,
         take: invertedCandidateTake,
         includeChatScoped: input.includeChatScoped
       })
@@ -296,12 +315,12 @@ export class KnowledgeSearchService {
     if (lexicalChunks.length < Math.min(LEXICAL_TOP_K, 12)) {
       lexicalChunks = await documentChunkStore.searchableChunks({
         workspaceId: input.workspaceId,
-        fileIds: input.fileIds,
+        fileIds: effectiveFileIds,
         includeChatScoped: input.includeChatScoped,
         take: Math.max(
           lexicalCandidateTake,
-          input.fileIds?.length
-            ? Math.min(Number(process.env.CONTEXT_EXPLICIT_FILE_CANDIDATES || 6000), input.fileIds.length * 240)
+          effectiveFileIds?.length
+            ? Math.min(Number(process.env.CONTEXT_EXPLICIT_FILE_CANDIDATES || 6000), effectiveFileIds.length * 240)
             : 0
         )
       });
@@ -311,7 +330,7 @@ export class KnowledgeSearchService {
       .search({
         workspaceId: input.workspaceId,
         query,
-        fileIds: input.fileIds,
+        fileIds: effectiveFileIds,
         limit: VECTOR_TOP_K
       })
       .catch((error) => {
@@ -326,7 +345,7 @@ export class KnowledgeSearchService {
       .map((chunk) => {
         const lexical = scoreLexical(query, terms, chunk, bm25Stats);
         const recency = recencyScore(chunk);
-        const boost = fileBoost(chunk, input.activeFileId, input.fileIds);
+        const boost = fileBoost(chunk, input.activeFileId, effectiveFileIds);
         const breakdown = emptyBreakdown();
         breakdown.lexical = Number(lexical.lexical.toFixed(3));
         breakdown.phrase = Number(lexical.phrase.toFixed(3));
@@ -351,7 +370,7 @@ export class KnowledgeSearchService {
       if (!chunk.text || !chunk.workspaceId || !chunk.fileObjectId) return;
       const lexical = scoreLexical(query, terms, chunk, bm25Stats);
       const recency = recencyScore(chunk);
-      const boost = fileBoost(chunk, input.activeFileId, input.fileIds);
+      const boost = fileBoost(chunk, input.activeFileId, effectiveFileIds);
       const vector = normalizeVectorScore(item.score);
       const breakdown = emptyBreakdown();
       breakdown.vector = Number(vector.toFixed(3));

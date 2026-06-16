@@ -1,0 +1,163 @@
+.cfg {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s ease, padding 0.35s ease;
+  padding: 0;
+}
+
+.cfg.open {
+  max-height: 520px;
+  padding: 12px 0 4px;
+}
+
+.cfg-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.cfg-g {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cfg-g.fw {
+  grid-column: 1 / -1;
+}
+
+.cfg-l {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-3);
+}
+
+.cfg-i {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  padding: 7px 10px;
+  border-radius: var(--rs);
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.2s;
+}
+
+.cfg-i:focus {
+  border-color: var(--accent);
+}
+
+.cfg-i::placeholder {
+  color: var(--text-3);
+}
+
+.pre-row {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  grid-column: 1 / -1;
+}
+
+.pre-b {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  padding: 4px 11px;
+  border-radius: 14px;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.pre-b:hover,
+.pre-b.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.conn {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+.conn-d {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.conn-d.ok {
+  background: var(--green);
+  box-shadow: 0 0 5px var(--green);
+}
+
+.conn-d.er {
+  background: var(--red);
+  box-shadow: 0 0 5px var(--red);
+}
+
+.fmt-row {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.fmt-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-1);
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+  border-radius: var(--rs);
+}
+
+.save-bar {
+  display: flex;
+  gap: 5px;
+  grid-column: 1 / -1;
+  margin-top: 4px;
+}
+
+.save-btn {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  padding: 4px 11px;
+  border-radius: 14px;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.save-btn:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.save-btn svg {
+  width: 11px;
+  height: 11px;
+}

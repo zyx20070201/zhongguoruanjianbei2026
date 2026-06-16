@@ -2084,10 +2084,15 @@ export class VideoAnalysisService {
         name: baseName,
         nodeType: 'file',
         fileCategory: 'media',
-        resourceType: 'generated',
-        scope: sourceFile.scope || 'workspace',
+        resourceType: 'internal_asset',
+        scope: 'internal',
         origin: 'system',
-        metadataJson: serializeMetadata({ generatedFromVideoId: sourceFile.id, frameIndex: index }),
+        metadataJson: serializeMetadata({
+          assetKind: 'video_frame',
+          hiddenFromKnowledge: true,
+          generatedFromVideoId: sourceFile.id,
+          frameIndex: index
+        }),
         tags: JSON.stringify(['video-frame']),
         extension: getExtension(baseName),
         path: pathValue,

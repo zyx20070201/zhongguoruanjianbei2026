@@ -20,6 +20,8 @@ export interface DiscoveredResource {
   publishedAt?: string;
   author?: string;
   contentPreview?: string;
+  imageUrl?: string;
+  thumbnailUrl?: string;
 }
 
 export interface ResourceDiscoveryResult {
@@ -43,6 +45,38 @@ const normalizeUrl = (value: unknown) => {
     if (!['http:', 'https:'].includes(parsed.protocol)) return '';
     parsed.hash = '';
     return parsed.toString();
+  } catch {
+    return '';
+  }
+};
+
+const firstString = (...values: unknown[]): string => {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (Array.isArray(value)) {
+      const nested: string = firstString(...value);
+      if (nested) return nested;
+    }
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      const nested: string = firstString(record.url, record.src, record.href);
+      if (nested) return nested;
+    }
+  }
+  return '';
+};
+
+const normalizeImageUrl = (value: unknown) => {
+  const url = normalizeUrl(value);
+  if (!url) return '';
+  return url.startsWith('http://') ? `https://${url.slice('http://'.length)}` : url;
+};
+
+const bilibiliBvidFromUrl = (value: string) => {
+  try {
+    const parsed = new URL(value);
+    if (!parsed.hostname.toLowerCase().includes('bilibili.com')) return '';
+    return parsed.pathname.match(/\/video\/(BV[a-zA-Z0-9]+)/)?.[1] || '';
   } catch {
     return '';
   }
@@ -126,9 +160,17 @@ export class ResourceDiscoveryService {
 
     const data = await response.json() as any;
     const results = Array.isArray(data.results) ? data.results : [];
-    return dedupeResults(results.map((item: any, index: number) => {
+    const mapped = dedupeResults(results.map((item: any, index: number) => {
       const highlights = Array.isArray(item.highlights) ? item.highlights.join(' ') : '';
       const snippet = compactText(item.summary || highlights || item.text || item.title, 700);
+      const imageUrl = normalizeImageUrl(firstString(
+        item.image,
+        item.imageUrl,
+        item.thumbnail,
+        item.thumbnailUrl,
+        item.favicon,
+        item.images
+      ));
       return {
         id: `exa-${index}-${Buffer.from(String(item.url || index)).toString('base64url').slice(0, 18)}`,
         title: compactText(item.title || item.url || 'Untitled source', 180),
@@ -140,9 +182,12 @@ export class ResourceDiscoveryService {
         provider: 'exa' as const,
         publishedAt: item.publishedDate || undefined,
         author: item.author || undefined,
-        contentPreview: compactText(item.text, 1200) || undefined
+        contentPreview: compactText(item.text, 1200) || undefined,
+        imageUrl: imageUrl || undefined,
+        thumbnailUrl: imageUrl || undefined
       };
     })).slice(0, maxResults);
+    return this.enrichThumbnails(mapped);
   }
 
   private async searchTavily(query: string, maxResults: number): Promise<DiscoveredResource[]> {
@@ -167,18 +212,53 @@ export class ResourceDiscoveryService {
     const data = await response.json() as any;
     const answer = compactText(data.answer, 900);
     const results = Array.isArray(data.results) ? data.results : [];
-    return dedupeResults(results.map((item: any, index: number) => ({
-      id: `tavily-${index}-${Buffer.from(String(item.url || index)).toString('base64url').slice(0, 18)}`,
-      title: compactText(item.title || item.url || 'Untitled source', 180),
-      url: String(item.url || ''),
-      snippet: compactText(item.content || item.raw_content || answer || item.title, 700),
-      summary: answer || compactText(item.content, 900) || undefined,
-      score: typeof item.score === 'number' ? item.score : undefined,
-      source: item.source || undefined,
-      provider: 'tavily' as const,
-      publishedAt: item.published_date || undefined,
-      contentPreview: compactText(item.raw_content || item.content, 1200) || undefined
-    }))).slice(0, maxResults);
+    const mapped = dedupeResults(results.map((item: any, index: number) => {
+      const imageUrl = normalizeImageUrl(firstString(
+        item.image,
+        item.imageUrl,
+        item.thumbnail,
+        item.thumbnailUrl,
+        item.favicon,
+        item.images
+      ));
+      return {
+        id: `tavily-${index}-${Buffer.from(String(item.url || index)).toString('base64url').slice(0, 18)}`,
+        title: compactText(item.title || item.url || 'Untitled source', 180),
+        url: String(item.url || ''),
+        snippet: compactText(item.content || item.raw_content || answer || item.title, 700),
+        summary: answer || compactText(item.content, 900) || undefined,
+        score: typeof item.score === 'number' ? item.score : undefined,
+        source: item.source || undefined,
+        provider: 'tavily' as const,
+        publishedAt: item.published_date || undefined,
+        contentPreview: compactText(item.raw_content || item.content, 1200) || undefined,
+        imageUrl: imageUrl || undefined,
+        thumbnailUrl: imageUrl || undefined
+      };
+    })).slice(0, maxResults);
+    return this.enrichThumbnails(mapped);
+  }
+
+  private async enrichThumbnails(results: DiscoveredResource[]) {
+    return Promise.all(results.map(async (result) => {
+      if (result.thumbnailUrl || result.imageUrl) return result;
+      const bvid = bilibiliBvidFromUrl(result.url);
+      if (!bvid) return result;
+      const thumbnailUrl = await this.fetchBilibiliThumbnail(bvid).catch(() => '');
+      return thumbnailUrl ? { ...result, imageUrl: thumbnailUrl, thumbnailUrl } : result;
+    }));
+  }
+
+  private async fetchBilibiliThumbnail(bvid: string) {
+    const response = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, {
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        'user-agent': 'Mozilla/5.0'
+      }
+    });
+    if (!response.ok) return '';
+    const data = await response.json() as any;
+    return normalizeImageUrl(data?.data?.pic);
   }
 }
 

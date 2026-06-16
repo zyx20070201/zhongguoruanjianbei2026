@@ -1,6 +1,6 @@
 import { ClientWorkbenchContext } from '../contextSystemService';
 import { LearnerStateAgentContext } from '../learnerStateContextAdapter';
-import { ContextCapsule, ContextPolicyDecision } from '../../types/contextSystem';
+import { ContextCapsule, ContextLocator, ContextPolicyDecision } from '../../types/contextSystem';
 
 export type StudioGoalCategory =
   | 'understand'
@@ -31,8 +31,10 @@ export type StudioRendererKind =
   | 'concept_graph'
   | 'slides'
   | 'code_lab'
+  | 'light_visual_lesson'
   | 'visual_explainer'
   | 'interactive_html'
+  | 'hyperframes_composition'
   | 'manim_script'
   | 'remotion_source';
 
@@ -80,7 +82,7 @@ export interface StudioResourceTemplate {
   tags?: string[];
   recommendedUse?: string;
   recommendationRules?: StudioRecommendationRule[];
-  legacyResourceType?: 'report' | 'slide_deck' | 'mind_map' | 'flashcards' | 'quiz' | 'data_table';
+  legacyResourceType?: 'report' | 'slide_deck' | 'mind_map' | 'flashcards' | 'quiz' | 'data_table' | 'visual_explainer';
 }
 
 export type StudioArtifactKind =
@@ -90,9 +92,11 @@ export type StudioArtifactKind =
   | 'flashcards'
   | 'code_lab'
   | 'slides'
+  | 'light_visual_lesson'
   | 'visual_explainer'
   | 'video_script'
   | 'interactive_demo'
+  | 'hyperframes_video'
   | 'animation_script'
   | 'ui_video'
   | 'study_plan';
@@ -105,6 +109,17 @@ export interface StudioSourceRef {
   locator?: Record<string, unknown>;
   snippet?: string;
   confidence?: 'high' | 'medium' | 'low';
+}
+
+export interface StudioContextRef {
+  type: 'workspace_file' | 'evidence' | 'conversation' | 'inline';
+  fileId?: string | null;
+  evidenceId?: string | null;
+  messageId?: string | null;
+  turnId?: string | null;
+  title?: string | null;
+  content?: string | null;
+  locator?: ContextLocator;
 }
 
 export interface StudioStructuredArtifact<TPayload = Record<string, unknown>> {
@@ -137,6 +152,9 @@ export interface StudioGenerateV2Input {
   prompt?: string;
   options?: Record<string, unknown>;
   context: ClientWorkbenchContext;
+  contextRefs?: StudioContextRef[];
+  prebuiltContextCapsule?: ContextCapsule;
+  prebuiltContextPolicy?: ContextPolicyDecision;
 }
 
 export interface StudioWorkflowTraceItem {
@@ -262,7 +280,7 @@ export interface StudioGenerateV2Result {
     logs?: string[];
   } | null;
   delivery?: {
-    kind: 'markdown' | 'pptx' | 'html' | 'python' | 'tsx';
+    kind: 'markdown' | 'pptx' | 'html' | 'python' | 'tsx' | 'hyperframes';
     filename: string;
     mimeType: string;
     fileObjectId: string;

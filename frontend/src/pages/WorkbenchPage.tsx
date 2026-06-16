@@ -216,7 +216,7 @@ function AIToolShell({
     const startX = event.clientX;
     const startWidth = sidebarWidth;
     const handlePointerMove = (moveEvent: PointerEvent) => {
-      const nextWidth = Math.min(760, Math.max(360, startWidth - (moveEvent.clientX - startX)));
+      const nextWidth = Math.max(360, startWidth - (moveEvent.clientX - startX));
       onResizeSidebar(nextWidth);
     };
     const handlePointerUp = () => {
@@ -246,7 +246,7 @@ function AIToolShell({
         </div>
       ) : null}
       <div className="flex min-h-0 w-full flex-col overflow-hidden bg-transparent">
-        <div className="relative z-20 flex h-14 shrink-0 items-center justify-between px-4">
+        <div className="relative z-20 flex h-[42px] shrink-0 items-center justify-between px-[0.4375rem]">
           <div className="relative min-w-0">
             {headerLeft || (
               <div className="inline-flex max-w-[260px] min-w-0 items-center gap-2 rounded-full px-2.5 py-1.5 text-left text-[15px] font-semibold text-[#25272b]">
@@ -330,16 +330,14 @@ function AIToolPanelShell({
       onToggleMode={onToggleMode}
       closeTitle="隐藏 AI 面板"
       headerLeft={
-        <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 items-center gap-1">
           <div className="flex gap-1 scrollbar-none overflow-x-auto w-fit text-center text-sm font-medium rounded-full bg-transparent py-1 touch-auto pointer-events-auto">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 type="button"
                 onClick={() => onSelectTool(tab.key)}
-                className={`min-w-fit p-1.5 ${
-                  activeTool === tab.key ? '' : 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'
-                }`}
+                className={`min-w-fit p-1.5 ${activeTool === tab.key ? '' : 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none`}
                 aria-pressed={activeTool === tab.key}
               >
                 <span className="whitespace-nowrap">{tab.label}</span>

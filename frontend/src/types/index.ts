@@ -319,7 +319,7 @@ export interface LearningTerminalMessage {
   role: 'user' | 'assistant';
   content: string;
   files?: TerminalChatFile[];
-  mode?: 'chat' | 'agentic';
+  mode?: 'chat' | 'agentic' | 'new_agentic';
   agentEvents?: AgentUiEvent[];
   statusHistory?: Array<{
     done: boolean;
@@ -382,7 +382,33 @@ export interface LearningTerminalMessage {
     title: string;
     success: boolean;
     summary: string;
-    result?: Record<string, unknown>;
+    result?: Record<string, unknown> & {
+      studioCard?: {
+        templateId?: string;
+        templateTitle?: string;
+        goal?: string;
+        renderer?: string;
+        runId?: string;
+        sourceMode?: string;
+        fileObjectId?: string;
+        filename?: string;
+        path?: string;
+        artifactId?: string;
+        artifactKey?: string;
+        renderJobId?: string;
+        renderJobStatus?: string;
+        renderJobKind?: string;
+        deliveryKind?: string;
+        framework?: string;
+        reviewScore?: number;
+        reviewPassed?: boolean;
+        reviewSummary?: string;
+        previewContent?: string;
+        usedContextSummary?: unknown;
+        evidenceIds?: string[];
+        sourceFileIds?: string[];
+      };
+    };
     error?: string;
   }>;
   agentTrace?: Array<{
@@ -526,7 +552,7 @@ export interface LearningTerminalAction {
 
 export interface LearningTerminalResponse {
   reply: string;
-  mode?: 'chat' | 'agentic';
+  mode?: 'chat' | 'agentic' | 'new_agentic';
   agentEvents?: AgentUiEvent[];
   goalDraft?: LearningGoalDraft;
   suggestedActions?: LearningTerminalAction[];
@@ -632,7 +658,33 @@ export interface LearningTerminalResponse {
     title: string;
     success: boolean;
     summary: string;
-    result?: Record<string, unknown>;
+    result?: Record<string, unknown> & {
+      studioCard?: {
+        templateId?: string;
+        templateTitle?: string;
+        goal?: string;
+        renderer?: string;
+        runId?: string;
+        sourceMode?: string;
+        fileObjectId?: string;
+        filename?: string;
+        path?: string;
+        artifactId?: string;
+        artifactKey?: string;
+        renderJobId?: string;
+        renderJobStatus?: string;
+        renderJobKind?: string;
+        deliveryKind?: string;
+        framework?: string;
+        reviewScore?: number;
+        reviewPassed?: boolean;
+        reviewSummary?: string;
+        previewContent?: string;
+        usedContextSummary?: unknown;
+        evidenceIds?: string[];
+        sourceFileIds?: string[];
+      };
+    };
     error?: string;
   }>;
   agentTrace?: Array<{

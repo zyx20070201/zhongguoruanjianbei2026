@@ -121,6 +121,19 @@ const toTerminalMessage = (message: any): TerminalPersistedMessage => {
 const sameTerminalMessage = (left: TerminalPersistedMessage, right: TerminalPersistedMessage) =>
   left.role === right.role && String(left.content || '') === String(right.content || '');
 
+const mergeTerminalMessage = (
+  existing: TerminalPersistedMessage,
+  incoming: TerminalPersistedMessage
+): TerminalPersistedMessage => {
+  if (!sameTerminalMessage(existing, incoming)) return incoming;
+  return {
+    ...existing,
+    ...incoming,
+    role: incoming.role,
+    content: incoming.content
+  };
+};
+
 const mergeTerminalMessages = (
   existing: TerminalPersistedMessage[],
   incoming: TerminalPersistedMessage[]
@@ -146,7 +159,11 @@ const mergeTerminalMessages = (
   }
 
   if (bestStart >= 0 && bestLength > 0) {
-    return [...existing.slice(0, bestStart), ...incoming];
+    const mergedIncoming = incoming.map((message, index) => {
+      const existingMessage = index < bestLength ? existing[bestStart + index] : null;
+      return existingMessage ? mergeTerminalMessage(existingMessage, message) : message;
+    });
+    return [...existing.slice(0, bestStart), ...mergedIncoming];
   }
   return [...existing, ...incoming];
 };
@@ -320,7 +337,13 @@ export class ConversationHistoryService {
   }) {
     const sessionId = input.sessionId || crypto.randomUUID();
     const title = clip(input.title || input.messages.find((message) => message.role === 'user')?.content || 'New chat', 80);
+    const existingSession = await prisma.conversationSession.findUnique({
+      where: { id: sessionId },
+      select: { metadataJson: true }
+    }).catch(() => null);
+    const existingMetadata = parseJson<Record<string, unknown>>(existingSession?.metadataJson, {});
     const sessionMetadata = {
+      ...existingMetadata,
       ...(input.sessionMetadata || {}),
       terminalPersisted: true,
       updatedFrom: 'terminal_chat_persistence'
@@ -536,7 +559,7 @@ export class ConversationHistoryService {
       where: {
         workspaceId: input.workspaceId,
         ...(input.workbenchId ? { workbenchId: input.workbenchId } : {}),
-        source: { in: ['terminal', 'terminal_chat'] }
+        source: { in: ['terminal', 'terminal_chat', 'terminal_v2'] }
       },
       orderBy: { updatedAt: 'desc' },
       take: Math.min(Math.max(input.limit || 30, 1), 100),
@@ -557,7 +580,7 @@ export class ConversationHistoryService {
         id: session.id,
         title: session.title || latest?.content?.slice(0, 80) || 'New chat',
         source: session.source,
-        mode: session.source === 'terminal_chat' ? 'chat' : 'agentic',
+        mode: session.source === 'terminal_chat' ? 'chat' : session.source === 'terminal_v2' ? 'new_agentic' : 'agentic',
         selectedSources: Array.isArray(metadata.selectedSources) ? metadata.selectedSources : [],
         chatFiles: Array.isArray(metadata.chatFiles) ? metadata.chatFiles : [],
         checkpointThreadId: typeof metadata.checkpointThreadId === 'string' ? metadata.checkpointThreadId : undefined,

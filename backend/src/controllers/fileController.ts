@@ -749,7 +749,6 @@ export const saveGeneratedContent = async (req: Request, res: Response) => {
     const { targetDir, filename, content, category, workbenchId, resourceRole, resourceType, scope, origin, metadata } = req.body;
     
     validateWorkspaceId(workspaceId);
-    if (!targetDir && !workbenchId) throw new FileSystemError(400, 'Target directory or workbenchId is required');
     if (!filename) throw new FileSystemError(400, 'Filename is required');
 
     const file = await FileSystemService.saveGeneratedContent({

@@ -3,6 +3,7 @@ import { getExtension } from '../utils/path';
 import { isTextLikeFile } from './fileTypeService';
 import { knowledgeIndexingService } from './knowledgeIndexingService';
 import { knowledgeSearchService, KnowledgeSearchResult } from './knowledgeSearchService';
+import { visibleWorkspaceKnowledgeWhere } from './fileObjectVisibility';
 
 export interface WorkspaceFileCard {
   fileObjectId: string;
@@ -259,12 +260,19 @@ export class WorkspaceFileIndexService {
     return indexableFile(file);
   }
 
-  async listFileCards(input: { workspaceId: string; query?: string; limit?: number; includeChatScoped?: boolean }): Promise<WorkspaceFileCard[]> {
+  async listFileCards(input: {
+    workspaceId: string;
+    query?: string;
+    limit?: number;
+    includeChatScoped?: boolean;
+    visibleWorkspaceOnly?: boolean;
+  }): Promise<WorkspaceFileCard[]> {
     const files = await prisma.fileSystemObject.findMany({
       where: {
         workspaceId: input.workspaceId,
         nodeType: 'file',
-        ...(!input.includeChatScoped ? { scope: { not: 'chat' } } : {})
+        ...(!input.includeChatScoped ? { scope: { not: 'chat' } } : {}),
+        ...(input.visibleWorkspaceOnly ? visibleWorkspaceKnowledgeWhere : {})
       },
       include: {
         knowledgeChunks: {
@@ -322,12 +330,14 @@ export class WorkspaceFileIndexService {
     force?: boolean;
     maxFiles?: number;
     fileIds?: string[];
+    visibleWorkspaceOnly?: boolean;
   }): Promise<WorkspaceIndexReport> {
     const files = await prisma.fileSystemObject.findMany({
       where: {
         workspaceId: input.workspaceId,
         nodeType: 'file',
-        ...(input.fileIds?.length ? { id: { in: input.fileIds } } : {})
+        ...(input.fileIds?.length ? { id: { in: input.fileIds } } : {}),
+        ...(input.visibleWorkspaceOnly ? visibleWorkspaceKnowledgeWhere : {})
       },
       include: {
         _count: { select: { knowledgeChunks: true } },
@@ -401,6 +411,7 @@ export class WorkspaceFileIndexService {
     fileLimit?: number;
     chunkLimit?: number;
     ensureIndexed?: boolean;
+    visibleWorkspaceOnly?: boolean;
   }): Promise<WorkspaceFileSearchResult> {
     const mode = input.mode || 'targeted_search';
     const overviewMode = mode === 'overview';
@@ -410,7 +421,8 @@ export class WorkspaceFileIndexService {
       workspaceId: input.workspaceId,
       query: overviewMode || input.fileIds?.length ? undefined : input.query,
       limit: input.fileIds?.length ? 300 : fileLimit,
-      includeChatScoped: Boolean(input.fileIds?.length)
+      includeChatScoped: Boolean(input.fileIds?.length),
+      visibleWorkspaceOnly: input.visibleWorkspaceOnly
     });
     if (input.fileIds?.length) {
       const allow = new Set(input.fileIds);
@@ -427,13 +439,15 @@ export class WorkspaceFileIndexService {
           workspaceId: input.workspaceId,
           fileIds: missing,
           force: true,
-          maxFiles: Math.min(missing.length, Number(process.env.WORKSPACE_FILE_SEARCH_AUTOINDEX_MAX || (overviewMode ? 12 : 6)))
+          maxFiles: Math.min(missing.length, Number(process.env.WORKSPACE_FILE_SEARCH_AUTOINDEX_MAX || (overviewMode ? 12 : 6))),
+          visibleWorkspaceOnly: input.visibleWorkspaceOnly
         });
         files = await this.listFileCards({
           workspaceId: input.workspaceId,
           query: overviewMode || input.fileIds?.length ? undefined : input.query,
           limit: input.fileIds?.length ? 300 : fileLimit,
-          includeChatScoped: Boolean(input.fileIds?.length)
+          includeChatScoped: Boolean(input.fileIds?.length),
+          visibleWorkspaceOnly: input.visibleWorkspaceOnly
         });
         if (input.fileIds?.length) {
           const allow = new Set(input.fileIds);
@@ -451,10 +465,15 @@ export class WorkspaceFileIndexService {
       query: input.query,
       fileIds: searchedFileIds.length ? searchedFileIds : undefined,
       limit: chunkLimit,
-      requireDiversity: true
+      requireDiversity: true,
+      visibleWorkspaceOnly: input.visibleWorkspaceOnly && !searchedFileIds.length
     });
 
-    const allCards = await this.listFileCards({ workspaceId: input.workspaceId, limit: 300 });
+    const allCards = await this.listFileCards({
+      workspaceId: input.workspaceId,
+      limit: 300,
+      visibleWorkspaceOnly: input.visibleWorkspaceOnly
+    });
     return {
       query: input.query,
       mode,

@@ -83,7 +83,7 @@ const combinedSignal = (...signals: Array<AbortSignal | undefined>) => {
   return controller.signal;
 };
 
-type DeepSeekRequestOptions = { timeoutMs?: number; signal?: AbortSignal; systemPrompt?: string };
+type DeepSeekRequestOptions = { timeoutMs?: number; signal?: AbortSignal; systemPrompt?: string; maxTokens?: number };
 
 const requestSignal = (options?: DeepSeekRequestOptions) =>
   combinedSignal(options?.signal, timeoutSignal(options?.timeoutMs));
@@ -259,6 +259,7 @@ export class DeepSeekService {
           ...normalizedMessages
         ],
         temperature: 0.4,
+        ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
         stream: false
       })
     });
@@ -322,6 +323,7 @@ export class DeepSeekService {
           ...normalizedMessages
         ],
         temperature: 0.4,
+        ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
         stream: true
       })
     });

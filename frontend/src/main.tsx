@@ -8,6 +8,7 @@ import LoginPage from './pages/LoginPage';
 import WorkspaceShellPage from './pages/WorkspaceShellPage';
 import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
 import WorkbenchPage from './pages/WorkbenchPage';
+import MarkdownAcceptancePage from './pages/MarkdownAcceptancePage';
 import { ThemeProvider } from './theme';
 
 const router = createBrowserRouter([
@@ -16,6 +17,7 @@ const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { path: '/', element: <LoginPage /> },
+      { path: '/__markdown-acceptance', element: <MarkdownAcceptancePage /> },
       {
         element: <ProtectedRoute />,
         children: [

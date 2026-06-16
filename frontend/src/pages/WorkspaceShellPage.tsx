@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   BookOpen,
   ChevronDown,
+  ChevronRight,
   ExternalLink,
   Folder,
   FileText,
@@ -11,6 +12,7 @@ import {
   FileImage,
   FileVideo,
   Globe2,
+  Home,
   LayoutDashboard,
   LibraryBig,
   Loader2,
@@ -26,6 +28,7 @@ import { workbenchApi } from '../services/workbenchApi';
 import { useAuthStore } from '../store/authStore';
 import { EditorState, FileSystemObject, LearningTerminalMessage, ResourceReference, TerminalChatFile, User, Workspace, Workbench, WorkbenchItem } from '../types';
 import LearningTerminal from '../components/workspace/LearningTerminal';
+import TerminalResourcePreviewPanel, { TerminalResourcePreview } from '../components/workspace/TerminalResourcePreviewPanel';
 import TerminalComposer from '../components/workspace/TerminalComposer';
 import { AddSourcesDialog } from '../components/workspace/AddSourcesDialog';
 import LearningIntelligenceDashboard, {
@@ -80,7 +83,7 @@ interface TerminalChatSession {
   lastMessagePreview?: string;
 }
 
-type TerminalChatMode = 'chat' | 'agentic';
+type TerminalChatMode = 'chat' | 'agentic' | 'new_agentic';
 
 type WorkspaceSettingsTab = 'account' | 'about';
 
@@ -162,6 +165,7 @@ const getTimeRange = (value?: string) => {
 const makeTerminalChatId = () => `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const normalizeTerminalChatMode = (value: unknown): TerminalChatMode =>
+  value === 'new_agentic' ? 'new_agentic' :
   value === 'agentic' ? 'agentic' : 'chat';
 
 const clipTerminalText = (value: unknown, maxLength = 4000) => {
@@ -467,6 +471,33 @@ const parseFileMetadata = (file: NonNullable<Workspace['fileObjects']>[number]) 
   }
 };
 
+const isInternalDerivedKnowledgeItem = (file: NonNullable<Workspace['fileObjects']>[number]) => {
+  const metadata = parseFileMetadata(file);
+  const tags = Array.isArray(file.tags) ? file.tags.map(String) : [];
+  const isInternalAsset = (
+    file.scope === 'internal' ||
+    file.resourceType === 'internal_asset' ||
+    metadata.hiddenFromKnowledge === true ||
+    metadata.assetKind === 'video_frame' ||
+    tags.includes('video-frame') ||
+    file.path.includes('/Video Frames/')
+  );
+  const isWorkbenchStudioOutput = Boolean(
+    file.ownerWorkbenchId &&
+    (
+      file.resourceType === 'generated' ||
+      file.resourceType === 'artifact' ||
+      file.fileCategory === 'generated' ||
+      file.fileCategory === 'artifact' ||
+      file.origin === 'ai' ||
+      file.origin === 'ai-studio' ||
+      file.origin === 'system' ||
+      tags.includes('ai-studio')
+    )
+  );
+  return isInternalAsset || isWorkbenchStudioOutput;
+};
+
 const getFileSourceMetadata = (file: NonNullable<Workspace['fileObjects']>[number]) => {
   const content = String(file.content || '');
   const title = /^#\s+(.+)$/m.exec(content)?.[1]?.trim();
@@ -636,11 +667,16 @@ export default function WorkspaceShellPage() {
   const [createWorkbenchOpen, setCreateWorkbenchOpen] = useState(false);
   const [createWorkbenchError, setCreateWorkbenchError] = useState<string | null>(null);
   const [addSourcesOpen, setAddSourcesOpen] = useState(false);
+  const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [creatingKnowledgeFolder, setCreatingKnowledgeFolder] = useState(false);
+  const [createFolderError, setCreateFolderError] = useState<string | null>(null);
+  const [knowledgeFolderId, setKnowledgeFolderId] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<FileSystemObject | null>(null);
   const [creatingWorkbench, setCreatingWorkbench] = useState(false);
   const [terminalDraftPrompt, setTerminalDraftPrompt] = useState('');
   const [terminalDraftMode, setTerminalDraftMode] = useState<TerminalChatMode>('chat');
   const [terminalDraftSources, setTerminalDraftSources] = useState<Array<{ fileId: string; mode: 'focused' | 'full_context' }>>([]);
+  const [terminalResourcePreview, setTerminalResourcePreview] = useState<TerminalResourcePreview | null>(null);
   const [terminalChatSessions, setTerminalChatSessions] = useState<Record<string, TerminalChatSession[]>>({});
   const [activeTerminalChatIds, setActiveTerminalChatIds] = useState<Record<string, string | null>>({});
   const sidebarResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -715,6 +751,7 @@ export default function WorkspaceShellPage() {
   useEffect(() => {
     if (!selectedWorkspace) return;
     setActiveTab('workbenches');
+    setKnowledgeFolderId(null);
   }, [selectedWorkspace?.id]);
 
   useEffect(() => {
@@ -868,9 +905,21 @@ export default function WorkspaceShellPage() {
 
   const sourceFiles = useMemo(() => {
     return (selectedWorkspace?.fileObjects || [])
-      .filter((file) => file.nodeType === 'file' && file.scope !== 'chat')
+      .filter((file) => file.nodeType === 'file' && file.scope !== 'chat' && !isInternalDerivedKnowledgeItem(file))
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }, [selectedWorkspace?.fileObjects]);
+
+  const knowledgeItems = useMemo(() => {
+    return (selectedWorkspace?.fileObjects || [])
+      .filter((item) => item.scope !== 'chat' && !isInternalDerivedKnowledgeItem(item))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }, [selectedWorkspace?.fileObjects]);
+  const activeKnowledgeFolder = useMemo(() => {
+    if (!knowledgeFolderId) return null;
+    const folder = knowledgeItems.find((item) => item.id === knowledgeFolderId && item.nodeType === 'folder') || null;
+    return folder;
+  }, [knowledgeFolderId, knowledgeItems]);
+  const addSourcesTargetFolder = activeTab === 'files' ? activeKnowledgeFolder : null;
 
   const currentTerminalChatSessions = selectedWorkspace ? terminalChatSessions[selectedWorkspace.id] || [] : [];
   const activeTerminalChatId = selectedWorkspace ? activeTerminalChatIds[selectedWorkspace.id] || null : null;
@@ -899,7 +948,16 @@ export default function WorkspaceShellPage() {
   }, [sourceFiles]);
 
   const refreshSelectedWorkspace = async () => {
-    await loadWorkspaceShell();
+    if (!selectedWorkspace?.id) {
+      await loadWorkspaceShell();
+      return;
+    }
+
+    const workspace = await workspaceApi.getWorkspace(selectedWorkspace.id);
+    setWorkspaces((items) => items.map((item) => item.id === workspace.id ? { ...item, ...workspace } : item));
+    if (Array.isArray(workspace.workbenches)) {
+      setWorkspaceWorkbenches((current) => ({ ...current, [workspace.id]: workspace.workbenches || [] }));
+    }
   };
 
   const openWorkbench = (workbenchId: string) => {
@@ -1047,7 +1105,7 @@ export default function WorkspaceShellPage() {
 
   const uploadWorkspaceFiles = async (files: File[]) => {
     if (!selectedWorkspace || files.length === 0) return;
-    await fileSystemApi.upload(selectedWorkspace.id, files, undefined, undefined, {
+    await fileSystemApi.upload(selectedWorkspace.id, files, addSourcesTargetFolder?.id || undefined, addSourcesTargetFolder?.path, {
       resourceRole: 'source',
       resourceType: 'source',
       scope: 'workspace',
@@ -1062,6 +1120,8 @@ export default function WorkspaceShellPage() {
     await fileSystemApi.importUrl(selectedWorkspace.id, {
       url: normalizedUrl,
       title: title.trim() || makeTitleFromUrl(normalizedUrl),
+      parentId: addSourcesTargetFolder?.id || undefined,
+      parentPath: addSourcesTargetFolder?.path,
       resourceRole: 'source',
       resourceType: 'source',
       scope: 'workspace',
@@ -1075,6 +1135,8 @@ export default function WorkspaceShellPage() {
     await fileSystemApi.createFile(selectedWorkspace.id, {
       name: makeSourceFilename(title, 'pasted-source'),
       content: `# ${title || 'Pasted source'}\n\nSource type: copied text\n\n${content}\n`,
+      parentId: addSourcesTargetFolder?.id || undefined,
+      parentPath: addSourcesTargetFolder?.path,
       fileCategory: 'text-source',
       resourceRole: 'source',
       resourceType: 'source',
@@ -1082,6 +1144,29 @@ export default function WorkspaceShellPage() {
       origin: 'user'
     });
     await refreshSelectedWorkspace();
+  };
+
+  const createKnowledgeFolder = async (name: string) => {
+    if (!selectedWorkspace) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    setCreatingKnowledgeFolder(true);
+    setCreateFolderError(null);
+    try {
+      await fileSystemApi.createFolder(selectedWorkspace.id, {
+        name: trimmed,
+        parentId: activeKnowledgeFolder?.id || undefined,
+        parentPath: activeKnowledgeFolder?.path,
+        scope: 'workspace'
+      });
+      await refreshSelectedWorkspace();
+      setCreateFolderOpen(false);
+    } catch (error: any) {
+      setCreateFolderError(error?.response?.data?.error || error?.message || 'Failed to create folder');
+    } finally {
+      setCreatingKnowledgeFolder(false);
+    }
   };
 
   const openFilePreview = (fileId: string) => {
@@ -1192,6 +1277,7 @@ export default function WorkspaceShellPage() {
     if (!selectedWorkspace?.id) return;
     setActiveTerminalChatIds((current) => ({ ...current, [selectedWorkspace.id]: null }));
     setTerminalDraftPrompt('');
+    setTerminalResourcePreview(null);
   };
 
   const updateActiveTerminalMessages = (messages: LearningTerminalMessage[]) => {
@@ -1376,6 +1462,8 @@ export default function WorkspaceShellPage() {
       await fileSystemApi.importUrl(selectedWorkspace.id, {
         url: source.url,
         title: source.title,
+        parentId: addSourcesTargetFolder?.id || undefined,
+        parentPath: addSourcesTargetFolder?.path,
         resourceRole: 'source',
         resourceType: 'source',
         scope: 'workspace',
@@ -2012,10 +2100,16 @@ export default function WorkspaceShellPage() {
             {activeTab === 'files' ? (
               <FilesPanel
                 workspaceId={selectedWorkspace.id}
-                files={sourceFiles}
+                files={knowledgeItems}
                 onAdd={() => setAddSourcesOpen(true)}
+                onAddFolder={() => {
+                  setCreateFolderError(null);
+                  setCreateFolderOpen(true);
+                }}
                 onOpenFile={openFilePreview}
                 onChanged={refreshSelectedWorkspace}
+                currentFolderId={knowledgeFolderId}
+                onCurrentFolderChange={setKnowledgeFolderId}
               />
             ) : null}
 
@@ -2083,56 +2177,72 @@ export default function WorkspaceShellPage() {
 
             {activeTab === 'terminal' ? (
               activeTerminalChat ? (
-                <div className="flex h-full min-h-0 flex-col bg-white">
-                  <div className="mx-auto flex h-14 w-full max-w-6xl shrink-0 items-center justify-between px-4 md:px-6">
-                    <button
-                      type="button"
-                      onClick={closeTerminalChat}
-                      className="inline-flex h-9 items-center gap-2 rounded-full px-3 text-sm font-medium text-gray-600 transition hover:bg-gray-100 hover:text-gray-900"
-                    >
-                      <Folder className="size-4" />
-                      {selectedWorkspace.name}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => startTerminalChat()}
-                      className="inline-flex size-9 items-center justify-center rounded-full text-gray-600 transition hover:bg-gray-100 hover:text-gray-900"
-                      title="New Chat"
-                    >
-                      <Plus className="size-5" />
-                    </button>
+                <div className="flex h-full min-h-0 bg-white">
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <div className="mx-auto flex h-14 w-full max-w-6xl shrink-0 items-center px-4 md:px-6">
+                      <button
+                        type="button"
+                        onClick={closeTerminalChat}
+                        className="inline-flex h-9 items-center gap-2 rounded-full px-3 text-sm font-medium text-gray-600 transition hover:bg-gray-100 hover:text-gray-900"
+                      >
+                        <Folder className="size-4" />
+                        {selectedWorkspace.name}
+                      </button>
+                    </div>
+                    <LearningTerminal
+                      key={activeTerminalChat.id}
+                      workspaceId={selectedWorkspace.id}
+                      sessionId={activeTerminalChat.id}
+                      initialCheckpointThreadId={activeTerminalChat.checkpointThreadId}
+                      workspaceName={selectedWorkspace.name}
+                      major={selectedWorkspace.major}
+                      workbenches={selectedWorkbenchItems}
+                      fileCount={sourceFiles.length}
+                      messages={currentMessages}
+                      hasMoreMessages={Boolean(activeTerminalChat.hasMoreMessages)}
+                      loadingEarlierMessages={Boolean(activeTerminalChat.messagesLoading)}
+                      onLoadEarlierMessages={() => loadTerminalChatMessages(activeTerminalChat.id, 'earlier')}
+                      onMessagesChange={updateActiveTerminalMessages}
+                      onCheckpointThreadIdChange={updateActiveTerminalCheckpointThread}
+                      onChatStarted={() => undefined}
+                      onUploadMaterials={() => setAddSourcesOpen(true)}
+                      onWorkbenchCreated={(workbenchId) => openWorkbench(workbenchId)}
+                      onRefresh={refreshSelectedWorkspace}
+                      variant="full"
+                      initialPrompt={terminalDraftPrompt}
+                      onInitialPromptConsumed={() => setTerminalDraftPrompt('')}
+                      mode={currentTerminalMode}
+                      selectedSources={currentTerminalSources}
+                      chatFiles={currentTerminalChatFiles}
+                      sourceFiles={terminalWorkspaceSources}
+                      onModeChange={updateActiveTerminalMode}
+                      onSelectedSourcesChange={(sources) => updateActiveTerminalSourceModes(sources)}
+                      onChatFilesChange={updateActiveTerminalChatFiles}
+                      onUploadChatFiles={uploadTerminalChatFiles}
+                      resourcePreview={terminalResourcePreview}
+                      onResourcePreviewChange={setTerminalResourcePreview}
+                    />
                   </div>
-                  <LearningTerminal
-                    key={activeTerminalChat.id}
-                    workspaceId={selectedWorkspace.id}
-                    sessionId={activeTerminalChat.id}
-                    initialCheckpointThreadId={activeTerminalChat.checkpointThreadId}
-                    workspaceName={selectedWorkspace.name}
-                    major={selectedWorkspace.major}
-                    workbenches={selectedWorkbenchItems}
-                    fileCount={sourceFiles.length}
-                    messages={currentMessages}
-                    hasMoreMessages={Boolean(activeTerminalChat.hasMoreMessages)}
-                    loadingEarlierMessages={Boolean(activeTerminalChat.messagesLoading)}
-                    onLoadEarlierMessages={() => loadTerminalChatMessages(activeTerminalChat.id, 'earlier')}
-                    onMessagesChange={updateActiveTerminalMessages}
-                    onCheckpointThreadIdChange={updateActiveTerminalCheckpointThread}
-                    onChatStarted={() => undefined}
-                    onUploadMaterials={() => setAddSourcesOpen(true)}
-                    onWorkbenchCreated={(workbenchId) => openWorkbench(workbenchId)}
-                    onRefresh={refreshSelectedWorkspace}
-                    variant="full"
-                    initialPrompt={terminalDraftPrompt}
-                    onInitialPromptConsumed={() => setTerminalDraftPrompt('')}
-                    mode={currentTerminalMode}
-                    selectedSources={currentTerminalSources}
-                    chatFiles={currentTerminalChatFiles}
-                    sourceFiles={terminalWorkspaceSources}
-                    onModeChange={updateActiveTerminalMode}
-                    onSelectedSourcesChange={(sources) => updateActiveTerminalSourceModes(sources)}
-                    onChatFilesChange={updateActiveTerminalChatFiles}
-                    onUploadChatFiles={uploadTerminalChatFiles}
-                  />
+                  {terminalResourcePreview ? (
+                    <div className="hidden h-full min-h-0 w-[min(50vw,760px)] min-w-[520px] shrink-0 xl:block">
+                      <TerminalResourcePreviewPanel
+                        workspaceId={selectedWorkspace.id}
+                        workbenchId={selectedWorkbenches[0]?.id}
+                        preview={terminalResourcePreview}
+                        onClose={() => setTerminalResourcePreview(null)}
+                      />
+                    </div>
+                  ) : null}
+                  {terminalResourcePreview ? (
+                    <div className="fixed inset-0 z-[80] bg-white xl:hidden">
+                      <TerminalResourcePreviewPanel
+                        workspaceId={selectedWorkspace.id}
+                        workbenchId={selectedWorkbenches[0]?.id}
+                        preview={terminalResourcePreview}
+                        onClose={() => setTerminalResourcePreview(null)}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <WorkspaceTerminalFolderChat
@@ -2200,12 +2310,27 @@ export default function WorkspaceShellPage() {
 
       <AddSourcesDialog
         isOpen={Boolean(addSourcesOpen && selectedWorkspace)}
+        targetLabel={addSourcesTargetFolder ? `To: ${addSourcesTargetFolder.path}` : 'To: Knowledge'}
         onClose={() => setAddSourcesOpen(false)}
         onUploadFiles={uploadWorkspaceFiles}
         onAddWebsite={addWorkspaceWebsite}
         onAddText={addWorkspaceText}
         onDiscoverSources={discoverWorkspaceSources}
         onImportDiscoveredSources={importWorkspaceSources}
+      />
+
+      <CreateFolderDialog
+        isOpen={Boolean(createFolderOpen && selectedWorkspace)}
+        loading={creatingKnowledgeFolder}
+        error={createFolderError}
+        targetLabel={activeKnowledgeFolder ? activeKnowledgeFolder.path : 'Knowledge'}
+        onClose={() => {
+          if (!creatingKnowledgeFolder) {
+            setCreateFolderOpen(false);
+            setCreateFolderError(null);
+          }
+        }}
+        onSubmit={(name) => void createKnowledgeFolder(name)}
       />
 
       <WorkspaceKnowledgePreviewModal
@@ -3203,12 +3328,16 @@ function WorkspacePanelHeader({
   title,
   count,
   actionLabel,
-  onAction
+  onAction,
+  secondaryActionLabel,
+  onSecondaryAction
 }: {
   title: string;
   count?: number;
   actionLabel?: string;
   onAction?: () => void;
+  secondaryActionLabel?: string;
+  onSecondaryAction?: () => void;
 }) {
   return (
     <div className="flex flex-col gap-1 px-1 mt-1.5 mb-3">
@@ -3218,16 +3347,28 @@ function WorkspacePanelHeader({
           {typeof count === 'number' ? <div className="text-lg font-medium text-gray-500">{count}</div> : null}
         </div>
 
-        {actionLabel && onAction ? (
+        {(actionLabel && onAction) || (secondaryActionLabel && onSecondaryAction) ? (
           <div className="flex w-full justify-end gap-1.5">
-            <button
-              type="button"
-              onClick={onAction}
-              className="px-2 py-1.5 rounded-xl bg-black text-white transition font-medium text-sm flex items-center"
-            >
-              <OWPlusIcon className="size-3" strokeWidth={2.5} />
-              <div className="hidden md:block md:ml-1 text-xs">{actionLabel}</div>
-            </button>
+            {secondaryActionLabel && onSecondaryAction ? (
+              <button
+                type="button"
+                onClick={onSecondaryAction}
+                className="px-2 py-1.5 rounded-xl bg-gray-50 text-gray-700 hover:bg-gray-100 transition font-medium text-sm flex items-center"
+              >
+                <Folder className="size-3.5" />
+                <div className="hidden md:block md:ml-1 text-xs">{secondaryActionLabel}</div>
+              </button>
+            ) : null}
+            {actionLabel && onAction ? (
+              <button
+                type="button"
+                onClick={onAction}
+                className="px-2 py-1.5 rounded-xl bg-black text-white transition font-medium text-sm flex items-center"
+              >
+                <OWPlusIcon className="size-3" strokeWidth={2.5} />
+                <div className="hidden md:block md:ml-1 text-xs">{actionLabel}</div>
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -3240,6 +3381,75 @@ function OWYouTubeIcon({ className = 'size-4' }: { className?: string }) {
     <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
       <path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31.2 31.2 0 0 0 0 12a31.2 31.2 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31.2 31.2 0 0 0 24 12a31.2 31.2 0 0 0-.5-5.8ZM9.6 15.6V8.4L15.8 12l-6.2 3.6Z" />
     </svg>
+  );
+}
+
+function CreateFolderDialog({
+  isOpen,
+  loading,
+  error,
+  targetLabel,
+  onClose,
+  onSubmit
+}: {
+  isOpen: boolean;
+  loading: boolean;
+  error: string | null;
+  targetLabel: string;
+  onClose: () => void;
+  onSubmit: (name: string) => void;
+}) {
+  const [name, setName] = useState('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setName('');
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed || loading) return;
+    onSubmit(trimmed);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[90] flex h-screen max-h-[100dvh] items-center justify-center overflow-y-auto overscroll-contain bg-black/30 p-3">
+      <form onSubmit={submit} className="m-auto mx-2 w-[28rem] max-w-full overflow-hidden rounded-[2rem] border border-white bg-white/95 p-5 text-gray-900 shadow-3xl backdrop-blur-sm">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-lg font-medium">Add Folder</div>
+            <div className="mt-1 max-w-[20rem] truncate text-xs text-gray-500">To: {targetLabel}</div>
+          </div>
+          <button type="button" onClick={onClose} disabled={loading} className="inline-flex size-8 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50" aria-label="Close">
+            <OWXMarkIcon className="size-4" />
+          </button>
+        </div>
+
+        <label className="mb-2 block text-xs text-gray-500">Folder name</label>
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          autoFocus
+          className="w-full rounded-lg bg-gray-50 px-4 py-2 text-sm outline-none placeholder:text-gray-400"
+          placeholder="New folder"
+        />
+
+        {error ? <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div> : null}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={loading} className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50">
+            Cancel
+          </button>
+          <button type="submit" disabled={loading || !name.trim()} className="inline-flex items-center gap-2 rounded-lg bg-black px-4 py-2 text-sm font-medium text-white transition hover:bg-gray-900 disabled:cursor-not-allowed disabled:opacity-45">
+            {loading ? <Loader2 className="size-4 animate-spin" /> : <Folder className="size-4" />}
+            Create
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -3390,21 +3600,44 @@ function FilesPanel({
   workspaceId,
   files,
   onAdd,
+  onAddFolder,
   onOpenFile,
-  onChanged
+  onChanged,
+  currentFolderId,
+  onCurrentFolderChange
 }: {
   workspaceId: string;
   files: NonNullable<Workspace['fileObjects']>;
   onAdd: () => void;
+  onAddFolder: () => void;
   onOpenFile: (fileId: string) => void;
   onChanged: () => Promise<void>;
+  currentFolderId: string | null;
+  onCurrentFolderChange: (folderId: string | null) => void;
 }) {
   const [query, setQuery] = useState('');
   const [knowledgeType, setKnowledgeType] = useState('');
   const [openMenuFileId, setOpenMenuFileId] = useState<string | null>(null);
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const [indexingFileId, setIndexingFileId] = useState<string | null>(null);
-  const sorted = [...files].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
+  const [dropTargetActive, setDropTargetActive] = useState(false);
+  const [movingItemId, setMovingItemId] = useState<string | null>(null);
+  const [pointerDragPosition, setPointerDragPosition] = useState<{ x: number; y: number } | null>(null);
+  const autoOpenTimerRef = useRef<number | null>(null);
+  const autoOpenTargetRef = useRef<string | null>(null);
+  const dragSuppressClickRef = useRef(false);
+  const draggingItemRef = useRef<NonNullable<Workspace['fileObjects']>[number] | null>(null);
+  const currentFolderIdRef = useRef<string | null>(currentFolderId);
+  const sorted = [...files].sort((a, b) => {
+    if (a.nodeType === 'folder' && b.nodeType !== 'folder') return -1;
+    if (a.nodeType !== 'folder' && b.nodeType === 'folder') return 1;
+    return a.name.localeCompare(b.name);
+  });
+  const fileCount = files.filter((file) => file.nodeType === 'file').length;
+  const fileMap = new Map(files.map((file) => [file.id, file]));
+  const currentFolder = currentFolderId ? fileMap.get(currentFolderId) || null : null;
 
   useEffect(() => {
     const closeMenu = (event: PointerEvent) => {
@@ -3417,21 +3650,259 @@ function FilesPanel({
     return () => window.removeEventListener('pointerdown', closeMenu);
   }, []);
 
-  const visibleFiles = sorted.filter((file) => {
-    const section = getFileSectionLabel(file);
-    if (knowledgeType && getKnowledgeTypeGroup(file) !== knowledgeType) return false;
+  useEffect(() => {
+    if (!currentFolderId) return;
+    if (!fileMap.has(currentFolderId)) onCurrentFolderChange(null);
+  }, [currentFolderId, files, onCurrentFolderChange]);
+
+  useEffect(() => {
+    currentFolderIdRef.current = currentFolderId;
+  }, [currentFolderId]);
+
+  const folderCrumbs = useMemo(() => {
+    const crumbs: NonNullable<Workspace['fileObjects']> = [];
+    let cursor = currentFolder;
+    const seen = new Set<string>();
+
+    while (cursor && !seen.has(cursor.id)) {
+      crumbs.unshift(cursor);
+      seen.add(cursor.id);
+      cursor = cursor.parentId ? fileMap.get(cursor.parentId) || null : null;
+    }
+
+    return crumbs;
+  }, [currentFolder, files]);
+
+  const childCount = (folderId: string) => files.filter((item) => item.parentId === folderId).length;
+  const draggingItem = draggingItemId ? fileMap.get(draggingItemId) || null : null;
+  const isValidDropTarget = (item: NonNullable<Workspace['fileObjects']>[number] | null, targetFolderId: string | null) => {
+    if (!item) return false;
+    if ((item.parentId || null) === targetFolderId) return false;
+    if (item.id === targetFolderId) return false;
+    if (item.nodeType === 'folder' && targetFolderId) {
+      let cursor = fileMap.get(targetFolderId) || null;
+      const seen = new Set<string>();
+      while (cursor && !seen.has(cursor.id)) {
+        if (cursor.id === item.id) return false;
+        seen.add(cursor.id);
+        cursor = cursor.parentId ? fileMap.get(cursor.parentId) || null : null;
+      }
+    }
+    return true;
+  };
+  const isDropTargetValid = isValidDropTarget(draggingItem, dropTargetFolderId);
+  const isActiveValidDropTarget = Boolean(dropTargetActive && draggingItemId && isDropTargetValid);
+
+  const clearAutoOpenTimer = () => {
+    if (autoOpenTimerRef.current) {
+      window.clearTimeout(autoOpenTimerRef.current);
+      autoOpenTimerRef.current = null;
+    }
+    autoOpenTargetRef.current = null;
+  };
+
+  const clearDragState = () => {
+    clearAutoOpenTimer();
+    draggingItemRef.current = null;
+    setDraggingItemId(null);
+    setDropTargetFolderId(null);
+    setDropTargetActive(false);
+    setPointerDragPosition(null);
+  };
+
+  const releaseDragClickGuard = () => {
+    window.setTimeout(() => {
+      dragSuppressClickRef.current = false;
+    }, 80);
+  };
+
+  const previewDropTarget = (
+    folderId: string | null,
+    options: { autoOpen?: boolean; item?: NonNullable<Workspace['fileObjects']>[number] | null } = {}
+  ) => {
+    const item = options.item || draggingItemRef.current || draggingItem;
+    setDropTargetFolderId(folderId);
+    setDropTargetActive(true);
+
+    if (!options.autoOpen || folderId === currentFolderIdRef.current || !isValidDropTarget(item, folderId)) {
+      clearAutoOpenTimer();
+      return;
+    }
+
+    const autoOpenKey = folderId || '__root__';
+    if (autoOpenTargetRef.current !== autoOpenKey) {
+      clearAutoOpenTimer();
+    }
+
+    if (!autoOpenTimerRef.current) {
+      autoOpenTargetRef.current = autoOpenKey;
+      autoOpenTimerRef.current = window.setTimeout(() => {
+        autoOpenTimerRef.current = null;
+        autoOpenTargetRef.current = null;
+        currentFolderIdRef.current = folderId;
+        onCurrentFolderChange(folderId);
+        setQuery('');
+        setDropTargetFolderId(folderId);
+      }, 850);
+    }
+  };
+
+  const moveItemToFolder = async (item: NonNullable<Workspace['fileObjects']>[number] | null, targetFolderId: string | null) => {
+    if (!item || !isValidDropTarget(item, targetFolderId)) {
+      clearDragState();
+      releaseDragClickGuard();
+      return;
+    }
+
+    setMovingItemId(item.id);
+    try {
+      await fileSystemApi.move(workspaceId, { id: item.id, targetParentId: targetFolderId || null });
+      await onChanged();
+    } catch (error: any) {
+      console.error('Failed to move knowledge item', error);
+    } finally {
+      setMovingItemId(null);
+      clearDragState();
+      releaseDragClickGuard();
+    }
+  };
+
+  const moveDraggedItem = async (targetFolderId: string | null) => {
+    await moveItemToFolder(draggingItemRef.current || draggingItem, targetFolderId);
+  };
+
+  const handleDragStart = (event: React.DragEvent, item: NonNullable<Workspace['fileObjects']>[number]) => {
+    if (movingItemId) {
+      event.preventDefault();
+      return;
+    }
+    dragSuppressClickRef.current = true;
+    setOpenMenuFileId(null);
+    draggingItemRef.current = item;
+    setDraggingItemId(item.id);
+    setDropTargetFolderId(null);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', item.id);
+  };
+
+  const handleDragOverFolder = (event: React.DragEvent, folderId: string | null, options: { autoOpen?: boolean } = {}) => {
+    if (!draggingItemId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = isValidDropTarget(draggingItem, folderId) ? 'move' : 'none';
+    previewDropTarget(folderId, options);
+  };
+
+  const handleDropOnFolder = (event: React.DragEvent, folderId: string | null) => {
+    if (!draggingItemId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void moveDraggedItem(folderId);
+  };
+
+  const handleDragEnd = () => {
+    clearDragState();
+    releaseDragClickGuard();
+  };
+
+  const resolvePointerDropTarget = (clientX: number, clientY: number) => {
+    const element = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    const target = element?.closest('[data-knowledge-drop-target]') as HTMLElement | null;
+    if (!target) return null;
+
+    const rawFolderId = target.dataset.knowledgeDropTarget;
+    if (!rawFolderId) return null;
+
+    return {
+      folderId: rawFolderId === 'root' ? null : rawFolderId,
+      autoOpen: target.dataset.knowledgeAutoOpen === 'true'
+    };
+  };
+
+  const handlePointerDownOnItem = (event: React.PointerEvent, item: NonNullable<Workspace['fileObjects']>[number]) => {
+    if (event.button !== 0 || movingItemId) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('[data-resource-menu]')) return;
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let active = false;
+
+    const stopTracking = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+    };
+
+    const activate = () => {
+      if (active) return;
+      active = true;
+      dragSuppressClickRef.current = true;
+      draggingItemRef.current = item;
+      setOpenMenuFileId(null);
+      setDraggingItemId(item.id);
+    };
+
+    const handlePointerMove = (pointerEvent: PointerEvent) => {
+      const distance = Math.hypot(pointerEvent.clientX - startX, pointerEvent.clientY - startY);
+      if (!active && distance < 6) return;
+
+      activate();
+      pointerEvent.preventDefault();
+      setPointerDragPosition({ x: pointerEvent.clientX, y: pointerEvent.clientY });
+
+      const targetInfo = resolvePointerDropTarget(pointerEvent.clientX, pointerEvent.clientY);
+      if (!targetInfo) {
+        setDropTargetActive(false);
+        clearAutoOpenTimer();
+        return;
+      }
+
+      previewDropTarget(targetInfo.folderId, { autoOpen: targetInfo.autoOpen, item });
+    };
+
+    const handlePointerUp = (pointerEvent: PointerEvent) => {
+      stopTracking();
+      if (!active) return;
+
+      pointerEvent.preventDefault();
+      const targetInfo = resolvePointerDropTarget(pointerEvent.clientX, pointerEvent.clientY);
+      if (!targetInfo) {
+        clearDragState();
+        releaseDragClickGuard();
+        return;
+      }
+
+      void moveItemToFolder(item, targetInfo.folderId);
+    };
+
+    const handlePointerCancel = () => {
+      stopTracking();
+      if (!active) return;
+      clearDragState();
+      releaseDragClickGuard();
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+  };
+
+  const visibleItems = sorted.filter((item) => {
+    const isFolder = item.nodeType === 'folder';
+    const section = isFolder ? 'Folder' : getFileSectionLabel(item);
+    if (!isFolder && knowledgeType && getKnowledgeTypeGroup(item) !== knowledgeType) return false;
 
     const value = query.trim().toLowerCase();
-    if (!value) return true;
+    if (!value && (item.parentId || null) !== currentFolderId) return false;
     return [
-      file.name,
-      getFileDisplayName(file),
-      file.path,
+      item.name,
+      isFolder ? item.name : getFileDisplayName(item),
+      item.path,
       section,
-      file.resourceType,
-      file.fileCategory,
-      file.origin,
-      file.extension
+      item.resourceType,
+      item.fileCategory,
+      item.origin,
+      item.extension
     ]
       .filter(Boolean)
       .some((item) => String(item).toLowerCase().includes(value));
@@ -3445,6 +3916,8 @@ function FilesPanel({
   };
 
   const renderFileIcon = (file: NonNullable<Workspace['fileObjects']>[number], coverUrl?: string, faviconUrl?: string) => {
+    if (file.nodeType === 'folder') return <Folder className="size-4" />;
+
     const sourceUrl = getFileSourceUrl(file).toLowerCase();
     const extension = (file.extension || file.name.split('.').pop() || '').toLowerCase();
     const mimeType = (file.mimeType || '').toLowerCase();
@@ -3457,6 +3930,17 @@ function FilesPanel({
     if (mimeType.startsWith('video/') || ['mp4', 'mov', 'webm', 'mkv'].includes(extension)) return <FileVideo className="size-4" />;
     if (['js', 'jsx', 'ts', 'tsx', 'py', 'java', 'cpp', 'c', 'html', 'css', 'json', 'sql'].includes(extension) || file.fileCategory === 'code') return <FileCode className="size-4" />;
     return <FileText className="size-4" />;
+  };
+
+  const openItem = (item: NonNullable<Workspace['fileObjects']>[number]) => {
+    if (dragSuppressClickRef.current) return;
+    setOpenMenuFileId(null);
+    if (item.nodeType === 'folder') {
+      onCurrentFolderChange(item.id);
+      setQuery('');
+      return;
+    }
+    onOpenFile(item.id);
   };
 
   const exportFile = (fileId: string) => {
@@ -3483,7 +3967,14 @@ function FilesPanel({
 
   return (
     <section>
-      <WorkspacePanelHeader title="Knowledge" count={sorted.length} actionLabel="Add Knowledge" onAction={onAdd} />
+      <WorkspacePanelHeader
+        title="Knowledge"
+        count={fileCount}
+        actionLabel="Add Knowledge"
+        onAction={onAdd}
+        secondaryActionLabel="Add Folder"
+        onSecondaryAction={onAddFolder}
+      />
 
       <div className="py-2 bg-white rounded-3xl border border-gray-100/30">
         <div className="flex w-full space-x-2 py-0.5 px-3.5 pb-2">
@@ -3521,27 +4012,114 @@ function FilesPanel({
           </div>
         </div>
 
-        {visibleFiles.length ? (
-          <div className="my-2 px-3 grid grid-cols-1 lg:grid-cols-2 gap-2">
-            {visibleFiles.map((file) => {
-              const section = getFileSectionLabel(file);
-              const coverUrl = getFileCoverUrl(file);
-              const faviconUrl = getFileFaviconUrl(file);
-              const displayName = getFileDisplayName(file);
-              const indexStatus = getKnowledgeIndexStatusInfo(file);
+        <div className="flex min-h-9 items-center gap-1 overflow-x-auto px-3 pt-2 text-xs text-gray-500 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <button
+            type="button"
+            data-knowledge-drop-target="root"
+            data-knowledge-auto-open="true"
+            onDragOver={(event) => handleDragOverFolder(event, null, { autoOpen: true })}
+            onDragLeave={() => {
+              setDropTargetActive(false);
+              clearAutoOpenTimer();
+            }}
+            onDrop={(event) => handleDropOnFolder(event, null)}
+            onClick={() => {
+              onCurrentFolderChange(null);
+              setOpenMenuFileId(null);
+              setQuery('');
+            }}
+            className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 font-medium transition hover:bg-gray-50 ${isActiveValidDropTarget && dropTargetFolderId === null ? 'bg-gray-100 text-gray-950 ring-1 ring-gray-300 shadow-sm' : currentFolderId ? 'text-gray-600' : 'bg-gray-50 text-gray-900'}`}
+            aria-label="Open Knowledge root"
+          >
+            <Home className="size-3.5" />
+            Knowledge
+          </button>
+          {folderCrumbs.map((folder) => (
+            <React.Fragment key={folder.id}>
+              <ChevronRight className="size-3 shrink-0 text-gray-300" />
+              <button
+                type="button"
+                data-knowledge-drop-target={folder.id}
+                data-knowledge-auto-open="true"
+                onDragOver={(event) => handleDragOverFolder(event, folder.id, { autoOpen: true })}
+                onDragLeave={() => {
+                  setDropTargetActive(false);
+                  clearAutoOpenTimer();
+                }}
+                onDrop={(event) => handleDropOnFolder(event, folder.id)}
+                onClick={() => {
+                  onCurrentFolderChange(folder.id);
+                  setOpenMenuFileId(null);
+                  setQuery('');
+                }}
+                className={`h-7 max-w-[14rem] shrink-0 truncate rounded-lg px-2 font-medium transition hover:bg-gray-50 ${isActiveValidDropTarget && dropTargetFolderId === folder.id ? 'bg-gray-100 text-gray-950 ring-1 ring-gray-300 shadow-sm' : folder.id === currentFolderId ? 'bg-gray-50 text-gray-900' : 'text-gray-600'}`}
+                title={folder.path}
+              >
+                {folder.name}
+              </button>
+            </React.Fragment>
+          ))}
+          <span className="ml-auto shrink-0 text-gray-400">
+            {query.trim() ? `${visibleItems.length} results` : `${visibleItems.length} items`}
+          </span>
+        </div>
+
+        {visibleItems.length ? (
+          <div
+            data-knowledge-drop-target={currentFolderId || 'root'}
+            className="my-2 grid grid-cols-1 gap-2 rounded-2xl px-3 transition lg:grid-cols-2"
+            onDragOver={(event) => handleDragOverFolder(event, currentFolderId)}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              setDropTargetActive(false);
+            }}
+            onDrop={(event) => handleDropOnFolder(event, currentFolderId)}
+          >
+            {visibleItems.map((file) => {
+              const isFolder = file.nodeType === 'folder';
+              const isDragging = draggingItemId === file.id;
+              const isMoving = movingItemId === file.id;
+              const isFolderDropTarget = isFolder && dropTargetActive && dropTargetFolderId === file.id && draggingItemId;
+              const section = isFolder ? 'Folder' : getFileSectionLabel(file);
+              const coverUrl = isFolder ? undefined : getFileCoverUrl(file);
+              const faviconUrl = isFolder ? undefined : getFileFaviconUrl(file);
+              const displayName = isFolder ? file.name : getFileDisplayName(file);
+              const indexStatus = isFolder ? null : getKnowledgeIndexStatusInfo(file);
+              const folderItemCount = isFolder ? childCount(file.id) : 0;
 
               return (
                 <div
                   key={file.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => onOpenFile(file.id)}
+                  data-knowledge-drop-target={isFolder ? file.id : undefined}
+                  data-knowledge-auto-open={isFolder ? 'true' : undefined}
+                  draggable={!isMoving}
+                  onPointerDown={(event) => handlePointerDownOnItem(event, file)}
+                  onDragStart={(event) => handleDragStart(event, file)}
+                  onDragEnd={handleDragEnd}
+                  onDragOver={(event) => {
+                    if (!isFolder) return;
+                    event.stopPropagation();
+                    handleDragOverFolder(event, file.id, { autoOpen: true });
+                  }}
+                  onDragLeave={(event) => {
+                    if (!isFolder) return;
+                    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                    setDropTargetActive(false);
+                    clearAutoOpenTimer();
+                  }}
+                  onDrop={(event) => {
+                    if (!isFolder) return;
+                    handleDropOnFolder(event, file.id);
+                  }}
+                  onClick={() => openItem(file)}
                   onKeyDown={(event) => {
                     if (event.key !== 'Enter' && event.key !== ' ') return;
                     event.preventDefault();
-                    onOpenFile(file.id);
+                    openItem(file);
                   }}
-                  className="relative flex space-x-4 cursor-pointer text-left w-full px-3 py-2.5 hover:bg-gray-50 transition rounded-2xl"
+                  className={`relative flex select-none space-x-4 cursor-pointer text-left w-full px-3 py-2.5 transition rounded-2xl ${isDragging ? 'opacity-35 ring-1 ring-gray-200' : ''} ${isMoving ? 'cursor-wait opacity-60' : 'hover:bg-gray-50'} ${isFolderDropTarget && isDropTargetValid ? 'bg-gray-50 ring-1 ring-gray-300 shadow-sm' : ''}`}
                 >
                   <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gray-100 text-gray-500">
                     {renderFileIcon(file, coverUrl, faviconUrl)}
@@ -3552,7 +4130,7 @@ function FilesPanel({
                       <div className="flex items-center justify-between -my-1 h-8">
                         <div className="flex gap-2 items-center justify-between w-full">
                           <div>
-                            <span className="w-fit rounded-lg bg-green-500/20 px-[5px] text-xs font-medium uppercase line-clamp-1 mr-0.5 text-green-700">
+                            <span className={`w-fit rounded-lg px-[5px] text-xs font-medium uppercase line-clamp-1 mr-0.5 ${isFolder ? 'bg-gray-100 text-gray-600' : 'bg-green-500/20 text-green-700'}`}>
                               {section}
                             </span>
                           </div>
@@ -3565,14 +4143,14 @@ function FilesPanel({
                         </div>
 
                         <div className="hidden min-w-0 items-center justify-end gap-2 text-xs text-gray-500 whitespace-nowrap sm:flex">
-                          <div className="whitespace-nowrap">{file.origin || file.resourceType || file.fileCategory || '-'}</div>
+                          <div className="whitespace-nowrap">{isFolder ? `${folderItemCount} items` : file.origin || file.resourceType || file.fileCategory || '-'}</div>
                           <div className="whitespace-nowrap">{formatRelative(file.updatedAt)}</div>
-                          <div className="whitespace-nowrap">{formatFileSize(file.size)}</div>
+                          <div className="whitespace-nowrap">{isFolder ? 'Folder' : formatFileSize(file.size)}</div>
                         </div>
                       </div>
                     </div>
                   </div>
-                  <button
+                  {!isFolder ? <button
                     data-resource-menu={file.id}
                     type="button"
                     onPointerDown={(event) => event.stopPropagation()}
@@ -3592,8 +4170,8 @@ function FilesPanel({
                     aria-label="More Options"
                   >
                     <OWEllipsisHorizontalIcon className="size-5" />
-                  </button>
-                  {openMenuFileId === file.id ? createPortal(
+                  </button> : null}
+                  {!isFolder && openMenuFileId === file.id && indexStatus ? createPortal(
                     <div
                       className="workspace-card-menu z-[9999] min-w-[170px] rounded-2xl px-1 py-1 text-sm text-gray-900"
                       style={getMenuPositionStyle(menuRect, 170)}
@@ -3645,17 +4223,40 @@ function FilesPanel({
             })}
           </div>
         ) : (
-          <div className="w-full h-full flex flex-col justify-center items-center my-16 mb-24">
+          <div
+            data-knowledge-drop-target={currentFolderId || 'root'}
+            className="mx-3 my-2 flex min-h-[16rem] w-auto flex-col items-center justify-center rounded-2xl transition"
+            onDragOver={(event) => handleDragOverFolder(event, currentFolderId)}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              setDropTargetActive(false);
+            }}
+            onDrop={(event) => handleDropOnFolder(event, currentFolderId)}
+          >
             <div className="max-w-md text-center">
               <div className="text-3xl mb-3">😕</div>
-              <div className="text-lg font-medium mb-1">{query.trim() ? 'No knowledge found' : 'No knowledge yet'}</div>
+              <div className="text-lg font-medium mb-1">{query.trim() ? 'No knowledge found' : currentFolder ? 'This folder is empty' : 'No knowledge yet'}</div>
               <div className="text-gray-500 text-center text-xs">
-                {query.trim() ? 'Try adjusting your search to find what you are looking for.' : 'Upload knowledge, add web sources, or paste text into this workspace.'}
+                {query.trim() ? 'Try adjusting your search to find what you are looking for.' : currentFolder ? 'Add files here or return to Knowledge.' : 'Upload knowledge, add web sources, or paste text into this workspace.'}
               </div>
             </div>
           </div>
         )}
       </div>
+
+      {draggingItem && pointerDragPosition ? (
+        <div
+          className="pointer-events-none fixed z-[9999] max-w-[260px] rounded-2xl border border-gray-200 bg-white/95 px-3 py-2 text-xs font-medium text-gray-700 shadow-2xl backdrop-blur"
+          style={{ left: pointerDragPosition.x + 12, top: pointerDragPosition.y + 12 }}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-500">
+              {draggingItem.nodeType === 'folder' ? <Folder className="size-3.5" /> : <FileText className="size-3.5" />}
+            </span>
+            <span className="truncate">{draggingItem.name}</span>
+          </div>
+        </div>
+      ) : null}
 
       <div className="text-gray-500 text-xs m-2">ⓘ Use knowledge inside your workbenches.</div>
     </section>
