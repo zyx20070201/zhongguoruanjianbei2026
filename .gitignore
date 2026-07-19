@@ -11,6 +11,7 @@ __pycache__/
 backend/node_modules/
 backend/uploads/
 backend/.env
+backend/.env.local
 
 frontend/node_modules/
 frontend/dist/
